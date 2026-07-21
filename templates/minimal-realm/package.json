@@ -1,0 +1,13 @@
+{
+  "name": "example-realm-v1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/server.ts",
+    "test": "bun test",
+    "build": "tsc -p tsconfig.json",
+    "conformance": "bun run ../klivcore-sdk-v1/src/conformance-cli.ts"
+  },
+  "dependencies": { "@klivcore/sdk-v1": "file:../klivcore-sdk-v1" },
+  "devDependencies": { "@types/bun": "latest", "typescript": "latest" }
+}
