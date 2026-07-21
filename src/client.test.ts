@@ -113,4 +113,23 @@ describe("Realm client", () => {
     await expect(bindAndPrepareRealm("https://realm.test", { fetcher })).rejects.toThrow("503");
     expect(cancelled).toBe(true);
   });
+
+  test("preserves the HTTP failure when body cancellation rejects or stalls", async () => {
+    for (const mode of ["reject", "stall"] as const) {
+      const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          return mode === "reject" ? Promise.reject(new Error("cancel failed")) : new Promise<void>(() => {});
+        },
+      });
+      const fetcher: RealmFetcher = async function(this: typeof globalThis) {
+        return new Response(body, { status: 503 });
+      };
+
+      const outcome = await Promise.race([
+        bindAndPrepareRealm("https://realm.test", { fetcher }).then(() => "resolved", (error) => String(error)),
+        new Promise<string>((resolve) => setTimeout(() => resolve("timeout"), 25)),
+      ]);
+      expect(outcome).toContain("503");
+    }
+  });
 });

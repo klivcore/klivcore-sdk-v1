@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { HOST_API_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
+import { HOST_API_VERSION, parseRealmCatalog, parseRealmDescriptor, supportsHostApi } from "./contracts";
 
 const hash = "a".repeat(64);
 const descriptor = {
@@ -49,11 +49,24 @@ describe("strict Realm publication contracts", () => {
     expect(() => parseRealmDescriptor({ ...descriptor, productRoutes: [] }, HOST_API_VERSION)).toThrow("unknown field");
   });
 
+  test("rejects non-index properties on contract arrays", () => {
+    const capabilities = ["realm:view"];
+    Object.defineProperty(capabilities, "unexpected", { value: true, enumerable: true });
+    expect(() => parseRealmDescriptor({ ...descriptor, capabilities }, HOST_API_VERSION)).toThrow("array properties");
+  });
+
   test("rejects an incompatible host API range", () => {
     expect(() => parseRealmDescriptor({
       ...descriptor,
       publication: { ...descriptor.publication, hostApiRange: "^2.0.0" },
     }, HOST_API_VERSION)).toThrow("host API");
+  });
+
+  test("implements caret compatibility for pre-1.0 host APIs", () => {
+    expect(supportsHostApi("^0.1.0", "0.1.9")).toBe(true);
+    expect(supportsHostApi("^0.1.0", "0.2.0")).toBe(false);
+    expect(supportsHostApi("^0.0.1", "0.0.1")).toBe(true);
+    expect(supportsHostApi("^0.0.1", "0.0.2")).toBe(false);
   });
 
   test("reconstructs a catalog and rejects ambiguous duplicate paths", () => {

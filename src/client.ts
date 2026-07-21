@@ -13,14 +13,19 @@ export async function sha256Hex(value: string | Uint8Array): Promise<string> {
   return [...new Uint8Array(digest)].map((entry) => entry.toString(16).padStart(2, "0")).join("");
 }
 
+function cancelBestEffort(stream: Pick<ReadableStream<Uint8Array>, "cancel"> | ReadableStreamDefaultReader<Uint8Array> | null) {
+  if (!stream) return;
+  try { void stream.cancel().catch(() => undefined); } catch { /* preserve the primary protocol error */ }
+}
+
 async function boundedBytes(response: Response, maxBytes: number, label: string): Promise<Uint8Array> {
   if (!response.ok) {
-    await response.body?.cancel();
+    cancelBestEffort(response.body);
     throw new Error(`${label} request failed with ${response.status}`);
   }
   const declared = response.headers.get("content-length");
   if (declared !== null && Number(declared) > maxBytes) {
-    await response.body?.cancel();
+    cancelBestEffort(response.body);
     throw new Error(`${label} exceeds byte limit`);
   }
   if (!response.body) return new Uint8Array();
@@ -33,7 +38,7 @@ async function boundedBytes(response: Response, maxBytes: number, label: string)
       if (result.done) break;
       total += result.value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        cancelBestEffort(reader);
         throw new Error(`${label} exceeds byte limit`);
       }
       chunks.push(result.value);
