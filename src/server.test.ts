@@ -25,6 +25,15 @@ function start() {
       js: "export function mount(host){host.root.textContent='Test Realm'}",
       css: ":host{color:rebeccapurple}",
     },
+    routes: [{
+      id: "debug-routing-basic",
+      path: "/debug/routing/basic",
+      title: "Routing debug",
+      requiredCapabilities: ["test:inspect"],
+      componentId: "test-debug-routing-basic",
+      js: "export function mount(host){host.root.textContent='Debug route reached'}",
+      css: ":host{color:lime}",
+    }],
   });
   running.push(gateway);
   return gateway;
@@ -43,5 +52,22 @@ describe("reference Realm Gateway", () => {
     const gateway = start();
     const response = await fetch(`${gateway.endpoint}/v1/catalog`);
     expect(response.status).toBe(401);
+  });
+
+  test("selects and verifies a published debug route by path", async () => {
+    const gateway = start();
+    const candidate = await bindAndPrepareRealm(gateway.endpoint, { routePath: "/debug/routing/basic" });
+
+    expect(candidate.catalog.routes.map((route) => route.path)).toEqual(["/", "/debug/routing/basic"]);
+    expect(candidate.route.id).toBe("debug-routing-basic");
+    expect(candidate.route.component.id).toBe("test-debug-routing-basic");
+    expect(candidate.js).toContain("Debug route reached");
+    expect(candidate.css).toContain("lime");
+  });
+
+  test("rejects a route path that the Realm did not publish", async () => {
+    const gateway = start();
+    await expect(bindAndPrepareRealm(gateway.endpoint, { routePath: "/debug/missing" }))
+      .rejects.toThrow("Realm route not found");
   });
 });

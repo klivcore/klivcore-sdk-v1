@@ -5,7 +5,7 @@ const MAX_ARTIFACT_BYTES = 1024 * 1024;
 
 export type PreparedRealm = Readonly<{ descriptor: RealmDescriptor; catalog: RealmCatalog; route: RealmRoute; js: string; css: string }>;
 export type RealmFetcher = (this: typeof globalThis, input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal }>;
+export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal; routePath?: string }>;
 
 export async function sha256Hex(value: string | Uint8Array): Promise<string> {
   const bytes = new Uint8Array(typeof value === "string" ? new TextEncoder().encode(value) : value);
@@ -78,8 +78,11 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
   try { catalogInput = JSON.parse(catalogText); } catch { throw new Error("Realm catalog is invalid JSON"); }
   const catalog = parseRealmCatalog(catalogInput);
   if (catalog.realmId !== descriptor.realmId || catalog.generation !== descriptor.publication.generation) throw new Error("Realm catalog authority mismatch");
-  const route = catalog.routes.find((candidate) => candidate.id === catalog.defaultRouteId)!;
-  for (const capability of route.requiredCapabilities) if (!descriptor.capabilities.includes(capability)) throw new Error("Default route is not authorized");
+  const route = options.routePath === undefined
+    ? catalog.routes.find((candidate) => candidate.id === catalog.defaultRouteId)!
+    : catalog.routes.find((candidate) => candidate.path === options.routePath);
+  if (!route) throw new Error(`Realm route not found: ${options.routePath}`);
+  for (const capability of route.requiredCapabilities) if (!descriptor.capabilities.includes(capability)) throw new Error("Realm route is not authorized");
   const jsBytes = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm JavaScript artifact");
   if (await sha256Hex(jsBytes) !== route.component.js.sha256) throw new Error("Realm JavaScript artifact integrity check failed");
   const js = decodeUtf8(jsBytes);

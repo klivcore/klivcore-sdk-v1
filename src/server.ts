@@ -1,6 +1,16 @@
 import { HOST_API_VERSION, PROTOCOL_VERSION, SCHEMA_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
 import { sha256Hex } from "./client";
 
+export type RealmGatewayRouteConfig = Readonly<{
+  id: string;
+  path: string;
+  title: string;
+  requiredCapabilities: readonly string[];
+  componentId: string;
+  js: string;
+  css: string;
+}>;
+
 export type RealmGatewayConfig = Readonly<{
   hostname?: string;
   port: number;
@@ -9,15 +19,8 @@ export type RealmGatewayConfig = Readonly<{
   authorityEpoch: string;
   generation: string;
   capabilities: readonly string[];
-  defaultRoute: Readonly<{
-    id: string;
-    path: string;
-    title: string;
-    requiredCapabilities: readonly string[];
-    componentId: string;
-    js: string;
-    css: string;
-  }>;
+  defaultRoute: RealmGatewayRouteConfig;
+  routes?: readonly RealmGatewayRouteConfig[];
 }>;
 
 export type RunningRealmGateway = Readonly<{
@@ -40,6 +43,7 @@ function json(value: unknown, status = 200) {
 
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
   const bindings = new Set<string>();
+  const routeConfigs = [config.defaultRoute, ...(config.routes ?? [])];
   let server: Bun.Server<undefined>;
 
   function authorized(request: Request) {
@@ -48,25 +52,23 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   }
 
   async function publication(origin: string) {
-    const jsUrl = `${origin}/artifacts/home.js`;
-    const cssUrl = `${origin}/artifacts/home.css`;
     const catalog = parseRealmCatalog({
       schemaVersion: SCHEMA_VERSION,
       realmId: config.realmId,
       generation: config.generation,
       defaultRouteId: config.defaultRoute.id,
-      routes: [{
-        id: config.defaultRoute.id,
-        path: config.defaultRoute.path,
-        title: config.defaultRoute.title,
-        requiredCapabilities: [...config.defaultRoute.requiredCapabilities],
+      routes: await Promise.all(routeConfigs.map(async (route) => ({
+        id: route.id,
+        path: route.path,
+        title: route.title,
+        requiredCapabilities: [...route.requiredCapabilities],
         component: {
-          id: config.defaultRoute.componentId,
+          id: route.componentId,
           hostApiRange: `^${HOST_API_VERSION}`,
-          js: { url: jsUrl, sha256: await sha256Hex(config.defaultRoute.js), mediaType: "text/javascript" },
-          css: { url: cssUrl, sha256: await sha256Hex(config.defaultRoute.css), mediaType: "text/css" },
+          js: { url: `${origin}/artifacts/${route.id}.js`, sha256: await sha256Hex(route.js), mediaType: "text/javascript" },
+          css: { url: `${origin}/artifacts/${route.id}.css`, sha256: await sha256Hex(route.css), mediaType: "text/css" },
         },
-      }],
+      }))),
     });
     const catalogText = JSON.stringify(catalog);
     return { catalog, catalogText };
@@ -105,12 +107,11 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       if (request.method === "GET" && url.pathname === "/v1/catalog") {
         return new Response(catalogText, { headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8" } });
       }
-      if (request.method === "GET" && url.pathname === "/artifacts/home.js") {
-        return new Response(config.defaultRoute.js, { headers: { ...corsHeaders, "content-type": "text/javascript; charset=utf-8" } });
-      }
-      if (request.method === "GET" && url.pathname === "/artifacts/home.css") {
-        return new Response(config.defaultRoute.css, { headers: { ...corsHeaders, "content-type": "text/css; charset=utf-8" } });
-      }
+      const artifact = request.method === "GET"
+        ? routeConfigs.find((route) => url.pathname === `/artifacts/${route.id}.js` || url.pathname === `/artifacts/${route.id}.css`)
+        : undefined;
+      if (artifact && url.pathname.endsWith(".js")) return new Response(artifact.js, { headers: { ...corsHeaders, "content-type": "text/javascript; charset=utf-8" } });
+      if (artifact && url.pathname.endsWith(".css")) return new Response(artifact.css, { headers: { ...corsHeaders, "content-type": "text/css; charset=utf-8" } });
       return json({ error: "not found" }, 404);
     },
   });
