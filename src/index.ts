@@ -8,5 +8,5 @@ export type RealmComponentHost = Readonly<{
 }>;
 
 export type RealmComponentModule = Readonly<{
-  mount(host: RealmComponentHost): void | (() => void) | Promise<void | (() => void)>;
+  mount(host: RealmComponentHost): void | (() => void | Promise<void>) | Promise<void | (() => void | Promise<void>)>;
 }>;

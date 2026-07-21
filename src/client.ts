@@ -7,20 +7,23 @@ export type PreparedRealm = Readonly<{ descriptor: RealmDescriptor; catalog: Rea
 export type RealmFetcher = (this: typeof globalThis, input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal }>;
 
-export async function sha256Hex(value: string): Promise<string> {
-  const bytes = new TextEncoder().encode(value);
+export async function sha256Hex(value: string | Uint8Array): Promise<string> {
+  const bytes = new Uint8Array(typeof value === "string" ? new TextEncoder().encode(value) : value);
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)].map((entry) => entry.toString(16).padStart(2, "0")).join("");
 }
 
-async function boundedText(response: Response, maxBytes: number, label: string): Promise<string> {
-  if (!response.ok) throw new Error(`${label} request failed with ${response.status}`);
+async function boundedBytes(response: Response, maxBytes: number, label: string): Promise<Uint8Array> {
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`${label} request failed with ${response.status}`);
+  }
   const declared = response.headers.get("content-length");
   if (declared !== null && Number(declared) > maxBytes) {
-    void response.body?.cancel();
+    await response.body?.cancel();
     throw new Error(`${label} exceeds byte limit`);
   }
-  if (!response.body) return "";
+  if (!response.body) return new Uint8Array();
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -30,7 +33,7 @@ async function boundedText(response: Response, maxBytes: number, label: string):
       if (result.done) break;
       total += result.value.byteLength;
       if (total > maxBytes) {
-        void reader.cancel();
+        await reader.cancel();
         throw new Error(`${label} exceeds byte limit`);
       }
       chunks.push(result.value);
@@ -39,12 +42,16 @@ async function boundedText(response: Response, maxBytes: number, label: string):
   const combined = new Uint8Array(total);
   let offset = 0;
   for (const chunk of chunks) { combined.set(chunk, offset); offset += chunk.byteLength; }
-  return new TextDecoder("utf-8", { fatal: true }).decode(combined);
+  return combined;
 }
 
-async function request(fetcher: RealmFetcher, url: string, init: RequestInit, maxBytes: number, label: string): Promise<string> {
+function decodeUtf8(bytes: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+async function request(fetcher: RealmFetcher, url: string, init: RequestInit, maxBytes: number, label: string): Promise<Uint8Array> {
   const response = await fetcher.call(globalThis, url, { ...init, redirect: "error" });
-  return boundedText(response, maxBytes, label);
+  return boundedBytes(response, maxBytes, label);
 }
 
 export async function bindAndPrepareRealm(endpoint: string, options: RealmClientOptions = {}): Promise<PreparedRealm> {
@@ -53,22 +60,26 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
   base.pathname = base.pathname.replace(/\/$/, "") + "/v1/bind";
   base.search = ""; base.hash = "";
   const fetcher = options.fetcher ?? globalThis.fetch;
-  const descriptorText = await request(fetcher, base.toString(), { method: "POST", signal: options.signal }, MAX_JSON_BYTES, "Realm binding");
+  const descriptorBytes = await request(fetcher, base.toString(), { method: "POST", signal: options.signal }, MAX_JSON_BYTES, "Realm binding");
+  const descriptorText = decodeUtf8(descriptorBytes);
   let descriptorInput: unknown;
   try { descriptorInput = JSON.parse(descriptorText); } catch { throw new Error("Realm descriptor is invalid JSON"); }
   const descriptor = parseRealmDescriptor(descriptorInput, HOST_API_VERSION);
   const headers = { authorization: `Bearer ${descriptor.authority.bindingId}` };
-  const catalogText = await request(fetcher, descriptor.publication.catalogUrl, { headers, signal: options.signal }, MAX_JSON_BYTES, "Realm catalog");
-  if (await sha256Hex(catalogText) !== descriptor.publication.catalogSha256) throw new Error("Realm catalog integrity check failed");
+  const catalogBytes = await request(fetcher, descriptor.publication.catalogUrl, { headers, signal: options.signal }, MAX_JSON_BYTES, "Realm catalog");
+  if (await sha256Hex(catalogBytes) !== descriptor.publication.catalogSha256) throw new Error("Realm catalog integrity check failed");
+  const catalogText = decodeUtf8(catalogBytes);
   let catalogInput: unknown;
   try { catalogInput = JSON.parse(catalogText); } catch { throw new Error("Realm catalog is invalid JSON"); }
   const catalog = parseRealmCatalog(catalogInput);
   if (catalog.realmId !== descriptor.realmId || catalog.generation !== descriptor.publication.generation) throw new Error("Realm catalog authority mismatch");
   const route = catalog.routes.find((candidate) => candidate.id === catalog.defaultRouteId)!;
   for (const capability of route.requiredCapabilities) if (!descriptor.capabilities.includes(capability)) throw new Error("Default route is not authorized");
-  const js = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm JavaScript artifact");
-  if (await sha256Hex(js) !== route.component.js.sha256) throw new Error("Realm JavaScript artifact integrity check failed");
-  const css = await request(fetcher, route.component.css.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm CSS artifact");
-  if (await sha256Hex(css) !== route.component.css.sha256) throw new Error("Realm CSS artifact integrity check failed");
+  const jsBytes = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm JavaScript artifact");
+  if (await sha256Hex(jsBytes) !== route.component.js.sha256) throw new Error("Realm JavaScript artifact integrity check failed");
+  const js = decodeUtf8(jsBytes);
+  const cssBytes = await request(fetcher, route.component.css.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm CSS artifact");
+  if (await sha256Hex(cssBytes) !== route.component.css.sha256) throw new Error("Realm CSS artifact integrity check failed");
+  const css = decodeUtf8(cssBytes);
   return Object.freeze({ descriptor, catalog, route, js, css });
 }

@@ -82,4 +82,35 @@ describe("Realm client", () => {
     };
     await expect(bindAndPrepareRealm("https://realm.test", { fetcher })).rejects.toThrow("integrity");
   });
+
+  test("hashes exact transport bytes instead of decoded text", async () => {
+    const f = await fixture();
+    const catalogBytes = new TextEncoder().encode(f.catalogText);
+    const bomPrefixedCatalog = new Uint8Array(catalogBytes.length + 3);
+    bomPrefixedCatalog.set([0xef, 0xbb, 0xbf]);
+    bomPrefixedCatalog.set(catalogBytes, 3);
+    const fetcher: RealmFetcher = async function(this: typeof globalThis, input) {
+      const url = String(input);
+      if (url.endsWith("/v1/bind")) return new Response(json(f.descriptor));
+      if (url.endsWith("/v1/catalog")) return new Response(bomPrefixedCatalog);
+      if (url.endsWith("home.js")) return new Response(f.js);
+      return new Response(f.css);
+    };
+
+    await expect(bindAndPrepareRealm("https://realm.test", { fetcher })).rejects.toThrow("catalog integrity");
+  });
+
+  test("cancels rejected response bodies", async () => {
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array([1])); },
+      cancel() { cancelled = true; },
+    });
+    const fetcher: RealmFetcher = async function(this: typeof globalThis) {
+      return new Response(body, { status: 503 });
+    };
+
+    await expect(bindAndPrepareRealm("https://realm.test", { fetcher })).rejects.toThrow("503");
+    expect(cancelled).toBe(true);
+  });
 });
