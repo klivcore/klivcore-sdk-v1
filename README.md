@@ -5,7 +5,7 @@ The complete public repository for building and diagnosing an independent Klivco
 ## What the SDK owns
 
 - Strict versioned Realm descriptor, route catalog, artifact, capability, and host ABI contracts.
-- A bounded client that binds to a Realm Gateway and verifies catalog, JavaScript, and CSS integrity before activation.
+- A bounded client that binds to a Realm Gateway, selects an authorized route, and verifies catalog, JavaScript, and CSS integrity before activation.
 - A small reference Realm Gateway with opaque per-process bindings and authorized publication reads.
 - One conformance command shared by every Realm.
 
@@ -38,6 +38,14 @@ bun run dev
 
 The component JavaScript must be self-contained: no imports from private repositories and no package or app globals. It exports `mount(host)`, renders only into `host.root`, and may return an unmount function. CSS is mounted into the same ShadowRoot by the generic App Kernel.
 
+Add non-default publications through the optional `routes` array on `RealmGatewayConfig`. Every route owns an ID, exact path, required capabilities, component ID, and self-contained JS/CSS bytes. Consumers select one exact published path with:
+
+```ts
+await bindAndPrepareRealm(endpoint, { routePath: "/debug/routing/basic" });
+```
+
+Omit `routePath` to select `defaultRoute`.
+
 ## Conformance and diagnosis
 
 With the Realm running:
@@ -58,7 +66,7 @@ A successful report proves that the endpoint can issue an opaque binding; the de
 
 - `POST /v1/bind` — returns a strict descriptor and opaque binding ID.
 - `GET /v1/catalog` — requires `Authorization: Bearer <binding>`.
-- `GET /artifacts/home.js` and `/artifacts/home.css` — require the same binding.
+- `GET /artifacts/<route-id>.js` and `/artifacts/<route-id>.css` — route-specific bytes requiring the same binding.
 - `GET /health` — basic process identity.
 
 This proof uses cooperative endpoint authority and permissive CORS. Production authentication, tenant isolation, signing, sandboxing, and durable binding persistence are intentionally outside this first swappability milestone.
