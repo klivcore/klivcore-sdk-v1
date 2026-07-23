@@ -1,11 +1,11 @@
 import { HOST_API_VERSION, PROTOCOL_VERSION, SCHEMA_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
 import { sha256Hex } from "./client";
-import { createPasskeyAuth, type PasskeyAuth, type RealmSession } from "./passkey-auth";
+import { createPasskeyAuth, parseRealmBranding, type PasskeyAuth, type RealmBranding, type RealmSession } from "./passkey-auth";
 
 export { createPasskeyAuth };
 
 export type RealmAppPublication = Readonly<{
-  respond(request: Request, fallbackToIndex?: boolean): Response | undefined;
+  respond(request: Request, fallbackToIndex?: boolean, branding?: RealmBranding): Response | undefined;
 }>;
 
 export type RealmGatewayServiceChannel = Readonly<{
@@ -37,6 +37,7 @@ export type RealmGatewayRouteConfig = Readonly<{
 }>;
 
 export type RealmGatewayConfig = Readonly<{
+  branding: RealmBranding;
   hostname?: string;
   port: number;
   realmId: string;
@@ -94,6 +95,7 @@ type PublicBinding = Readonly<{
 }>;
 
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
+  const branding = parseRealmBranding(config.branding);
   const responseHeaders = config.auth ? {} : corsHeaders;
   const json = (value: unknown, status = 200) => jsonResponse(value, status, responseHeaders);
   const configuredCapabilities = new Set(config.capabilities);
@@ -358,7 +360,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         && url.pathname !== "/.well-known" && !url.pathname.startsWith("/.well-known/")
         && url.pathname !== "/auth" && !url.pathname.startsWith("/auth/")) {
         const fallbackToIndex = url.pathname === "/" || routeConfigs.some((route) => route.path === url.pathname);
-        const response = config.appV2.respond(request, fallbackToIndex);
+        const response = config.appV2.respond(request, fallbackToIndex, branding);
         if (response) {
           if (config.auth && !config.auth.sessionFor(request)) {
             return fallbackToIndex

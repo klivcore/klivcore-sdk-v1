@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@klivcore/app-v2",
+    "version": "1.0.0"
+  },
+  "files": [
+    {
+      "path": "assets/index-CSjaNVQO.css",
+      "bytes": 7785,
+      "sha256": "2dac9b2a8dc4c3d0b041d9ef18036a9a4a30475cf966db5c486e59695e205ca7"
+    },
+    {
+      "path": "assets/index-jTmRY83C.js",
+      "bytes": 43146,
+      "sha256": "8c044912ee8e410815373199c61bc0518b5508058ccb5d3c5973586a5df87cf9"
+    },
+    {
+      "path": "index.html",
+      "bytes": 540,
+      "sha256": "fb1aff3001c133436d8b4443cef93acc48f1775fda8c73fbbf2094ad358549b0"
+    }
+  ]
+}

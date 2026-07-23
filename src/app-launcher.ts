@@ -14,11 +14,13 @@ export type RunningAppV2Launcher = Readonly<{
 }>;
 
 export type PublishedAppV2 = Readonly<{
-  respond(request: Request, fallbackToIndex?: boolean): Response | undefined;
+  respond(request: Request, fallbackToIndex?: boolean, branding?: RealmBranding): Response | undefined;
 }>;
 
+export type RealmBranding = Readonly<{ canvasColor: string }>;
+
 type PublishedFile = Readonly<{ path: string; bytes: number; sha256: string }>;
-type PublishedAsset = Readonly<{ body: Blob; bytes: number; contentType: string }>;
+type PublishedAsset = Readonly<{ body: Blob; bytes: number; contentType: string; text?: string }>;
 
 type PublicationManifest = Readonly<{
   schemaVersion: 1;
@@ -133,13 +135,14 @@ async function loadPublication(assetsRoot: string): Promise<ReadonlyMap<string, 
       body: new Blob([data], { type: contentType }),
       bytes: data.byteLength,
       contentType,
+      ...(file.path === "index.html" ? { text: new TextDecoder().decode(data) } : {}),
     }));
   }
   if (!files.has("/index.html")) failManifest();
   return files;
 }
 
-function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, request: Request, fallbackToIndex = true): Response | undefined {
+function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, request: Request, fallbackToIndex = true, branding?: RealmBranding): Response | undefined {
   if (request.method !== "GET" && request.method !== "HEAD") return undefined;
   const url = new URL(request.url);
   let pathname: string;
@@ -153,10 +156,17 @@ function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, reques
   const fallback = fallbackToIndex && !exact && !pathname.split("/").at(-1)?.includes(".") ? files.get("/index.html") : undefined;
   const asset = exact ?? fallback;
   if (!asset) return undefined;
-  return new Response(request.method === "HEAD" ? null : asset.body, {
+  if (branding && (!/^#[0-9a-f]{6}$/.test(branding.canvasColor) || Object.keys(branding).join(",") !== "canvasColor")) {
+    throw new TypeError("Realm branding is invalid");
+  }
+  const brandedText = asset.text && branding
+    ? asset.text.replace("--realm-canvas-color:#07090d", `--realm-canvas-color:${branding.canvasColor}`)
+    : undefined;
+  const bytes = brandedText === undefined ? asset.bytes : Buffer.byteLength(brandedText);
+  return new Response(request.method === "HEAD" ? null : brandedText ?? asset.body, {
     headers: {
       "cache-control": pathname === "/" || pathname === "/index.html" || fallback ? "no-store" : "public, max-age=31536000, immutable",
-      "content-length": String(asset.bytes),
+      "content-length": String(bytes),
       "content-type": asset.contentType,
       "x-content-type-options": "nosniff",
     },
@@ -165,7 +175,7 @@ function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, reques
 
 export async function loadPublishedAppV2(assetsRoot: string): Promise<PublishedAppV2> {
   const files = await loadPublication(resolve(assetsRoot));
-  return Object.freeze({ respond(request, fallbackToIndex) { return publishedAppResponse(files, request, fallbackToIndex); } });
+  return Object.freeze({ respond(request, fallbackToIndex, branding) { return publishedAppResponse(files, request, fallbackToIndex, branding); } });
 }
 
 export async function startAppV2Launcher(options: AppV2LauncherOptions): Promise<RunningAppV2Launcher> {

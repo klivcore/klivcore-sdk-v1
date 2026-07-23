@@ -8,6 +8,7 @@ afterEach(() => gateway?.stop());
 describe("SDK conformance suite", () => {
   test("reports the verified Realm identity, route, artifacts, and capabilities", async () => {
     gateway = createRealmGateway({
+      branding: { canvasColor: "#07090d" },
       hostname: "127.0.0.1",
       port: 0,
       realmId: "conformance-realm",
