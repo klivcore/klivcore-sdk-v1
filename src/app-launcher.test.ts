@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { cp, mkdtemp, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolvePublishedAppV2Root, startAppV2Launcher } from "./app-launcher";
+import { loadPublishedAppV2, resolvePublishedAppV2Root, startAppV2Launcher } from "./app-launcher";
 
 const roots: string[] = [];
 const launchers: Array<{ stop(): void }> = [];
@@ -36,6 +36,25 @@ async function assetsFixture() {
 }
 
 describe("SDK App V2 launcher", () => {
+  test("loads an integrity-verified publication as a reusable Realm asset handler", async () => {
+    const assetsRoot = await assetsFixture();
+    const app = await loadPublishedAppV2(assetsRoot);
+    await rm(assetsRoot, { recursive: true });
+
+    const index = app.respond(new Request("https://realm.example/"));
+    const route = app.respond(new Request("https://realm.example/operations"));
+    const script = app.respond(new Request("https://realm.example/assets/app.js", { method: "HEAD" }));
+    const mutation = app.respond(new Request("https://realm.example/", { method: "POST" }));
+
+    expect(index?.status).toBe(200);
+    expect(await index?.text()).toContain("Empty Klivcore App");
+    expect(route?.headers.get("cache-control")).toBe("no-store");
+    expect(await route?.text()).toContain("Empty Klivcore App");
+    expect(script?.headers.get("cache-control")).toContain("immutable");
+    expect(await script?.text()).toBe("");
+    expect(mutation).toBeUndefined();
+  });
+
   test("resolves only a bounded content-addressed publication pointer", async () => {
     const assetsRoot = await assetsFixture();
     const publicationRoot = await mkdtemp(join(tmpdir(), "klivcore-sdk-publication-"));

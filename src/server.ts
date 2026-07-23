@@ -1,5 +1,7 @@
 import { HOST_API_VERSION, PROTOCOL_VERSION, SCHEMA_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
 import { sha256Hex } from "./client";
+import type { PublishedAppV2 } from "./app-launcher";
+import type { PasskeyAuth, RealmSession } from "./passkey-auth";
 
 export type RealmGatewayServiceChannel = Readonly<{
   send(data: string | Uint8Array): void;
@@ -40,6 +42,8 @@ export type RealmGatewayConfig = Readonly<{
   publicBindingCapabilities?: readonly string[];
   maxPublicBindings?: number;
   maxTrustedBindings?: number;
+  appV2?: PublishedAppV2;
+  auth?: PasskeyAuth;
   services?: readonly RealmGatewayService[];
   defaultRoute: RealmGatewayRouteConfig;
   routes?: readonly RealmGatewayRouteConfig[];
@@ -49,6 +53,7 @@ export type RunningRealmGateway = Readonly<{
   endpoint: string;
   issueBinding(capabilities: readonly string[]): Readonly<{ bindingId: string; capabilities: readonly string[] }>;
   revokeBinding(bindingId: string): boolean;
+  issueRegistrationUrl(options?: Readonly<{ ttlMs?: number }>): string;
   stop(): void;
 }>;
 
@@ -64,25 +69,33 @@ type RealmSocketData =
 
 type BoundSocket = Readonly<{ close(code?: number, reason?: string): void }>;
 
-function json(value: unknown, status = 200) {
+function jsonResponse(value: unknown, status = 200, extraHeaders: HeadersInit = corsHeaders) {
   return new Response(JSON.stringify(value), {
     status,
-    headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8" },
+    headers: { ...extraHeaders, "content-type": "application/json; charset=utf-8" },
   });
 }
 
-function withCors(response: Response): Response {
+function withHeaders(response: Response, extraHeaders: Readonly<Record<string, string>>): Response {
   const headers = new Headers(response.headers);
-  for (const [name, value] of Object.entries(corsHeaders)) if (!headers.has(name)) headers.set(name, value);
+  for (const [name, value] of Object.entries(extraHeaders)) if (!headers.has(name)) headers.set(name, value);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+type PublicBinding = Readonly<{
+  capabilities: ReadonlySet<string>;
+  sessionId?: string;
+  expiresAt?: number;
+}>;
+
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
+  const responseHeaders = config.auth ? {} : corsHeaders;
+  const json = (value: unknown, status = 200) => jsonResponse(value, status, responseHeaders);
   const configuredCapabilities = new Set(config.capabilities);
   const publicBindingCapabilities = [...(config.publicBindingCapabilities ?? config.capabilities)];
   const maxPublicBindings = config.maxPublicBindings ?? 256;
   const maxTrustedBindings = config.maxTrustedBindings ?? 256;
-  const publicBindings = new Map<string, ReadonlySet<string>>();
+  const publicBindings = new Map<string, PublicBinding>();
   const trustedBindings = new Map<string, ReadonlySet<string>>();
   const activeBindingSockets = new Map<string, Set<BoundSocket>>();
   const routeConfigs = [config.defaultRoute, ...(config.routes ?? [])];
@@ -129,7 +142,15 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   }
 
   function bindingForId(bindingId: string): ReadonlySet<string> | undefined {
-    return trustedBindings.get(bindingId) ?? publicBindings.get(bindingId);
+    const trusted = trustedBindings.get(bindingId);
+    if (trusted) return trusted;
+    const binding = publicBindings.get(bindingId);
+    if (!binding) return undefined;
+    if (binding.sessionId && (!config.auth?.sessionById(binding.sessionId) || (binding.expiresAt ?? 0) <= Date.now())) {
+      revokeBinding(bindingId);
+      return undefined;
+    }
+    return binding.capabilities;
   }
 
   function issueBinding(capabilities: readonly string[]) {
@@ -143,11 +164,16 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     return Object.freeze({ bindingId, capabilities: granted });
   }
 
-  function issuePublicBinding() {
+  function issuePublicBinding(session?: RealmSession) {
+    if (config.auth && !session) throw new TypeError("authenticated Realm binding requires a session");
     if (publicBindings.size >= maxPublicBindings) revokeBinding(publicBindings.keys().next().value!);
     const bindingId = crypto.randomUUID();
     const capabilities = Object.freeze([...new Set(publicBindingCapabilities)]);
-    publicBindings.set(bindingId, new Set(capabilities));
+    publicBindings.set(bindingId, Object.freeze({
+      capabilities: new Set(capabilities),
+      sessionId: session?.id,
+      expiresAt: session?.expiresAt,
+    }));
     return Object.freeze({ bindingId, capabilities });
   }
 
@@ -159,6 +185,12 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     for (const socket of sockets ?? []) socket.close(1008, "Realm binding revoked");
     return true;
   }
+
+  const unsubscribeSessionInvalidation = config.auth?.onSessionInvalidated((sessionId) => {
+    for (const [bindingId, binding] of publicBindings) {
+      if (binding.sessionId === sessionId) revokeBinding(bindingId);
+    }
+  });
 
   async function publication(origin: string) {
     const catalog = parseRealmCatalog({
@@ -189,6 +221,10 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     websocket: {
       maxPayloadLength: 512 * 1024,
       message(socket, message) {
+        if (socket.data.authenticated && socket.data.bindingId && !bindingForId(socket.data.bindingId)) {
+          socket.close(1008, "Realm session expired");
+          return;
+        }
         const maxLength = !socket.data.authenticated || socket.data.kind === "notifications" ? 1024 : socket.data.service.maxMessageBytes;
         const messageBytes = typeof message === "string" ? new TextEncoder().encode(message).byteLength : message.byteLength;
         if (messageBytes > maxLength || (socket.data.kind === "notifications" && typeof message !== "string")) {
@@ -261,11 +297,19 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       },
     },
     async fetch(request, bunServer) {
-      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
+      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: responseHeaders });
       const url = new URL(request.url);
-      const origin = url.origin;
+      const origin = config.auth?.publicOrigin ?? url.origin;
       if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok", realmId: config.realmId });
+      if (request.method === "GET" && url.pathname === "/.well-known/klivcore-realm") {
+        return new Response(JSON.stringify({ schemaVersion: 1, realmId: config.realmId, name: config.name }), {
+          headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" },
+        });
+      }
+      const authResponse = await config.auth?.handle(request);
+      if (authResponse) return authResponse;
       if (request.method === "GET" && url.pathname === "/v1/notifications") {
+        if (config.auth && request.headers.get("origin") !== config.auth.publicOrigin) return json({ error: "forbidden" }, 403);
         if (bunServer.upgrade(request, { data: { authenticated: false, kind: "notifications" } })) return;
         return json({ error: "websocket upgrade required" }, 426);
       }
@@ -273,11 +317,18 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         ? services.find((service) => url.pathname === service.path)
         : undefined;
       if (websocketService) {
+        if (config.auth && request.headers.get("origin") !== config.auth.publicOrigin) return json({ error: "forbidden" }, 403);
         if (bunServer.upgrade(request, { data: { authenticated: false, kind: "service", service: websocketService } })) return;
         return json({ error: "websocket upgrade required" }, 426);
       }
       if (request.method === "POST" && url.pathname === "/v1/bind") {
-        const binding = issuePublicBinding();
+        let session: RealmSession | undefined;
+        if (config.auth) {
+          if (request.headers.get("origin") !== config.auth.publicOrigin) return json({ error: "forbidden" }, 403);
+          session = config.auth.sessionFor(request);
+          if (!session || session.realmId !== config.realmId) return json({ error: "unauthorized" }, 401);
+        }
+        const binding = issuePublicBinding(session);
         const { bindingId, capabilities } = binding;
         const { catalogText } = await publication(origin);
         const descriptor = parseRealmDescriptor({
@@ -295,6 +346,23 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         });
         return json(descriptor);
       }
+      if (config.appV2
+        && url.pathname !== "/health"
+        && url.pathname !== "/v1" && !url.pathname.startsWith("/v1/")
+        && url.pathname !== "/artifacts" && !url.pathname.startsWith("/artifacts/")
+        && url.pathname !== "/.well-known" && !url.pathname.startsWith("/.well-known/")
+        && url.pathname !== "/auth" && !url.pathname.startsWith("/auth/")) {
+        const fallbackToIndex = url.pathname === "/" || routeConfigs.some((route) => route.path === url.pathname);
+        const response = config.appV2.respond(request, fallbackToIndex);
+        if (response) {
+          if (config.auth && !config.auth.sessionFor(request)) {
+            return fallbackToIndex
+              ? Response.redirect(`${config.auth.publicOrigin}/auth/login`, 302)
+              : json({ error: "unauthorized" }, 401);
+          }
+          return response;
+        }
+      }
       const binding = requestBinding(request);
       if (!binding) return json({ error: "unauthorized" }, 401);
       const requestService = services.find((service) => url.pathname === service.path || url.pathname.startsWith(`${service.path}/`));
@@ -302,7 +370,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         if (requestService.requiredCapabilities.some((capability) => !binding.has(capability))) return json({ error: "forbidden" }, 403);
         if (!requestService.handleRequest) return json({ error: "not found" }, 404);
         try {
-          return withCors(await requestService.handleRequest(request, url));
+          return withHeaders(await requestService.handleRequest(request, url), responseHeaders);
         } catch {
           return json({ error: "Realm service request failed" }, 500);
         }
@@ -311,6 +379,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         return json({ revision: badgeRevision, count: badgeCount });
       }
       if (request.method === "POST" && url.pathname.startsWith("/v1/badge/")) {
+        if (config.auth && request.headers.get("origin") !== config.auth.publicOrigin) return json({ error: "forbidden" }, 403);
         const input = url.pathname.slice("/v1/badge/".length);
         if (!/^(0|[1-9]\d{0,2})$/.test(input)) return json({ error: "invalid badge count" }, 400);
         badgeCount = Number(input);
@@ -320,13 +389,13 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       }
       if (request.method === "GET" && url.pathname === "/v1/catalog") {
         const { catalogText } = await publication(origin);
-        return new Response(catalogText, { headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8" } });
+        return new Response(catalogText, { headers: { ...responseHeaders, "content-type": "application/json; charset=utf-8" } });
       }
       const artifact = request.method === "GET"
         ? routeConfigs.find((route) => url.pathname === `/artifacts/${route.id}.js` || url.pathname === `/artifacts/${route.id}.css`)
         : undefined;
-      if (artifact && url.pathname.endsWith(".js")) return new Response(artifact.js, { headers: { ...corsHeaders, "content-type": "text/javascript; charset=utf-8" } });
-      if (artifact && url.pathname.endsWith(".css")) return new Response(artifact.css, { headers: { ...corsHeaders, "content-type": "text/css; charset=utf-8" } });
+      if (artifact && url.pathname.endsWith(".js")) return new Response(artifact.js, { headers: { ...responseHeaders, "content-type": "text/javascript; charset=utf-8" } });
+      if (artifact && url.pathname.endsWith(".css")) return new Response(artifact.css, { headers: { ...responseHeaders, "content-type": "text/css; charset=utf-8" } });
       return json({ error: "not found" }, 404);
     },
   });
@@ -335,6 +404,14 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     endpoint: `http://${server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname}:${server.port}`,
     issueBinding,
     revokeBinding,
-    stop() { server.stop(true); },
+    issueRegistrationUrl(options) {
+      if (!config.auth) throw new Error("Realm passkey authentication is not configured");
+      return config.auth.issueRegistrationUrl(options);
+    },
+    stop() {
+      unsubscribeSessionInvalidation?.();
+      server.stop(true);
+      config.auth?.close();
+    },
   });
 }

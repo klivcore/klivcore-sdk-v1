@@ -13,6 +13,10 @@ export type RunningAppV2Launcher = Readonly<{
   stop(): void;
 }>;
 
+export type PublishedAppV2 = Readonly<{
+  respond(request: Request, fallbackToIndex?: boolean): Response | undefined;
+}>;
+
 type PublishedFile = Readonly<{ path: string; bytes: number; sha256: string }>;
 type PublishedAsset = Readonly<{ body: Blob; bytes: number; contentType: string }>;
 
@@ -135,9 +139,38 @@ async function loadPublication(assetsRoot: string): Promise<ReadonlyMap<string, 
   return files;
 }
 
+function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, request: Request, fallbackToIndex = true): Response | undefined {
+  if (request.method !== "GET" && request.method !== "HEAD") return undefined;
+  const url = new URL(request.url);
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return new Response("Bad Request\n", { status: 400 });
+  }
+  if (pathname.includes("\0") || pathname.split("/").includes("..")) return new Response("Bad Request\n", { status: 400 });
+  const exact = pathname === "/" ? files.get("/index.html") : files.get(pathname);
+  const fallback = fallbackToIndex && !exact && !pathname.split("/").at(-1)?.includes(".") ? files.get("/index.html") : undefined;
+  const asset = exact ?? fallback;
+  if (!asset) return undefined;
+  return new Response(request.method === "HEAD" ? null : asset.body, {
+    headers: {
+      "cache-control": pathname === "/" || pathname === "/index.html" || fallback ? "no-store" : "public, max-age=31536000, immutable",
+      "content-length": String(asset.bytes),
+      "content-type": asset.contentType,
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+export async function loadPublishedAppV2(assetsRoot: string): Promise<PublishedAppV2> {
+  const files = await loadPublication(resolve(assetsRoot));
+  return Object.freeze({ respond(request, fallbackToIndex) { return publishedAppResponse(files, request, fallbackToIndex); } });
+}
+
 export async function startAppV2Launcher(options: AppV2LauncherOptions): Promise<RunningAppV2Launcher> {
   const assetsRoot = resolve(options.assetsRoot);
-  const files = await loadPublication(assetsRoot);
+  const app = await loadPublishedAppV2(assetsRoot);
   const hostname = options.hostname ?? "127.0.0.1";
   const port = options.port ?? 45174;
   if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "0.0.0.0") {
@@ -149,29 +182,8 @@ export async function startAppV2Launcher(options: AppV2LauncherOptions): Promise
     hostname,
     port,
     fetch(request) {
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return new Response("Method Not Allowed\n", { status: 405, headers: { allow: "GET, HEAD" } });
-      }
-      const url = new URL(request.url);
-      let pathname: string;
-      try {
-        pathname = decodeURIComponent(url.pathname);
-      } catch {
-        return new Response("Bad Request\n", { status: 400 });
-      }
-      if (pathname.includes("\0") || pathname.split("/").includes("..")) return new Response("Bad Request\n", { status: 400 });
-      const exact = pathname === "/" ? files.get("/index.html") : files.get(pathname);
-      const fallback = !exact && !pathname.split("/").at(-1)?.includes(".") ? files.get("/index.html") : undefined;
-      const asset = exact ?? fallback;
-      if (!asset) return new Response("Not Found\n", { status: 404 });
-      return new Response(request.method === "HEAD" ? null : asset.body, {
-        headers: {
-          "cache-control": pathname === "/" || fallback ? "no-store" : "public, max-age=31536000, immutable",
-          "content-length": String(asset.bytes),
-          "content-type": asset.contentType,
-          "x-content-type-options": "nosniff",
-        },
-      });
+      return app.respond(request)
+        ?? new Response("Method Not Allowed\n", { status: 405, headers: { allow: "GET, HEAD" } });
     },
   });
   const displayHostname = server.hostname === "0.0.0.0" ? "127.0.0.1" : server.hostname;
