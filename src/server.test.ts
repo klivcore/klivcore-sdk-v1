@@ -45,6 +45,7 @@ describe("reference Realm Gateway", () => {
     const candidate = await bindAndPrepareRealm(gateway.endpoint);
     expect(candidate.descriptor.realmId).toBe("test-realm");
     expect(candidate.descriptor.capabilities).toContain("test:inspect");
+    expect(candidate.route.component.hostApiRange).toBe("^1.1.0");
     expect(candidate.js).toContain("Test Realm");
   });
 
@@ -69,5 +70,44 @@ describe("reference Realm Gateway", () => {
     const gateway = start();
     await expect(bindAndPrepareRealm(gateway.endpoint, { routePath: "/debug/missing" }))
       .rejects.toThrow("Realm route not found");
+  });
+
+  test("shares an authenticated Realm badge across browser bindings", async () => {
+    const gateway = start();
+    const publisher = await bindAndPrepareRealm(gateway.endpoint);
+    const observer = await bindAndPrepareRealm(gateway.endpoint);
+    const published = await fetch(`${gateway.endpoint}/v1/badge/4`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${publisher.descriptor.authority.bindingId}` },
+    });
+    const observed = await fetch(`${gateway.endpoint}/v1/badge`, {
+      headers: { authorization: `Bearer ${observer.descriptor.authority.bindingId}` },
+    });
+
+    expect(await published.json()).toEqual({ revision: 1, count: 4 });
+    expect(await observed.json()).toEqual({ revision: 1, count: 4 });
+  });
+
+  test("streams authenticated Realm-attributed badge changes", async () => {
+    const gateway = start();
+    const candidate = await bindAndPrepareRealm(gateway.endpoint);
+    const socket = new WebSocket(`${gateway.endpoint.replace("http://", "ws://")}/v1/notifications`);
+    await new Promise<void>((resolve, reject) => {
+      socket.addEventListener("open", () => resolve(), { once: true });
+      socket.addEventListener("error", () => reject(new Error("notification socket failed")), { once: true });
+    });
+    const nextMessage = () => new Promise<unknown>((resolve) => {
+      socket.addEventListener("message", (event) => resolve(JSON.parse(String(event.data))), { once: true });
+    });
+    const initial = nextMessage();
+    socket.send(JSON.stringify({ type: "authenticate", bindingId: candidate.descriptor.authority.bindingId }));
+    expect(await initial).toEqual({ type: "badge.changed", realmId: "test-realm", revision: 0, count: 0 });
+    const changed = nextMessage();
+    await fetch(`${gateway.endpoint}/v1/badge/5`, {
+      method: "POST",
+      headers: { authorization: "Bea" + "rer " + candidate.descriptor.authority.bindingId },
+    });
+    expect(await changed).toEqual({ type: "badge.changed", realmId: "test-realm", revision: 1, count: 5 });
+    socket.close();
   });
 });

@@ -5,6 +5,7 @@ export type RealmComponentHost = Readonly<{
   root: ShadowRoot;
   realm: Readonly<{ id: string; name: string; capabilities: readonly string[] }>;
   navigate(path: string): void;
+  setBadge(count: number): void;
 }>;
 
 export type RealmComponentModule = Readonly<{

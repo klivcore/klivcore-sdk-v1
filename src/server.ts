@@ -34,6 +34,8 @@ const corsHeaders = {
   "access-control-allow-origin": "*",
 };
 
+type NotificationSocketData = { authenticated: boolean };
+
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,
@@ -44,7 +46,16 @@ function json(value: unknown, status = 200) {
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
   const bindings = new Set<string>();
   const routeConfigs = [config.defaultRoute, ...(config.routes ?? [])];
-  let server: Bun.Server<undefined>;
+  let badgeCount = 0;
+  let badgeRevision = 0;
+  let server: Bun.Server<NotificationSocketData>;
+  const notificationTopic = `realm-notifications:${config.realmId}`;
+  const notificationMessage = () => JSON.stringify({
+    type: "badge.changed",
+    realmId: config.realmId,
+    revision: badgeRevision,
+    count: badgeCount,
+  });
 
   function authorized(request: Request) {
     const header = request.headers.get("authorization");
@@ -74,14 +85,47 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     return { catalog, catalogText };
   }
 
-  server = Bun.serve({
+  server = Bun.serve<NotificationSocketData>({
     hostname: config.hostname ?? "127.0.0.1",
     port: config.port,
-    async fetch(request) {
+    websocket: {
+      maxPayloadLength: 1024,
+      message(socket, message) {
+        if (socket.data.authenticated || typeof message !== "string" || message.length > 1024) {
+          socket.close(1008, "invalid notification authentication");
+          return;
+        }
+        let input: unknown;
+        try { input = JSON.parse(message); } catch {
+          socket.close(1008, "invalid notification authentication");
+          return;
+        }
+        if (!input || typeof input !== "object" || Array.isArray(input)) {
+          socket.close(1008, "invalid notification authentication");
+          return;
+        }
+        const record = input as Record<string, unknown>;
+        if (Object.keys(record).sort().join(",") !== "bindingId,type"
+          || record.type !== "authenticate"
+          || typeof record.bindingId !== "string"
+          || !bindings.has(record.bindingId)) {
+          socket.close(1008, "invalid notification authentication");
+          return;
+        }
+        socket.data.authenticated = true;
+        socket.subscribe(notificationTopic);
+        socket.send(notificationMessage());
+      },
+    },
+    async fetch(request, bunServer) {
       if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
       const url = new URL(request.url);
       const origin = url.origin;
       if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok", realmId: config.realmId });
+      if (request.method === "GET" && url.pathname === "/v1/notifications") {
+        if (bunServer.upgrade(request, { data: { authenticated: false } })) return;
+        return json({ error: "websocket upgrade required" }, 426);
+      }
       if (request.method === "POST" && url.pathname === "/v1/bind") {
         const bindingId = crypto.randomUUID();
         if (bindings.size >= 256) bindings.delete(bindings.values().next().value!);
@@ -103,8 +147,19 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         return json(descriptor);
       }
       if (!authorized(request)) return json({ error: "unauthorized" }, 401);
-      const { catalogText } = await publication(origin);
+      if (request.method === "GET" && url.pathname === "/v1/badge") {
+        return json({ revision: badgeRevision, count: badgeCount });
+      }
+      if (request.method === "POST" && url.pathname.startsWith("/v1/badge/")) {
+        const input = url.pathname.slice("/v1/badge/".length);
+        if (!/^(0|[1-9]\d{0,2})$/.test(input)) return json({ error: "invalid badge count" }, 400);
+        badgeCount = Number(input);
+        badgeRevision = badgeRevision === Number.MAX_SAFE_INTEGER ? 0 : badgeRevision + 1;
+        server.publish(notificationTopic, notificationMessage());
+        return json({ revision: badgeRevision, count: badgeCount });
+      }
       if (request.method === "GET" && url.pathname === "/v1/catalog") {
+        const { catalogText } = await publication(origin);
         return new Response(catalogText, { headers: { ...corsHeaders, "content-type": "application/json; charset=utf-8" } });
       }
       const artifact = request.method === "GET"
