@@ -406,6 +406,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const cookie = (token: string) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
 
   const allCredentials = () => database.query<CredentialRow, []>("SELECT id, public_key, counter, transports_json, device_type, backed_up FROM credentials ORDER BY id LIMIT 32").all().map(storedCredential);
+  const registrationLocked = () => database.query<{ present: number }, []>("SELECT EXISTS(SELECT 1 FROM credentials LIMIT 1) AS present").get()?.present === 1;
   const createSession = () => {
     const token = randomToken();
     const createdAt = now();
@@ -438,6 +439,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
     if (url.pathname === "/v1/auth/register/options") {
       if (!exactKeys(body, ["token"]) || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)) return json({ error: "invalid request" }, 400);
+      if (registrationLocked()) return json({ error: "unauthorized" }, 401);
       const hash = tokenHash(body.token);
       const grant = database.query<GrantRow, [string]>("SELECT token_hash, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
       if (!grant || grant.consumed_at !== null || grant.expires_at <= timestamp) return json({ error: "unauthorized" }, 401);
@@ -473,6 +475,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         const entry = result.credential;
         database.query("INSERT INTO credentials(id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(entry.id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
+        database.query("UPDATE registration_grants SET consumed_at = ? WHERE consumed_at IS NULL").run(timestamp);
         sessionToken = createSession();
       });
       try { commit.immediate(); } catch { return json({ error: "unauthorized" }, 401); }
@@ -558,6 +561,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     issueRegistrationUrl(issueOptions = {}) {
       const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
       if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
+      if (registrationLocked()) throw new Error("registration is already locked");
       const token = randomToken();
       const timestamp = now();
       database.query("INSERT INTO registration_grants(token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)")
