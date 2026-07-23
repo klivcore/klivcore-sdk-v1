@@ -5,7 +5,7 @@ import { createPasskeyAuth, parseRealmBranding, type PasskeyAuth, type RealmBran
 export { createPasskeyAuth };
 
 export type RealmAppPublication = Readonly<{
-  respond(request: Request, fallbackToIndex?: boolean, branding?: RealmBranding): Response | undefined;
+  respond(request: Request, fallbackToIndex: boolean | undefined, branding: RealmBranding): Response | undefined;
 }>;
 
 export type RealmGatewayServiceChannel = Readonly<{
