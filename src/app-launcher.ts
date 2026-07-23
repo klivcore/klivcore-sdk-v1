@@ -160,7 +160,7 @@ function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, reques
     throw new TypeError("Realm branding is invalid");
   }
   const brandedText = asset.text && branding
-    ? asset.text.replace("--realm-canvas-color:#07090d", `--realm-canvas-color:${branding.canvasColor}`)
+    ? asset.text.replaceAll("#07090d", branding.canvasColor)
     : undefined;
   const bytes = brandedText === undefined ? asset.bytes : Buffer.byteLength(brandedText);
   return new Response(request.method === "HEAD" ? null : brandedText ?? asset.body, {
