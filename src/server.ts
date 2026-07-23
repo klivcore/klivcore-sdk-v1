@@ -100,6 +100,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   const json = (value: unknown, status = 200) => jsonResponse(value, status, responseHeaders);
   const configuredCapabilities = new Set(config.capabilities);
   const publicBindingCapabilities = [...(config.publicBindingCapabilities ?? config.capabilities)];
+  const publicBindingCapabilitySet = new Set(publicBindingCapabilities);
   const maxPublicBindings = config.maxPublicBindings ?? 256;
   const maxTrustedBindings = config.maxTrustedBindings ?? 256;
   const publicBindings = new Map<string, PublicBinding>();
@@ -175,7 +176,8 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     if (config.auth && !session) throw new TypeError("authenticated Realm binding requires a session");
     if (publicBindings.size >= maxPublicBindings) revokeBinding(publicBindings.keys().next().value!);
     const bindingId = crypto.randomUUID();
-    const capabilities = Object.freeze([...new Set(publicBindingCapabilities)]);
+    const requestedCapabilities = session?.principal === "agent" ? session.capabilities ?? [] : publicBindingCapabilities;
+    const capabilities = Object.freeze([...new Set(requestedCapabilities.filter((capability) => publicBindingCapabilitySet.has(capability))) ]);
     publicBindings.set(bindingId, Object.freeze({
       capabilities: new Set(capabilities),
       sessionId: session?.id,
