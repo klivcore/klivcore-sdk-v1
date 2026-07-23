@@ -188,7 +188,7 @@ const defaultEngine: PasskeyEngine = Object.freeze({
       userID: Uint8Array.from(input.userId),
       userName: input.userName,
       userDisplayName: input.userName,
-      challenge: input.challenge,
+      challenge: Uint8Array.from(Buffer.from(input.challenge, "base64url")),
       timeout: CHALLENGE_TTL_MS,
       attestationType: "none",
       excludeCredentials: input.excludeCredentials.map((entry) => ({
@@ -238,7 +238,7 @@ const defaultEngine: PasskeyEngine = Object.freeze({
   async authenticationOptions(input) {
     return generateAuthenticationOptions({
       rpID: input.rpId,
-      challenge: input.challenge,
+      challenge: Uint8Array.from(Buffer.from(input.challenge, "base64url")),
       timeout: CHALLENGE_TTL_MS,
       userVerification: "required",
       allowCredentials: input.credentials.map((entry) => ({
