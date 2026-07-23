@@ -6,19 +6,19 @@
   },
   "files": [
     {
-      "path": "assets/index-CYj-GkQr.js",
-      "bytes": 43483,
-      "sha256": "5db3d0c33b4b1dbfdcb0f021555b4931bdca1e8f99076b8bc3ce08900bf0186c"
-    },
-    {
       "path": "assets/index-CrMXHXby.css",
       "bytes": 7733,
       "sha256": "87de5ac20bca185ad7ecc4a4b137930c10a601c0d1625778670f839a74411312"
     },
     {
+      "path": "assets/index-D2Wvnq8h.js",
+      "bytes": 43177,
+      "sha256": "39bd611fd5de4b2001786c4ebe4e8024f082f5937680b43f834afa43cdfe2b51"
+    },
+    {
       "path": "index.html",
       "bytes": 414,
-      "sha256": "704ba0e947f7eb9c54d56bf9e9e10a13a0b89fa9d20534853e6122f178c9e545"
+      "sha256": "74a6aa3093a58ca7cb4d05018f6caeb656ddbc8985fd23a76a35905527446c54"
     }
   ]
 }
