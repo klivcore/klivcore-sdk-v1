@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { bindAndPrepareRealm } from "./client";
-import type { PublishedAppV2 } from "./app-launcher";
-import type { PasskeyAuth } from "./passkey-auth";
 import { createRealmGateway, type RealmGatewayService, type RunningRealmGateway } from "./server";
 
 const running: RunningRealmGateway[] = [];
@@ -13,8 +11,6 @@ function start(
   services: readonly RealmGatewayService[] = [],
   publicBindingCapabilities?: readonly string[],
   maxPublicBindings?: number,
-  appV2?: PublishedAppV2,
-  auth?: PasskeyAuth,
 ) {
   const gateway = createRealmGateway({
     hostname: "127.0.0.1",
@@ -26,8 +22,6 @@ function start(
     capabilities: ["realm:view", "test:inspect"],
     publicBindingCapabilities,
     maxPublicBindings,
-    appV2,
-    auth,
     services,
     defaultRoute: {
       id: "home",
@@ -53,83 +47,6 @@ function start(
 }
 
 describe("reference Realm Gateway", () => {
-  test("requires a Realm session for self-hosting and derives bindings from exact-origin authority", async () => {
-    const invalidationListeners = new Set<(sessionId: string) => void>();
-    const auth: PasskeyAuth = Object.freeze({
-      publicOrigin: "https://realm.example",
-      issueRegistrationUrl: () => "https://realm.example/auth/register#token=one-time",
-      async handle(request) {
-        return new URL(request.url).pathname === "/auth/login" ? new Response("Realm login") : undefined;
-      },
-      sessionFor(request) {
-        return request.headers.get("cookie") === "realm-session=valid"
-          ? { id: "session-1", realmId: "test-realm", expiresAt: Date.now() + 60_000 }
-          : undefined;
-      },
-      sessionById(sessionId) {
-        return sessionId === "session-1" ? { id: sessionId, realmId: "test-realm", expiresAt: Date.now() + 60_000 } : undefined;
-      },
-      onSessionInvalidated(listener) { invalidationListeners.add(listener); return () => invalidationListeners.delete(listener); },
-      close() {},
-    });
-    const appV2: PublishedAppV2 = Object.freeze({
-      respond(request, fallback = true) { return fallback ? new Response("Secure Realm App") : undefined; },
-    });
-    const gateway = start([], undefined, undefined, appV2, auth);
-
-    const entry = await fetch(gateway.endpoint, { redirect: "manual" });
-    expect(entry.status).toBe(302);
-    expect(entry.headers.get("location")).toBe("https://realm.example/auth/login");
-    expect((await fetch(`${gateway.endpoint}/v1/bind`, { method: "POST" })).status).toBe(403);
-    expect((await fetch(`${gateway.endpoint}/v1/bind`, {
-      method: "POST",
-      headers: { origin: "https://realm.example" },
-    })).status).toBe(401);
-
-    const bound = await fetch(`${gateway.endpoint}/v1/bind`, {
-      method: "POST",
-      headers: { cookie: "realm-session=valid", origin: "https://realm.example" },
-    });
-    expect(bound.status).toBe(200);
-    expect(bound.headers.get("access-control-allow-origin")).toBeNull();
-    const descriptor = await bound.json() as { publication: { catalogUrl: string }; authority: { bindingId: string } };
-    expect(descriptor.publication.catalogUrl).toBe("https://realm.example/v1/catalog");
-
-    invalidationListeners.forEach((listener) => listener("session-1"));
-    const revoked = await fetch(`${gateway.endpoint}/v1/catalog`, {
-      headers: { authorization: "Bea" + "rer " + descriptor.authority.bindingId },
-    });
-    expect(revoked.status).toBe(401);
-  });
-
-  test("self-hosts App V2 and publishes bounded same-origin discovery", async () => {
-    const appV2: PublishedAppV2 = Object.freeze({
-      respond(request, fallbackToIndex = true) {
-        if (request.method !== "GET" && request.method !== "HEAD") return undefined;
-        if (!fallbackToIndex) return undefined;
-        return new Response(request.method === "HEAD" ? null : "<!doctype html><main>Realm-owned App V2</main>", {
-          headers: { "content-type": "text/html; charset=utf-8" },
-        });
-      },
-    });
-    const gateway = start([], undefined, undefined, appV2);
-
-    const [root, route, discovery, unknownApi, unknownRoute] = await Promise.all([
-      fetch(gateway.endpoint),
-      fetch(`${gateway.endpoint}/debug/routing/basic`),
-      fetch(`${gateway.endpoint}/.well-known/klivcore-realm`),
-      fetch(`${gateway.endpoint}/v1/missing`),
-      fetch(`${gateway.endpoint}/not-published`),
-    ]);
-
-    expect(await root.text()).toContain("Realm-owned App V2");
-    expect(await route.text()).toContain("Realm-owned App V2");
-    expect(await discovery.json()).toEqual({ schemaVersion: 1, realmId: "test-realm", name: "Test Realm" });
-    expect(discovery.headers.get("cache-control")).toBe("no-store");
-    expect(unknownApi.status).toBe(401);
-    expect(unknownRoute.headers.get("content-type")).toContain("application/json");
-  });
-
   test("publishes a bind-authorized, integrity-verifiable Realm", async () => {
     const gateway = start();
     const candidate = await bindAndPrepareRealm(gateway.endpoint);
