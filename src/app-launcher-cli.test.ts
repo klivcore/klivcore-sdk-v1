@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { parseAppV2LauncherArgs } from "./app-launcher-cli";
 
 describe("SDK App V2 launcher CLI", () => {
+  test("declares the executable name Bun infers from the scoped SDK package", async () => {
+    const packageJson = JSON.parse(await readFile(resolve(import.meta.dir, "../package.json"), "utf8"));
+    expect(packageJson.bin["sdk-v1"]).toBe("./bin/klivcore.ts");
+  });
+
   test("defaults to the dedicated local App V2 address", () => {
     expect(parseAppV2LauncherArgs([])).toEqual({ hostname: "127.0.0.1", port: 45174 });
   });

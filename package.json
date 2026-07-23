@@ -4,6 +4,7 @@
   "private": false,
   "type": "module",
   "bin": {
+    "sdk-v1": "./bin/klivcore.ts",
     "klivcore": "./bin/klivcore.ts"
   },
   "exports": {
