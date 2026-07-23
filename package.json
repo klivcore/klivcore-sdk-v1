@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "private": false,
   "type": "module",
+  "bin": {
+    "klivcore": "./bin/klivcore.ts"
+  },
   "exports": {
     ".": "./src/index.ts",
     "./server": "./src/server.ts",
     "./conformance": "./src/conformance.ts"
   },
   "scripts": {
+    "app": "bun bin/klivcore.ts",
     "build": "tsc -p tsconfig.json",
     "test": "bun test src",
     "conformance": "bun run src/conformance-cli.ts"

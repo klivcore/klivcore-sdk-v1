@@ -11,6 +11,18 @@ The complete public repository for building and diagnosing an independent Klivco
 
 Repository generation (`klivcore-sdk-v1`) is separate from protocol and schema version `1.0.0` and host API version `1.2.0`.
 
+## Launch the empty App
+
+The public SDK contains the integrity-checked App V2 build published by its canonical source repository. Run it directly from this public GitHub repository:
+
+```bash
+bunx https://github.com/klivcore/klivcore-sdk-v1
+```
+
+The command serves the empty generic App at `http://127.0.0.1:45174/`. Enter any conforming Realm Gateway endpoint in the App; the launcher contains no Realm identity, endpoint, product route, or capability implementation. Use `--port <1..65535>` to select another port or `--host 0.0.0.0` to listen beyond loopback intentionally. Press Ctrl+C to stop it.
+
+The same immutable files under `app-v2/` can be deployed to a static HTTPS host such as `klivcore.dev`. HTTPS launchers must connect to HTTPS/WSS Realm endpoints; use the local launcher for an HTTP-only local Realm.
+
 ## Build and test
 
 ```bash
