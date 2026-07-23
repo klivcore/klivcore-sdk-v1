@@ -30,8 +30,11 @@ type StoredCredential = Readonly<{
 }>;
 
 export type PasskeyRegistrationResult =
-  | Readonly<{ verified: false }>
+  | Readonly<{ verified: false; reason?: PasskeyVerificationFailure }>
   | Readonly<{ verified: true; credential: StoredCredential }>;
+
+export type PasskeyVerificationFailure = "credential-id" | "credential-type" | "challenge" | "origin" | "rp-id"
+  | "user-presence" | "user-verification" | "attestation" | "malformed-response";
 
 export type PasskeyAuthenticationResult =
   | Readonly<{ verified: false }>
@@ -218,8 +221,18 @@ const defaultEngine: PasskeyEngine = Object.freeze({
           backedUp: info.credentialBackedUp,
         }),
       });
-    } catch {
-      return Object.freeze({ verified: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const reason: PasskeyVerificationFailure = /credential ID|base64url-encoded/i.test(message) ? "credential-id"
+        : /credential type|registration response type/i.test(message) ? "credential-type"
+          : /challenge/i.test(message) ? "challenge"
+            : /origin/i.test(message) ? "origin"
+              : /RP ID/i.test(message) ? "rp-id"
+                : /user presence/i.test(message) ? "user-presence"
+                  : /user verification|user could not be verified/i.test(message) ? "user-verification"
+                    : /attestation|AAGUID|public key|authenticator data/i.test(message) ? "attestation"
+                      : "malformed-response";
+      return Object.freeze({ verified: false, reason });
     }
   },
   async authenticationOptions(input) {
@@ -431,7 +444,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       const ceremony = claimCeremony(body.flowId, "register", hash);
       if (!ceremony) return json({ error: "unauthorized" }, 401);
       const result = await engine.verifyRegistration({ challenge: ceremony.challenge, expectedOrigin: options.publicOrigin, rpId: options.rpId, response: body.credential });
-      if (!result.verified) return json({ error: "unauthorized" }, 401);
+      if (!result.verified) return json({ error: "unauthorized", reason: result.reason ?? "malformed-response" }, 401);
       let sessionToken: string | undefined;
       const commit = database.transaction(() => {
         const consumed = database.query("UPDATE registration_grants SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
