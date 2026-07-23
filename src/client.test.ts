@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { bindAndPrepareRealm, sha256Hex, type RealmFetcher } from "./client";
+import { bindAndPrepareRealm, readRealmBadge, sha256Hex, writeRealmBadge, type RealmFetcher } from "./client";
 
 function json(value: unknown) {
   return JSON.stringify(value);
@@ -131,5 +131,33 @@ describe("Realm client", () => {
       ]);
       expect(outcome).toContain("503");
     }
+  });
+
+  test("reads and writes bounded badge state with the opaque Realm binding", async () => {
+    const requests: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const fetcher: RealmFetcher = async function(this: typeof globalThis, input, init) {
+      requests.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        authorization: new Headers(init?.headers).get("authorization"),
+      });
+      return new Response(json({ revision: 4, count: 9 }));
+    };
+
+    expect(await writeRealmBadge("https://realm.test/base", "binding-123", 9, { fetcher })).toEqual({ revision: 4, count: 9 });
+    expect(await readRealmBadge("https://realm.test/base", "binding-123", { fetcher })).toEqual({ revision: 4, count: 9 });
+    expect(requests).toEqual([
+      { url: "https://realm.test/base/v1/badge/9", method: "POST", authorization: "Bearer binding-123" },
+      { url: "https://realm.test/base/v1/badge", method: "GET", authorization: "Bearer binding-123" },
+    ]);
+  });
+
+  test("rejects malformed badge state and invalid outgoing counts", async () => {
+    const fetcher: RealmFetcher = async function(this: typeof globalThis) {
+      return new Response(json({ revision: -1, count: 1000 }));
+    };
+
+    await expect(readRealmBadge("https://realm.test", "binding-123", { fetcher })).rejects.toThrow("invalid");
+    await expect(writeRealmBadge("https://realm.test", "binding-123", 1000, { fetcher })).rejects.toThrow("integer from 0 to 999");
   });
 });

@@ -2,10 +2,14 @@ import { HOST_API_VERSION, parseRealmCatalog, parseRealmDescriptor, type RealmCa
 
 const MAX_JSON_BYTES = 512 * 1024;
 const MAX_ARTIFACT_BYTES = 1024 * 1024;
+const MAX_BADGE_BYTES = 1024;
 
 export type PreparedRealm = Readonly<{ descriptor: RealmDescriptor; catalog: RealmCatalog; route: RealmRoute; js: string; css: string }>;
 export type RealmFetcher = (this: typeof globalThis, input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal; routePath?: string }>;
+export type RealmBadgeState = Readonly<{ revision: number; count: number }>;
+export type RealmBadgeOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal }>;
+export type BoundRealm = Readonly<{ descriptor: RealmDescriptor }>;
 
 export async function sha256Hex(value: string | Uint8Array): Promise<string> {
   const bytes = new Uint8Array(typeof value === "string" ? new TextEncoder().encode(value) : value);
@@ -59,7 +63,49 @@ async function request(fetcher: RealmFetcher, url: string, init: RequestInit, ma
   return boundedBytes(response, maxBytes, label);
 }
 
-export async function bindAndPrepareRealm(endpoint: string, options: RealmClientOptions = {}): Promise<PreparedRealm> {
+function badgeUrl(endpoint: string, suffix = ""): string {
+  const url = new URL(endpoint);
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new Error("Realm endpoint must use HTTP(S)");
+  url.pathname = url.pathname.replace(/\/$/, "") + `/v1/badge${suffix}`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function parseBadgeState(bytes: Uint8Array): RealmBadgeState {
+  let input: unknown;
+  try { input = JSON.parse(decodeUtf8(bytes)); } catch { throw new Error("Realm badge state is invalid JSON"); }
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("Realm badge state is invalid");
+  const record = input as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== "count,revision"
+    || !Number.isSafeInteger(record.revision) || (record.revision as number) < 0
+    || !Number.isSafeInteger(record.count) || (record.count as number) < 0 || (record.count as number) > 999) {
+    throw new Error("Realm badge state is invalid");
+  }
+  return Object.freeze({ revision: record.revision as number, count: record.count as number });
+}
+
+export async function readRealmBadge(endpoint: string, bindingId: string, options: RealmBadgeOptions = {}): Promise<RealmBadgeState> {
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  const bytes = await request(fetcher, badgeUrl(endpoint), {
+    headers: { authorization: `Bearer ${bindingId}` },
+    signal: options.signal,
+  }, MAX_BADGE_BYTES, "Realm badge");
+  return parseBadgeState(bytes);
+}
+
+export async function writeRealmBadge(endpoint: string, bindingId: string, count: number, options: RealmBadgeOptions = {}): Promise<RealmBadgeState> {
+  if (!Number.isSafeInteger(count) || count < 0 || count > 999) throw new Error("Realm badge count must be an integer from 0 to 999");
+  const fetcher = options.fetcher ?? globalThis.fetch;
+  const bytes = await request(fetcher, badgeUrl(endpoint, `/${count}`), {
+    method: "POST",
+    headers: { authorization: `Bearer ${bindingId}` },
+    signal: options.signal,
+  }, MAX_BADGE_BYTES, "Realm badge");
+  return parseBadgeState(bytes);
+}
+
+export async function bindRealm(endpoint: string, options: Omit<RealmClientOptions, "routePath"> = {}): Promise<BoundRealm> {
   const base = new URL(endpoint);
   if (base.protocol !== "http:" && base.protocol !== "https:") throw new Error("Realm endpoint must use HTTP(S)");
   base.pathname = base.pathname.replace(/\/$/, "") + "/v1/bind";
@@ -70,6 +116,12 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
   let descriptorInput: unknown;
   try { descriptorInput = JSON.parse(descriptorText); } catch { throw new Error("Realm descriptor is invalid JSON"); }
   const descriptor = parseRealmDescriptor(descriptorInput, HOST_API_VERSION);
+  return Object.freeze({ descriptor });
+}
+
+export async function bindAndPrepareRealm(endpoint: string, options: RealmClientOptions = {}): Promise<PreparedRealm> {
+  const { descriptor } = await bindRealm(endpoint, options);
+  const fetcher = options.fetcher ?? globalThis.fetch;
   const headers = { authorization: `Bearer ${descriptor.authority.bindingId}` };
   const catalogBytes = await request(fetcher, descriptor.publication.catalogUrl, { headers, signal: options.signal }, MAX_JSON_BYTES, "Realm catalog");
   if (await sha256Hex(catalogBytes) !== descriptor.publication.catalogSha256) throw new Error("Realm catalog integrity check failed");

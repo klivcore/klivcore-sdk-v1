@@ -6,10 +6,22 @@ The complete public repository for building and diagnosing an independent Klivco
 
 - Strict versioned Realm descriptor, route catalog, artifact, capability, and host ABI contracts.
 - A bounded client that binds to a Realm Gateway, selects an authorized route, and verifies catalog, JavaScript, and CSS integrity before activation.
-- A small reference Realm Gateway with opaque per-process bindings and authorized publication reads.
+- A small reference Realm Gateway with opaque per-process bindings, authorized publication reads, and bounded authority-neutral service extension points.
 - One conformance command shared by every Realm.
 
-Repository generation (`klivcore-sdk-v1`) is separate from protocol/schema/host API versions (`1.0.0`).
+Repository generation (`klivcore-sdk-v1`) is separate from protocol and schema version `1.0.0` and host API version `1.2.0`.
+
+## Launch the empty App
+
+The public SDK contains the integrity-checked App V2 build published by its canonical source repository. Run it directly from this public GitHub repository:
+
+```bash
+bunx https://github.com/klivcore/klivcore-sdk-v1
+```
+
+The command serves the empty generic App at `http://127.0.0.1:45174/`. Enter any conforming Realm Gateway endpoint in the App; the launcher contains no Realm identity, endpoint, product route, or capability implementation. Use `--port <1..65535>` to select another port or `--host 0.0.0.0` to listen beyond loopback intentionally. Press Ctrl+C to stop it.
+
+The same immutable files under `app-v2/` can be deployed to a static HTTPS host such as `klivcore.dev`. HTTPS launchers must connect to HTTPS/WSS Realm endpoints; use the local launcher for an HTTP-only local Realm.
 
 ## Build and test
 
@@ -36,7 +48,7 @@ bun run build
 bun run dev
 ```
 
-The component JavaScript must be self-contained: no imports from private repositories and no package or app globals. It exports `mount(host)`, renders only into `host.root`, and may return an unmount function. CSS is mounted into the same ShadowRoot by the generic App Kernel.
+The component JavaScript must be self-contained: no imports from private repositories and no package or app globals. It exports `mount(host)`, renders only into `host.root`, and may return an unmount function. CSS is mounted into the same ShadowRoot by the generic App Kernel. `host.navigate(path)` requests a verified Realm route, while `host.setBadge(count)` publishes a bounded `0..999` unread count for that Realm. The reference Gateway shares the count across bindings and streams bounded `{ realmId, revision, count }` changes over an authenticated `/v1/notifications` WebSocket; clients must never aggregate counts across Realms. Badge writes still stage transactionally, so failed candidates cannot replace the active Realm's count.
 
 Add non-default publications through the optional `routes` array on `RealmGatewayConfig`. Every route owns an ID, exact path, required capabilities, component ID, and self-contained JS/CSS bytes. Consumers select one exact published path with:
 
@@ -45,6 +57,8 @@ await bindAndPrepareRealm(endpoint, { routePath: "/debug/routing/basic" });
 ```
 
 Omit `routePath` to select `defaultRoute`.
+
+Realm-owned capabilities can add authenticated HTTP/WebSocket services through `RealmGatewayConfig.services`. Each service declares `requiredCapabilities`; the SDK enforces them for HTTP and WebSocket access in addition to binding authentication, path/message bounds, CORS, and socket cleanup. `publicBindingCapabilities` should contain only viewer capabilities. Realm-owned authentication can mint and later revoke a scoped producer grant with `issueBinding(...)` and `revokeBinding(...)`. Public and trusted binding pools are independently bounded, so public churn cannot evict trusted producers. Service packages own their domain protocol. For example, `@klivcore/resource-monitor-v1` supplies a per-Realm Monitor Gateway at `/v1/events` without making the SDK or App depend on monitoring.
 
 ## Conformance and diagnosis
 
@@ -69,4 +83,4 @@ A successful report proves that the endpoint can issue an opaque binding; the de
 - `GET /artifacts/<route-id>.js` and `/artifacts/<route-id>.css` — route-specific bytes requiring the same binding.
 - `GET /health` — basic process identity.
 
-This proof uses cooperative endpoint authority and permissive CORS. Production authentication, tenant isolation, signing, sandboxing, and durable binding persistence are intentionally outside this first swappability milestone.
+This proof uses cooperative endpoint authority and permissive CORS. The SDK enforces scoped grants, but a production Realm must authenticate or explicitly authorize callers before distributing a trusted grant. Tenant isolation, signing, sandboxing, and durable binding persistence remain outside this first swappability milestone.
