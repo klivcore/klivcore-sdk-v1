@@ -137,7 +137,7 @@ async function issueRegistrationUrl(): Promise<string> {
   );
   try { process.kill(record.pid, 0); } catch { throw new Error("active Realm process is not running"); }
   await waitForHealth(record.localOrigin, config.realm.id, 5_000);
-  await waitForHealth(record.publicOrigin, config.realm.id, 10_000);
+  await probePublicHealth(record.publicOrigin, config.realm.id);
   const response = await fetch(`${record.localOrigin}/v1/auth/runtime/registration-url`, {
     method: "POST",
     headers: {

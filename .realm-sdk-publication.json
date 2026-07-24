@@ -72,8 +72,8 @@
     },
     {
       "path": "src/start-realm.ts",
-      "bytes": 15412,
-      "sha256": "10d0661312850dc8b20a5538fd720cdc82ea1d281987726f6206ef0701c18d0b"
+      "bytes": 15408,
+      "sha256": "9721773f3d7301b3932841e6e7f345d89460e1b36ea58b8a59d5cff34026056c"
     },
     {
       "path": "templates/minimal-realm/README.md",
