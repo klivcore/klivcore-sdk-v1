@@ -83,6 +83,8 @@ export function renderManagedSshBlock(input: Readonly<{ realmId: string; sshUser
     `  HostName ${input.realmId}.klivcore.invalid`,
     `  HostKeyAlias ${alias}`,
     `  User ${input.sshUser}`,
+    "  IdentityFile ~/.klivcore/desktop/ssh-key/id_ed25519",
+    "  IdentitiesOnly yes",
     `  ProxyCommand bunx --bun --package ${packageSpec} connect-desktop relay ${input.realmId}`,
     marker(input.realmId, "<<<"),
   ].join("\n");

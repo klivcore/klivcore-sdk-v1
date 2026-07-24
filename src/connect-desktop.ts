@@ -103,23 +103,91 @@ async function boundedJsonResponse(response: Response, maxBytes = 8 * 1024): Pro
 
 function statePaths(home = homedir()) {
   const root = resolve(home, ".klivcore", "desktop");
+  const sshKeyDirectory = join(root, "ssh-key");
   return Object.freeze({
     root,
     clientId: join(root, "client-id"),
     pairing: join(root, "pairing.json"),
     profiles: join(root, "profiles"),
     rotation: join(root, "rotation.json"),
+    sshKeyDirectory,
+    sshPrivateKey: join(sshKeyDirectory, "id_ed25519"),
+    sshPublicKey: join(sshKeyDirectory, "id_ed25519.pub"),
     sshConfig: resolve(home, ".ssh", "config"),
   });
 }
 
+function parseDesktopSshPublicKey(value: string): string {
+  const match = /^(ssh-ed25519) ([A-Za-z0-9+/]{68})$/.exec(value.trim());
+  if (!match) throw new Error("Desktop SSH public key is invalid");
+  const bytes = Buffer.from(match[2]!, "base64");
+  if (bytes.byteLength !== 51 || bytes.readUInt32BE(0) !== 11
+    || bytes.subarray(4, 15).toString("ascii") !== match[1]
+    || bytes.readUInt32BE(15) !== 32) throw new Error("Desktop SSH public key is invalid");
+  return `${match[1]} ${match[2]}`;
+}
+
+async function deriveDesktopSshPublicKey(privateKeyPath: string): Promise<string> {
+  const child = Bun.spawn(["ssh-keygen", "-y", "-f", privateKeyPath], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  const [exitCode, output] = await Promise.all([child.exited, new Response(child.stdout).text()]);
+  if (exitCode !== 0 || Buffer.byteLength(output) > 4 * 1024) throw new Error("Desktop SSH private key is invalid");
+  return parseDesktopSshPublicKey(output);
+}
+
+async function loadOrCreateDesktopSshPublicKey(paths: ReturnType<typeof statePaths>): Promise<string> {
+  const existing = await lstat(paths.sshKeyDirectory).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return undefined;
+    throw error;
+  });
+  if (!existing) {
+    const stageDirectory = join(paths.root, `ssh-key-stage-${randomUUID()}`);
+    const stagePrivateKey = join(stageDirectory, "id_ed25519");
+    await mkdir(stageDirectory, { mode: 0o700 });
+    try {
+      const child = Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "", "-f", stagePrivateKey], {
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      if (await child.exited !== 0) throw new Error("Desktop requires OpenSSH ssh-keygen");
+      const privateKey = await safeOptionalTextSnapshot(stagePrivateKey, 16 * 1024);
+      const publicKey = await safeOptionalTextSnapshot(`${stagePrivateKey}.pub`, 4 * 1024);
+      if (!privateKey.exists || !publicKey.exists || !privateKey.text.includes("OPENSSH PRIVATE KEY")) {
+        throw new Error("Desktop SSH key generation failed");
+      }
+      parseDesktopSshPublicKey(publicKey.text);
+      try { await rename(stageDirectory, paths.sshKeyDirectory); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+    } finally {
+      await rm(stageDirectory, { force: true, recursive: true });
+    }
+  }
+  await privateDirectory(paths.sshKeyDirectory);
+  const privateKey = await safeOptionalTextSnapshot(paths.sshPrivateKey, 16 * 1024);
+  const publicKey = await safeOptionalTextSnapshot(paths.sshPublicKey, 4 * 1024);
+  if (!privateKey.exists || !publicKey.exists || !privateKey.text.includes("OPENSSH PRIVATE KEY")) {
+    throw new Error("Desktop SSH key state is invalid");
+  }
+  if (process.platform !== "win32") await chmod(paths.sshPrivateKey, 0o600);
+  const parsedPublicKey = parseDesktopSshPublicKey(publicKey.text);
+  if (await deriveDesktopSshPublicKey(paths.sshPrivateKey) !== parsedPublicKey) throw new Error("Desktop SSH key pair does not match");
+  return parsedPublicKey;
+}
+
 type PairingIntent = Readonly<{
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   phase: "consume" | "rollback";
   origin: string;
   pairingToken: string;
   clientId: string;
   relayToken: string;
+  sshPublicKey?: string;
   packageSpec: string;
   previousClientId: OptionalTextSnapshot;
 }>;
@@ -128,10 +196,14 @@ function parsePairingIntent(value: unknown): PairingIntent {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Desktop pairing journal is invalid");
   const input = value as Record<string, unknown>;
   const previousClientId = parseSnapshot(input.previousClientId, 64);
-  if (!exactKeys(input, ["clientId", "origin", "packageSpec", "pairingToken", "phase", "previousClientId", "relayToken", "schemaVersion"])
-    || input.schemaVersion !== 2 || (input.phase !== "consume" && input.phase !== "rollback")
+  const expectedKeys = input.schemaVersion === 3
+    ? ["clientId", "origin", "packageSpec", "pairingToken", "phase", "previousClientId", "relayToken", "schemaVersion", "sshPublicKey"]
+    : ["clientId", "origin", "packageSpec", "pairingToken", "phase", "previousClientId", "relayToken", "schemaVersion"];
+  if (!exactKeys(input, expectedKeys)
+    || (input.schemaVersion !== 2 && input.schemaVersion !== 3) || (input.phase !== "consume" && input.phase !== "rollback")
     || typeof input.origin !== "string" || typeof input.packageSpec !== "string"
     || typeof input.pairingToken !== "string" || typeof input.clientId !== "string" || typeof input.relayToken !== "string"
+    || (input.schemaVersion === 3 && typeof input.sshPublicKey !== "string")
     || !previousClientId || !TOKEN_PATTERN.test(input.pairingToken)
     || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken)) {
     throw new Error("Desktop pairing journal is invalid");
@@ -139,23 +211,25 @@ function parsePairingIntent(value: unknown): PairingIntent {
   const origin = new URL(input.origin);
   if (origin.protocol !== "https:" || origin.origin !== input.origin || origin.username || origin.password) throw new Error("Desktop pairing journal is invalid");
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: input.schemaVersion,
     phase: input.phase,
     origin: input.origin,
     pairingToken: input.pairingToken,
     clientId: input.clientId,
     relayToken: input.relayToken,
+    ...(input.schemaVersion === 3 ? { sshPublicKey: parseDesktopSshPublicKey(input.sshPublicKey as string) } : {}),
     packageSpec: parseConnectDesktopPackageSpec(input.packageSpec),
     previousClientId,
   });
 }
 
 type RotationJournal = Readonly<{
-  schemaVersion: 2;
+  schemaVersion: 2 | 3;
   phase: "forward" | "rollback";
   origin: string;
   clientId: string;
   relayToken: string;
+  sshPublicKey?: string;
   realmId: string;
   previousProfile: OptionalTextSnapshot;
   previousConfig: OptionalTextSnapshot;
@@ -180,23 +254,28 @@ function parseRotationJournal(value: unknown): RotationJournal {
   const previousProfile = parseSnapshot(input.previousProfile, 8 * 1024);
   const previousConfig = parseSnapshot(input.previousConfig, 1024 * 1024);
   const previousClientId = parseSnapshot(input.previousClientId, 64);
-  if (!exactKeys(input, ["clientId", "nextConfig", "nextProfile", "origin", "phase", "previousClientId", "previousConfig", "previousProfile", "realmId", "relayToken", "schemaVersion"])
-    || input.schemaVersion !== 2 || (input.phase !== "forward" && input.phase !== "rollback")
+  const expectedKeys = input.schemaVersion === 3
+    ? ["clientId", "nextConfig", "nextProfile", "origin", "phase", "previousClientId", "previousConfig", "previousProfile", "realmId", "relayToken", "schemaVersion", "sshPublicKey"]
+    : ["clientId", "nextConfig", "nextProfile", "origin", "phase", "previousClientId", "previousConfig", "previousProfile", "realmId", "relayToken", "schemaVersion"];
+  if (!exactKeys(input, expectedKeys)
+    || (input.schemaVersion !== 2 && input.schemaVersion !== 3) || (input.phase !== "forward" && input.phase !== "rollback")
     || typeof input.origin !== "string" || typeof input.clientId !== "string"
     || typeof input.relayToken !== "string" || typeof input.realmId !== "string" || typeof input.nextProfile !== "string"
     || typeof input.nextConfig !== "string" || Buffer.byteLength(input.nextProfile) > 8 * 1024
     || Buffer.byteLength(input.nextConfig) > 1024 * 1024 || !previousProfile || !previousConfig || !previousClientId
-    || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken) || !REALM_ID_PATTERN.test(input.realmId)) {
+    || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken) || !REALM_ID_PATTERN.test(input.realmId)
+    || (input.schemaVersion === 3 && typeof input.sshPublicKey !== "string")) {
     throw new Error("Desktop rotation journal is invalid");
   }
   const origin = new URL(input.origin);
   if (origin.protocol !== "https:" || origin.origin !== input.origin || origin.username || origin.password) throw new Error("Desktop rotation journal is invalid");
   return Object.freeze({
-    schemaVersion: 2,
+    schemaVersion: input.schemaVersion,
     phase: input.phase,
     origin: input.origin,
     clientId: input.clientId,
     relayToken: input.relayToken,
+    ...(input.schemaVersion === 3 ? { sshPublicKey: parseDesktopSshPublicKey(input.sshPublicKey as string) } : {}),
     realmId: input.realmId,
     previousProfile,
     previousConfig,
@@ -231,7 +310,7 @@ async function retryRelayOperation(fetcher: Fetcher, origin: string, path: strin
   return status;
 }
 
-async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: Fetcher): Promise<void> {
+async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: Fetcher, sshPublicKey: string): Promise<void> {
   const snapshot = await safeOptionalTextSnapshot(paths.rotation, 3 * 1024 * 1024);
   if (!snapshot.exists) return;
   let journal: RotationJournal;
@@ -247,7 +326,11 @@ async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: Fe
     await rm(paths.rotation, { force: true });
     await rm(paths.pairing, { force: true });
   };
-  if (journal.phase === "rollback") {
+  if (journal.phase === "rollback" || journal.schemaVersion === 2 || journal.sshPublicKey !== sshPublicKey) {
+    if (journal.phase !== "rollback") {
+      journal = Object.freeze({ ...journal, phase: "rollback" });
+      await atomicPrivateWrite(paths.rotation, `${JSON.stringify(journal)}\n`);
+    }
     await rollback();
     throw new Error("Recovered incomplete Desktop pairing rollback; prior connection restored");
   }
@@ -280,7 +363,8 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   const fetcher = options.fetcher ?? fetch;
   await privateDirectory(paths.root);
   await privateDirectory(paths.profiles);
-  await recoverRotation(paths, fetcher);
+  const sshPublicKey = await loadOrCreateDesktopSshPublicKey(paths);
+  await recoverRotation(paths, fetcher, sshPublicKey);
   const existingConfigSnapshot = await safeOptionalTextSnapshot(paths.sshConfig, 1024 * 1024);
   const existingConfig = existingConfigSnapshot.text;
   preflightManagedSshConfig(existingConfig);
@@ -296,7 +380,11 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
     let intent: PairingIntent;
     try { intent = parsePairingIntent(JSON.parse(existingIntentSnapshot.text)); }
     catch { throw new Error("Desktop pairing journal is invalid"); }
-    if (intent.phase === "rollback") {
+    if (intent.phase === "rollback" || intent.schemaVersion === 2) {
+      if (intent.phase !== "rollback") {
+        intent = Object.freeze({ ...intent, phase: "rollback" });
+        await atomicPrivateWrite(paths.pairing, `${JSON.stringify(intent)}\n`);
+      }
       await restoreOptionalText(paths.clientId, intent.previousClientId);
       const revoked = await retryRelayOperation(fetcher, intent.origin, "/v1/desktop/pairing/revoke", intent.clientId, intent.relayToken);
       if (revoked !== 204) throw new Error("Desktop pairing rollback is unconfirmed");
@@ -306,6 +394,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
     if ((currentClientId && intent.clientId !== currentClientId) || (!currentClientId && intent.previousClientId.exists)) {
       throw new Error("Desktop pairing journal is invalid");
     }
+    if (intent.schemaVersion !== 3 || intent.sshPublicKey !== sshPublicKey) throw new Error("Desktop pairing journal is invalid");
     pairingIntent = intent;
     clientId = intent.clientId;
     previousClientIdSnapshot = intent.previousClientId;
@@ -318,12 +407,13 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
     previousClientIdSnapshot = currentClientIdSnapshot;
     relayToken = randomBytes(32).toString("base64url");
     const intent: PairingIntent = Object.freeze({
-      schemaVersion: 2,
+      schemaVersion: 3,
       phase: "consume",
       origin: target.origin,
       pairingToken: target.pairingToken,
       clientId,
       relayToken,
+      sshPublicKey,
       packageSpec,
       previousClientId: previousClientIdSnapshot,
     });
@@ -337,7 +427,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
       const candidate = await fetcher(`${target.origin}/v1/desktop/pairing/consume`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pairingToken: target.pairingToken, clientId, relayToken }),
+        body: JSON.stringify({ pairingToken: target.pairingToken, clientId, relayToken, sshPublicKey }),
         redirect: "error",
         signal: AbortSignal.timeout(15_000),
       });
@@ -370,11 +460,12 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
     const profile: DesktopRelayProfile = Object.freeze({ ...metadata, relayToken });
     const nextProfile = `${JSON.stringify(profile, null, 2)}\n`;
     const journal: RotationJournal = Object.freeze({
-      schemaVersion: 2,
+      schemaVersion: 3,
       phase: "forward",
       origin: target.origin,
       clientId,
       relayToken,
+      sshPublicKey,
       realmId: metadata.realmId,
       previousProfile,
       previousConfig: existingConfigSnapshot,
@@ -723,7 +814,8 @@ async function relayDesktop(realmId: string): Promise<void> {
   const paths = statePaths();
   await privateDirectory(paths.root);
   await privateDirectory(paths.profiles);
-  await recoverRotation(paths, fetch);
+  const sshPublicKey = await loadOrCreateDesktopSshPublicKey(paths);
+  await recoverRotation(paths, fetch, sshPublicKey);
   const profile = await loadProfile(realmId);
   const socket = new WebSocket(profile.relayUrl);
   const reader = Bun.stdin.stream().getReader();

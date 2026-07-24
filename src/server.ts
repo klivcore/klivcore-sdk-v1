@@ -1,7 +1,10 @@
 import { HOST_API_VERSION, PROTOCOL_VERSION, SCHEMA_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
 import { sha256Hex } from "./client";
 import { createPasskeyAuth, parseRealmBranding, type PasskeyAuth, type RealmBranding, type RealmSession } from "./passkey-auth";
+import { randomUUID } from "node:crypto";
+import { chmodSync, lstatSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { dirname, isAbsolute } from "node:path";
 
 export { createPasskeyAuth };
 
@@ -10,6 +13,29 @@ function validDesktopSshHost(host: string): boolean {
   if (isIP(host) !== 0) return true;
   if (/^[0-9.]+$/.test(host)) return false;
   return host.split(".").every((label) => /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+}
+
+function projectDesktopSshPublicKeys(path: string, auth: PasskeyAuth): void {
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  try {
+    const info = lstatSync(path);
+    const uid = process.getuid?.();
+    if (!info.isFile() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid)
+      || (process.platform !== "win32" && (info.mode & 0o022) !== 0)) {
+      throw new Error("Realm Desktop authorized-keys file is unsafe");
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const content = auth.desktopSshPublicKeys().map((key) => `${key}\n`).join("");
+  const stage = `${path}.stage-${randomUUID()}`;
+  try {
+    writeFileSync(stage, content, { flag: "wx", mode: 0o600 });
+    renameSync(stage, path);
+    if (process.platform !== "win32") chmodSync(path, 0o600);
+  } finally {
+    rmSync(stage, { force: true });
+  }
 }
 
 export type RealmAppPublication = Readonly<{
@@ -76,7 +102,7 @@ export type RealmGatewayConfig = Readonly<{
   httpRelays?: readonly RealmGatewayHttpRelay[];
   services?: readonly RealmGatewayService[];
   desktop?: Readonly<{
-    ssh: Readonly<{ host: string; port: number; user: string; startingDirectory: string }>;
+    ssh: Readonly<{ authorizedKeysFile: string; host: string; port: number; user: string; startingDirectory: string }>;
   }>;
   defaultRoute: RealmGatewayRouteConfig;
   routes?: readonly RealmGatewayRouteConfig[];
@@ -325,6 +351,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     const ssh = config.desktop.ssh;
     if (!ssh || typeof ssh.host !== "string" || !validDesktopSshHost(ssh.host)
       || !Number.isSafeInteger(ssh.port) || ssh.port < 1 || ssh.port > 65_535
+      || typeof ssh.authorizedKeysFile !== "string" || !isAbsolute(ssh.authorizedKeysFile) || ssh.authorizedKeysFile.length > 1_024
       || typeof ssh.user !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(ssh.user)
       || typeof ssh.startingDirectory !== "string" || !ssh.startingDirectory.startsWith("/")
       || ssh.startingDirectory.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(ssh.startingDirectory)) {
@@ -333,6 +360,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     if (!config.auth || typeof config.auth.onDesktopRelayInvalidated !== "function") {
       throw new TypeError("Realm Desktop SSH relay requires revocable session authentication");
     }
+    projectDesktopSshPublicKeys(ssh.authorizedKeysFile, config.auth);
   }
   for (const [index, relay] of httpRelays.entries()) {
     if (!Number.isSafeInteger(relay.port) || relay.port < 1 || relay.port > 65_535
@@ -770,10 +798,10 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const requestOrigin = request.headers.get("origin");
         if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
         const body = await boundedJsonObject(request);
-        if (!body || Object.keys(body).sort().join(",") !== "clientId,pairingToken,relayToken"
+        if (!body || Object.keys(body).sort().join(",") !== "clientId,pairingToken,relayToken,sshPublicKey"
           || typeof body.pairingToken !== "string" || typeof body.clientId !== "string"
-          || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
-        const paired = config.auth!.consumeDesktopPairing(body.pairingToken, body.clientId, body.relayToken);
+          || typeof body.relayToken !== "string" || typeof body.sshPublicKey !== "string") return json({ error: "invalid request" }, 400);
+        const paired = config.auth!.consumeDesktopPairing(body.pairingToken, body.clientId, body.relayToken, body.sshPublicKey);
         if (!paired) return json({ error: "unauthorized" }, 401);
         const relayUrl = new URL(config.auth!.publicOrigin);
         relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
@@ -793,9 +821,12 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const body = await boundedJsonObject(request);
         if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
           || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
-        return config.auth!.revokeDesktopRelay(body.clientId, body.relayToken)
-          ? new Response(null, { status: 204, headers: responseHeaders })
-          : json({ error: "unauthorized" }, 401);
+        if (!config.auth!.revokeDesktopRelay(body.clientId, body.relayToken)) {
+          config.auth!.revokePendingDesktopRelay(body.clientId, body.relayToken);
+        }
+        try { projectDesktopSshPublicKeys(config.desktop.ssh.authorizedKeysFile, config.auth!); }
+        catch { return json({ error: "Desktop SSH authorization unavailable" }, 500); }
+        return new Response(null, { status: 204, headers: responseHeaders });
       }
       if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing/finalize") {
         const requestOrigin = request.headers.get("origin");
@@ -803,9 +834,10 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const body = await boundedJsonObject(request);
         if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
           || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
-        return config.auth!.finalizeDesktopRelay(body.clientId, body.relayToken)
-          ? new Response(null, { status: 204, headers: responseHeaders })
-          : json({ error: "unauthorized" }, 401);
+        if (!config.auth!.finalizeDesktopRelay(body.clientId, body.relayToken)) return json({ error: "unauthorized" }, 401);
+        try { projectDesktopSshPublicKeys(config.desktop.ssh.authorizedKeysFile, config.auth!); }
+        catch { return json({ error: "Desktop SSH authorization unavailable" }, 500); }
+        return new Response(null, { status: 204, headers: responseHeaders });
       }
       if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing/revoke") {
         const requestOrigin = request.headers.get("origin");
@@ -813,9 +845,12 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const body = await boundedJsonObject(request);
         if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
           || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
-        return config.auth!.revokePendingDesktopRelay(body.clientId, body.relayToken)
-          ? new Response(null, { status: 204, headers: responseHeaders })
-          : json({ error: "conflict" }, 409);
+        if (!config.auth!.revokePendingDesktopRelay(body.clientId, body.relayToken)) {
+          config.auth!.revokeDesktopRelay(body.clientId, body.relayToken);
+        }
+        try { projectDesktopSshPublicKeys(config.desktop.ssh.authorizedKeysFile, config.auth!); }
+        catch { return json({ error: "Desktop SSH authorization unavailable" }, 500); }
+        return new Response(null, { status: 204, headers: responseHeaders });
       }
       const relayMatch = /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
       if (relayMatch) {

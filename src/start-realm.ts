@@ -231,7 +231,12 @@ try {
     publicBindingCapabilities: ["realm:view"],
     appV2,
     auth,
-    desktop: config.desktop,
+    desktop: config.desktop ? Object.freeze({
+      ssh: Object.freeze({
+        ...config.desktop.ssh,
+        authorizedKeysFile: resolve(stateDir, "desktop-authorized-keys"),
+      }),
+    }) : undefined,
     defaultRoute: {
       id: "home",
       path: "/",

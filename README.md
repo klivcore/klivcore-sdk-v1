@@ -65,11 +65,11 @@ When the user explicitly asks for a registration URL, the agent runs this comman
 
 ### Connect Hermes Desktop through the Realm
 
-Configure `desktop.ssh` with the fixed private SSH target reachable by the Realm process. For an EC2 instance hosting its own Realm, use `127.0.0.1`, port `22`, the ordinary SSH user, and the absolute Realm working directory. Do not put passwords, private keys, public tunnel URLs, or shell commands in the config.
+Configure `desktop.ssh` with the fixed private SSH target reachable by the Realm process. For an EC2 instance hosting its own Realm, use `127.0.0.1`, port `22`, the ordinary SSH user, and the absolute Realm working directory. Configure that SSH service's `AuthorizedKeysFile` to include the Realm-owned `<stateDir>/desktop-authorized-keys` file in addition to any operator-managed key file. Keep SSH loopback-only; do not put passwords, private keys, public tunnel URLs, or shell commands in the Realm config.
 
-After passkey sign-in, choose **Connect Desktop** in the Realm menu. It copies a command containing a five-minute one-use pairing capability. Run that command on the machine containing Hermes Desktop. The command consumes the capability, creates a mode-`0600` relay profile, and installs a managed `~/.ssh/config` host named `klivcore-<realm-id>`. The helper authenticates a WSS connection through the existing Quick Tunnel; the Realm Gateway then connects only to its configured private SSH target.
+After passkey sign-in, choose **Connect Desktop** in the Realm menu. It copies a command containing a five-minute one-use pairing capability. Run that command on the machine containing Hermes Desktop. The command atomically generates a dedicated mode-`0600` Ed25519 key locally when needed, sends only its public key in the authenticated one-use pairing transaction, creates a mode-`0600` relay profile, and installs a managed `~/.ssh/config` host named `klivcore-<realm-id>`. The helper authenticates a WSS connection through the existing Quick Tunnel; the Realm Gateway authorizes the public key only when pairing finalizes and then connects only to its configured private SSH target.
 
-OpenSSH authentication and host-key verification remain end to end. The Realm relay credential authorizes only transport to the configured SSH service; it is not an administrator credential and does not replace the user's SSH key or agent. The private target is never returned to the browser or Desktop client.
+OpenSSH authentication and host-key verification remain end to end. The private key never leaves the Desktop machine or enters the relay profile, pairing request, Realm database, logs, or browser. Realm relay revocation removes both public transport authority and the projected SSH public key. The private target is never returned to the browser or Desktop client.
 
 ## Install and verify the SDK
 

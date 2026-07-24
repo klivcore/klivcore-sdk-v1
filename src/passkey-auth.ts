@@ -107,9 +107,10 @@ export type PasskeyAuth = Readonly<{
   publicOrigin: string;
   issueRegistrationUrl(options?: Readonly<{ ttlMs?: number }>): string;
   issueDesktopPairingUrl(request: Request): string;
-  consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
+  consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string, sshPublicKey: string): Readonly<{ relayId: string }> | undefined;
   finalizeDesktopRelay(clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
   revokePendingDesktopRelay(clientId: string, relayToken: string): boolean;
+  desktopSshPublicKeys(): readonly string[];
   desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined;
   revokeDesktopRelay(clientId: string, relayToken: string): boolean;
   handle(request: Request): Promise<Response | undefined>;
@@ -126,8 +127,18 @@ type CredentialRow = { id: string; public_key: Uint8Array; counter: number; tran
 type SessionRow = { expires_at: number; principal: string; capabilities_json: string | null };
 type AgentPairingRow = { id: string; expires_at: number; approved_at: number | null; consumed_at: number | null };
 type DesktopPairingRow = { token_hash: string; session_id: string; expires_at: number };
-type DesktopRelayRow = { id: string; client_hash: string; token_hash: string };
-type DesktopRelayCandidateRow = { id: string; client_hash: string; token_hash: string; pairing_hash: string; expires_at: number };
+type DesktopRelayRow = { id: string; client_hash: string; token_hash: string; ssh_public_key: string | null };
+type DesktopRelayCandidateRow = { id: string; client_hash: string; token_hash: string; pairing_hash: string; ssh_public_key: string; expires_at: number };
+
+function parseDesktopSshPublicKey(value: string): string | undefined {
+  const match = /^(ssh-ed25519) ([A-Za-z0-9+/]{68})$/.exec(value);
+  if (!match) return undefined;
+  const bytes = Buffer.from(match[2]!, "base64");
+  if (bytes.byteLength !== 51 || bytes.readUInt32BE(0) !== 11
+    || bytes.subarray(4, 15).toString("ascii") !== match[1]
+    || bytes.readUInt32BE(15) !== 32) return undefined;
+  return value;
+}
 
 export function approveAgentPairing(input: Readonly<{ databasePath: string; pairingId: string; now?: number }>): boolean {
   if (!/^[a-f0-9-]{36}$/.test(input.pairingId)) return false;
@@ -496,6 +507,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       id TEXT PRIMARY KEY,
       client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
       token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
+      ssh_public_key TEXT NOT NULL,
       created_at INTEGER NOT NULL
     ) STRICT;
     CREATE TABLE IF NOT EXISTS desktop_relay_candidates (
@@ -503,6 +515,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
       token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
       pairing_hash TEXT NOT NULL UNIQUE CHECK(length(pairing_hash) = 64),
+      ssh_public_key TEXT NOT NULL,
       created_at INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     ) STRICT;
@@ -523,6 +536,11 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     const legacyRelays = database.query<{ id: string }, []>("SELECT id FROM desktop_relays").all();
     for (const relay of legacyRelays) database.query("UPDATE desktop_relays SET client_hash = ? WHERE id = ?").run(tokenHash(`legacy-desktop-relay\0${relay.id}`), relay.id);
     database.exec("CREATE UNIQUE INDEX IF NOT EXISTS desktop_relays_client_hash ON desktop_relays(client_hash)");
+  }
+  if (!desktopRelayColumns.has("ssh_public_key")) database.exec("ALTER TABLE desktop_relays ADD COLUMN ssh_public_key TEXT");
+  const desktopRelayCandidateColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(desktop_relay_candidates)").all().map((column) => column.name));
+  if (!desktopRelayCandidateColumns.has("ssh_public_key")) {
+    database.exec("DELETE FROM desktop_relay_candidates; ALTER TABLE desktop_relay_candidates ADD COLUMN ssh_public_key TEXT");
   }
   const engine = options.engine ?? defaultEngine;
   const invalidationListeners = new Set<(sessionId: string) => void>();
@@ -596,8 +614,10 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     return `${options.publicOrigin}/connect-desktop#token=${token}`;
   }
 
-  function consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined {
-    if (!/^[A-Za-z0-9_-]{43}$/.test(pairingToken) || !/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+  function consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string, sshPublicKey: string): Readonly<{ relayId: string }> | undefined {
+    const parsedSshPublicKey = parseDesktopSshPublicKey(sshPublicKey);
+    if (!/^[A-Za-z0-9_-]{43}$/.test(pairingToken) || !/^[a-f0-9-]{36}$/.test(clientId)
+      || !/^[A-Za-z0-9_-]{43}$/.test(relayToken) || !parsedSshPublicKey) return undefined;
     const timestamp = now();
     const pairingHash = tokenHash(pairingToken);
     const relayHash = tokenHash(relayToken);
@@ -607,10 +627,10 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       database.query("DELETE FROM desktop_pairings WHERE expires_at <= ?").run(timestamp);
       database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
       const replay = database.query<DesktopRelayCandidateRow, [string, number]>(
-        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE pairing_hash = ? AND expires_at > ?",
+        "SELECT id, client_hash, token_hash, pairing_hash, ssh_public_key, expires_at FROM desktop_relay_candidates WHERE pairing_hash = ? AND expires_at > ?",
       ).get(pairingHash, timestamp);
       if (replay) {
-        if (replay.client_hash === clientHash && replay.token_hash === relayHash) relayId = replay.id;
+        if (replay.client_hash === clientHash && replay.token_hash === relayHash && replay.ssh_public_key === parsedSshPublicKey) relayId = replay.id;
         return;
       }
       const pairing = database.query<DesktopPairingRow, [string, number, number]>(
@@ -618,10 +638,10 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       ).get(pairingHash, timestamp, timestamp);
       if (!pairing) return;
       const pending = database.query<DesktopRelayCandidateRow, [string]>(
-        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ?",
+        "SELECT id, client_hash, token_hash, pairing_hash, ssh_public_key, expires_at FROM desktop_relay_candidates WHERE client_hash = ?",
       ).get(clientHash);
       if (pending) return;
-      const existing = database.query<DesktopRelayRow, [string]>("SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?").get(clientHash);
+      const existing = database.query<DesktopRelayRow, [string]>("SELECT id, client_hash, token_hash, ssh_public_key FROM desktop_relays WHERE client_hash = ?").get(clientHash);
       const clients = database.query<{ count: number }, []>(
         "SELECT count(*) AS count FROM (SELECT client_hash FROM desktop_relays UNION SELECT client_hash FROM desktop_relay_candidates)",
       ).get()?.count ?? 0;
@@ -629,8 +649,8 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       const removed = database.query("DELETE FROM desktop_pairings WHERE token_hash = ? AND expires_at > ?").run(pairingHash, timestamp);
       if (removed.changes !== 1) return;
       relayId = randomUUID();
-      database.query("INSERT INTO desktop_relay_candidates(id, client_hash, token_hash, pairing_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
-        .run(relayId, clientHash, relayHash, pairingHash, timestamp, timestamp + DESKTOP_PAIRING_TTL_MS);
+      database.query("INSERT INTO desktop_relay_candidates(id, client_hash, token_hash, pairing_hash, ssh_public_key, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
+        .run(relayId, clientHash, relayHash, pairingHash, parsedSshPublicKey, timestamp, timestamp + DESKTOP_PAIRING_TTL_MS);
     });
     try { consume.immediate(); } catch { return undefined; }
     return relayId ? Object.freeze({ relayId }) : undefined;
@@ -645,19 +665,19 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     const finalize = database.transaction(() => {
       database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
       const active = database.query<DesktopRelayRow, [string, string]>(
-        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
+        "SELECT id, client_hash, token_hash, ssh_public_key FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
       ).get(clientHash, relayHash);
       if (active) { promoted = Object.freeze({ relayId: active.id }); return; }
       const candidate = database.query<DesktopRelayCandidateRow, [string, string, number]>(
-        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ? AND expires_at > ?",
+        "SELECT id, client_hash, token_hash, pairing_hash, ssh_public_key, expires_at FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ? AND expires_at > ?",
       ).get(clientHash, relayHash, timestamp);
       if (!candidate) return;
       const previous = database.query<DesktopRelayRow, [string]>(
-        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?",
+        "SELECT id, client_hash, token_hash, ssh_public_key FROM desktop_relays WHERE client_hash = ?",
       ).get(clientHash);
       if (previous) database.query("DELETE FROM desktop_relays WHERE client_hash = ?").run(clientHash);
-      database.query("INSERT INTO desktop_relays(id, client_hash, token_hash, created_at) VALUES (?, ?, ?, ?)")
-        .run(candidate.id, clientHash, relayHash, timestamp);
+      database.query("INSERT INTO desktop_relays(id, client_hash, token_hash, ssh_public_key, created_at) VALUES (?, ?, ?, ?, ?)")
+        .run(candidate.id, clientHash, relayHash, candidate.ssh_public_key, timestamp);
       database.query("DELETE FROM desktop_relay_candidates WHERE id = ?").run(candidate.id);
       promoted = Object.freeze(previous
         ? { relayId: candidate.id, previousRelayId: previous.id }
@@ -682,6 +702,12 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     if (active) return false;
     database.query("DELETE FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ?").run(clientHash, relayHash);
     return true;
+  }
+
+  function desktopSshPublicKeys(): readonly string[] {
+    return Object.freeze(database.query<{ ssh_public_key: string }, []>(
+      "SELECT ssh_public_key FROM desktop_relays WHERE ssh_public_key IS NOT NULL ORDER BY client_hash",
+    ).all().map((row) => row.ssh_public_key));
   }
 
   function desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined {
@@ -910,6 +936,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     consumeDesktopPairing,
     finalizeDesktopRelay,
     revokePendingDesktopRelay,
+    desktopSshPublicKeys,
     desktopRelayForToken,
     revokeDesktopRelay,
     handle,
