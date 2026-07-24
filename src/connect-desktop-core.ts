@@ -71,21 +71,22 @@ function marker(realmId: string, side: ">>>" | "<<<"): string {
   return `# ${side} Klivcore Connect Desktop: ${realmId} ${side}`;
 }
 
-export function renderManagedSshBlock(input: Readonly<{ realmId: string; sshUser: string; packageSpec: string }>): string {
+export function renderManagedSshBlock(input: Readonly<{ realmId: string; sshUser: string; port?: number }>): string {
   if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(input.realmId)
-    || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(input.sshUser)) throw new TypeError("Desktop SSH profile is invalid");
-  const packageSpec = parseConnectDesktopPackageSpec(input.packageSpec);
+  || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(input.sshUser)) throw new TypeError("Desktop SSH profile is invalid");
+  const port = input.port ?? 2222;
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) throw new TypeError("Desktop SSH profile is invalid");
 
   const alias = `klivcore-${input.realmId}`;
   return [
     marker(input.realmId, ">>>"),
     `Host ${alias}`,
-    `  HostName ${input.realmId}.klivcore.invalid`,
+    "  HostName 127.0.0.1",
     `  HostKeyAlias ${alias}`,
+    `  Port ${port}`,
     `  User ${input.sshUser}`,
     "  IdentityFile ~/.klivcore/desktop/ssh-key/id_ed25519",
     "  IdentitiesOnly yes",
-    `  ProxyCommand bunx --bun --package ${packageSpec} connect-desktop relay ${input.realmId}`,
     marker(input.realmId, "<<<"),
   ].join("\n");
 }

@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 14834,
-      "sha256": "e0d78d2ea540de5388d0a4452bd08e9dd9ae2a270aabb74196db63ccaf8daec0"
+      "bytes": 15205,
+      "sha256": "6a0b8771997a23c5e815870af828b2fba27fe837f1cbf0013bb168fe68c9ccf1"
     },
     {
       "path": "bin/connect-desktop.ts",
@@ -37,13 +37,13 @@
     },
     {
       "path": "src/connect-desktop-core.ts",
-      "bytes": 5963,
-      "sha256": "596300ef9408211c0fdd35981c22481bc21f1be90a6a17e056e68db92e544096"
+      "bytes": 5937,
+      "sha256": "ac148a61496a15116be560f266536776f44d5699cf794b3510205c60b92f5f75"
     },
     {
       "path": "src/connect-desktop.ts",
-      "bytes": 39331,
-      "sha256": "604fd6d5058d631c76bbdf282656b75402e057ca2a832372e71b82af9becb901"
+      "bytes": 43108,
+      "sha256": "100b9fce0c3b36c13ac3b85459441a9bfd31a091c0ff0d189ce809057338a059"
     },
     {
       "path": "src/contracts.ts",

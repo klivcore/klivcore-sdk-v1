@@ -2,6 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { createServer, type Socket } from "node:net";
+import { Readable } from "node:stream";
 import {
   mergeManagedSshConfig,
   parseConnectDesktopPackageSpec,
@@ -356,7 +358,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   packageSpec: string;
   fetcher?: Fetcher;
   log?: (message: string) => void;
-}>): Promise<void> {
+}>): Promise<DesktopPairingResponse> {
   let target = parseDesktopPairingUrl(pairingUrl);
   let packageSpec = parseConnectDesktopPackageSpec(options.packageSpec);
   const paths = statePaths(options.home);
@@ -453,7 +455,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   let rotationJournal: RotationJournal | undefined;
   try {
     metadata = parseDesktopPairingResponse(target.origin, await boundedJsonResponse(response));
-    const managedBlock = renderManagedSshBlock({ realmId: metadata.realmId, sshUser: metadata.sshUser, packageSpec });
+    const managedBlock = renderManagedSshBlock({ realmId: metadata.realmId, sshUser: metadata.sshUser });
     const nextConfig = mergeManagedSshConfig(existingConfig, metadata.realmId, managedBlock);
     profilePath = join(paths.profiles, `${metadata.realmId}.json`);
     previousProfile = await safeOptionalTextSnapshot(profilePath, 8 * 1024);
@@ -531,7 +533,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   log(`Connected ${metadata.realmName} for Desktop.`);
   log(`SSH host: ${alias}`);
   log(`Hermes working directory: ${metadata.startingDirectory}`);
-  log(`Test: ssh ${alias}`);
+  return metadata;
 }
 
 async function loadProfile(realmId: string): Promise<DesktopRelayProfile> {
@@ -822,16 +824,115 @@ async function relayDesktop(realmId: string): Promise<void> {
   await runDesktopRelaySession(socket, profile.relayToken, reader, process.stdout);
 }
 
+export async function listenDesktop(realmId: string, port = 2222, log: (message: string) => void = console.log): Promise<void> {
+  if (!REALM_ID_PATTERN.test(realmId) || !Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new TypeError("Desktop relay listener is invalid");
+  }
+  const paths = statePaths();
+  await privateDirectory(paths.root);
+  await privateDirectory(paths.profiles);
+  const sshPublicKey = await loadOrCreateDesktopSshPublicKey(paths);
+  await recoverRotation(paths, fetch, sshPublicKey);
+  const profile = await loadProfile(realmId);
+  const controller = new AbortController();
+  const shutdown = () => controller.abort();
+  process.once("SIGINT", shutdown);
+  process.once("SIGTERM", shutdown);
+  try {
+    await runDesktopRelayTcpServer({
+      port,
+      signal: controller.signal,
+      log,
+      handle: async (client) => {
+        const remote = `${client.remoteAddress ?? "local"}:${client.remotePort ?? 0}`;
+        log(`SSH client connected (${remote})`);
+        const reader = Readable.toWeb(client).getReader() as unknown as RelaySessionReader;
+        const socket = new WebSocket(profile.relayUrl);
+        await runDesktopRelaySession(socket, profile.relayToken, reader, client);
+        log(`SSH client disconnected (${remote})`);
+      },
+    });
+  } finally {
+    process.off("SIGINT", shutdown);
+    process.off("SIGTERM", shutdown);
+  }
+}
+
+export async function runDesktopRelayTcpServer(options: Readonly<{
+  port: number;
+  signal: AbortSignal;
+  handle: (client: Socket) => Promise<void>;
+  log?: (message: string) => void;
+  onListening?: (port: number) => void;
+}>): Promise<void> {
+  if (!Number.isSafeInteger(options.port) || options.port < 0 || options.port > 65_535) {
+    throw new TypeError("Desktop relay listener is invalid");
+  }
+  const clients = new Set<Socket>();
+  const server = createServer((client) => {
+    clients.add(client);
+    void options.handle(client).catch((error: unknown) => {
+      options.log?.(`SSH relay failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    }).finally(() => {
+      clients.delete(client);
+      client.destroy();
+    });
+  });
+  await new Promise<void>((resolvePromise, reject) => {
+    let listening = false;
+    let settled = false;
+    const cleanup = () => {
+      options.signal.removeEventListener("abort", shutdown);
+      server.removeListener("error", fail);
+    };
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) reject(error);
+      else resolvePromise();
+    };
+    const shutdown = () => {
+      for (const client of clients) client.destroy();
+      if (!listening) settle();
+      else server.close(() => settle());
+    };
+    const fail = (error: Error) => settle(error);
+    server.on("error", fail);
+    options.signal.addEventListener("abort", shutdown, { once: true });
+    if (options.signal.aborted) {
+      shutdown();
+      return;
+    }
+    server.listen(options.port, "127.0.0.1", () => {
+      listening = true;
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        settle(new Error("Desktop relay listener address is unavailable"));
+        return;
+      }
+      options.log?.(`Local SSH relay listening on 127.0.0.1:${address.port}`);
+      options.log?.("Keep this terminal open while using Hermes Desktop. Press Ctrl+C to stop.");
+      options.onListening?.(address.port);
+    });
+  });
+}
+
 export async function main(args = process.argv.slice(2)): Promise<void> {
   if (args.length === 2 && args[0] === "relay" && args[1]) {
     await relayDesktop(args[1]);
     return;
   }
-  if (args.length === 4 && args[0] === "pair" && args[1] && args[2] === "--package-spec" && args[3]) {
-    await pairDesktop(args[1], { packageSpec: args[3] });
+  if (args.length === 2 && args[0] === "listen" && args[1]) {
+    await listenDesktop(args[1]);
     return;
   }
-  throw new TypeError("Usage: connect-desktop pair <pairing-url> --package-spec <immutable-sdk-package> | connect-desktop relay <realm-id>");
+  if (args.length === 4 && args[0] === "pair" && args[1] && args[2] === "--package-spec" && args[3]) {
+    const metadata = await pairDesktop(args[1], { packageSpec: args[3] });
+    await listenDesktop(metadata.realmId);
+    return;
+  }
+  throw new TypeError("Usage: connect-desktop pair <pairing-url> --package-spec <immutable-sdk-package> | connect-desktop listen <realm-id> | connect-desktop relay <realm-id>");
 }
 
 if (import.meta.main) {
