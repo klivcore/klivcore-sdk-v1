@@ -114,43 +114,52 @@ function statePaths(home = homedir()) {
 }
 
 type PairingIntent = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
+  phase: "consume" | "rollback";
   origin: string;
   pairingToken: string;
   clientId: string;
   relayToken: string;
   packageSpec: string;
+  previousClientId: OptionalTextSnapshot;
 }>;
 
 function parsePairingIntent(value: unknown): PairingIntent {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Desktop pairing journal is invalid");
   const input = value as Record<string, unknown>;
-  if (!exactKeys(input, ["clientId", "origin", "packageSpec", "pairingToken", "relayToken", "schemaVersion"])
-    || input.schemaVersion !== 1 || typeof input.origin !== "string" || typeof input.packageSpec !== "string"
+  const previousClientId = parseSnapshot(input.previousClientId, 64);
+  if (!exactKeys(input, ["clientId", "origin", "packageSpec", "pairingToken", "phase", "previousClientId", "relayToken", "schemaVersion"])
+    || input.schemaVersion !== 2 || (input.phase !== "consume" && input.phase !== "rollback")
+    || typeof input.origin !== "string" || typeof input.packageSpec !== "string"
     || typeof input.pairingToken !== "string" || typeof input.clientId !== "string" || typeof input.relayToken !== "string"
-    || !TOKEN_PATTERN.test(input.pairingToken) || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken)) {
+    || !previousClientId || !TOKEN_PATTERN.test(input.pairingToken)
+    || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken)) {
     throw new Error("Desktop pairing journal is invalid");
   }
   const origin = new URL(input.origin);
   if (origin.protocol !== "https:" || origin.origin !== input.origin || origin.username || origin.password) throw new Error("Desktop pairing journal is invalid");
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    phase: input.phase,
     origin: input.origin,
     pairingToken: input.pairingToken,
     clientId: input.clientId,
     relayToken: input.relayToken,
     packageSpec: parseConnectDesktopPackageSpec(input.packageSpec),
+    previousClientId,
   });
 }
 
 type RotationJournal = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
+  phase: "forward" | "rollback";
   origin: string;
   clientId: string;
   relayToken: string;
   realmId: string;
   previousProfile: OptionalTextSnapshot;
   previousConfig: OptionalTextSnapshot;
+  previousClientId: OptionalTextSnapshot;
   nextProfile: string;
   nextConfig: string;
 }>;
@@ -170,30 +179,36 @@ function parseRotationJournal(value: unknown): RotationJournal {
   const input = value as Record<string, unknown>;
   const previousProfile = parseSnapshot(input.previousProfile, 8 * 1024);
   const previousConfig = parseSnapshot(input.previousConfig, 1024 * 1024);
-  if (!exactKeys(input, ["clientId", "nextConfig", "nextProfile", "origin", "previousConfig", "previousProfile", "realmId", "relayToken", "schemaVersion"])
-    || input.schemaVersion !== 1 || typeof input.origin !== "string" || typeof input.clientId !== "string"
+  const previousClientId = parseSnapshot(input.previousClientId, 64);
+  if (!exactKeys(input, ["clientId", "nextConfig", "nextProfile", "origin", "phase", "previousClientId", "previousConfig", "previousProfile", "realmId", "relayToken", "schemaVersion"])
+    || input.schemaVersion !== 2 || (input.phase !== "forward" && input.phase !== "rollback")
+    || typeof input.origin !== "string" || typeof input.clientId !== "string"
     || typeof input.relayToken !== "string" || typeof input.realmId !== "string" || typeof input.nextProfile !== "string"
     || typeof input.nextConfig !== "string" || Buffer.byteLength(input.nextProfile) > 8 * 1024
-    || Buffer.byteLength(input.nextConfig) > 1024 * 1024 || !previousProfile || !previousConfig
+    || Buffer.byteLength(input.nextConfig) > 1024 * 1024 || !previousProfile || !previousConfig || !previousClientId
     || !/^[a-f0-9-]{36}$/.test(input.clientId) || !TOKEN_PATTERN.test(input.relayToken) || !REALM_ID_PATTERN.test(input.realmId)) {
     throw new Error("Desktop rotation journal is invalid");
   }
   const origin = new URL(input.origin);
   if (origin.protocol !== "https:" || origin.origin !== input.origin || origin.username || origin.password) throw new Error("Desktop rotation journal is invalid");
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: 2,
+    phase: input.phase,
     origin: input.origin,
     clientId: input.clientId,
     relayToken: input.relayToken,
     realmId: input.realmId,
     previousProfile,
     previousConfig,
+    previousClientId,
     nextProfile: input.nextProfile,
     nextConfig: input.nextConfig,
   });
 }
 
-async function postRelayOperation(fetcher: typeof fetch, origin: string, path: string, clientId: string, relayToken: string): Promise<number | undefined> {
+type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+
+async function postRelayOperation(fetcher: Fetcher, origin: string, path: string, clientId: string, relayToken: string): Promise<number | undefined> {
   try {
     const response = await fetcher(`${origin}${path}`, {
       method: "POST",
@@ -207,7 +222,7 @@ async function postRelayOperation(fetcher: typeof fetch, origin: string, path: s
   } catch { return undefined; }
 }
 
-async function retryRelayOperation(fetcher: typeof fetch, origin: string, path: string, clientId: string, relayToken: string): Promise<number | undefined> {
+async function retryRelayOperation(fetcher: Fetcher, origin: string, path: string, clientId: string, relayToken: string): Promise<number | undefined> {
   let status: number | undefined;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     status = await postRelayOperation(fetcher, origin, path, clientId, relayToken);
@@ -216,13 +231,27 @@ async function retryRelayOperation(fetcher: typeof fetch, origin: string, path: 
   return status;
 }
 
-async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: typeof fetch): Promise<void> {
+async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: Fetcher): Promise<void> {
   const snapshot = await safeOptionalTextSnapshot(paths.rotation, 3 * 1024 * 1024);
   if (!snapshot.exists) return;
   let journal: RotationJournal;
   try { journal = parseRotationJournal(JSON.parse(snapshot.text)); }
   catch { throw new Error("Desktop rotation journal is invalid"); }
   const profilePath = join(paths.profiles, `${journal.realmId}.json`);
+  const rollback = async () => {
+    await restoreOptionalText(paths.sshConfig, journal.previousConfig);
+    await restoreOptionalText(profilePath, journal.previousProfile);
+    await restoreOptionalText(paths.clientId, journal.previousClientId);
+    const revoked = await retryRelayOperation(fetcher, journal.origin, "/v1/desktop/pairing/revoke", journal.clientId, journal.relayToken);
+    if (revoked !== 204) throw new Error("Desktop rotation rollback is unconfirmed");
+    await rm(paths.rotation, { force: true });
+    await rm(paths.pairing, { force: true });
+  };
+  if (journal.phase === "rollback") {
+    await rollback();
+    throw new Error("Recovered incomplete Desktop pairing rollback; prior connection restored");
+  }
+  await atomicPrivateWrite(paths.clientId, `${journal.clientId}\n`);
   await atomicPrivateWrite(profilePath, journal.nextProfile);
   await atomicPrivateWrite(paths.sshConfig, journal.nextConfig);
   const finalized = await retryRelayOperation(fetcher, journal.origin, "/v1/desktop/pairing/finalize", journal.clientId, journal.relayToken);
@@ -232,12 +261,9 @@ async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: ty
     return;
   }
   if (finalized === undefined) throw new Error("Desktop rotation recovery requires network access");
-  await restoreOptionalText(paths.sshConfig, journal.previousConfig);
-  await restoreOptionalText(profilePath, journal.previousProfile);
-  const revoked = await retryRelayOperation(fetcher, journal.origin, "/v1/desktop/pairing/revoke", journal.clientId, journal.relayToken);
-  if (revoked !== 204) throw new Error("Desktop rotation rollback is unconfirmed");
-  await rm(paths.rotation, { force: true });
-  await rm(paths.pairing, { force: true });
+  journal = Object.freeze({ ...journal, phase: "rollback" });
+  await atomicPrivateWrite(paths.rotation, `${JSON.stringify(journal)}\n`);
+  await rollback();
   throw new Error("Desktop rotation could not be finalized; prior connection restored");
 }
 
@@ -245,7 +271,7 @@ async function recoverRotation(paths: ReturnType<typeof statePaths>, fetcher: ty
 export async function pairDesktop(pairingUrl: string, options: Readonly<{
   home?: string;
   packageSpec: string;
-  fetcher?: typeof fetch;
+  fetcher?: Fetcher;
   log?: (message: string) => void;
 }>): Promise<void> {
   let target = parseDesktopPairingUrl(pairingUrl);
@@ -258,31 +284,52 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   const existingConfigSnapshot = await safeOptionalTextSnapshot(paths.sshConfig, 1024 * 1024);
   const existingConfig = existingConfigSnapshot.text;
   preflightManagedSshConfig(existingConfig);
-  const existingClientId = (await safeOptionalText(paths.clientId, 64)).trim();
-  if (existingClientId && !/^[a-f0-9-]{36}$/.test(existingClientId)) throw new Error("Desktop client identity is invalid");
-  const clientId = existingClientId || randomUUID();
-  if (!existingClientId) await atomicPrivateWrite(paths.clientId, `${clientId}\n`);
+  const currentClientIdSnapshot = await safeOptionalTextSnapshot(paths.clientId, 64);
+  const currentClientId = currentClientIdSnapshot.text.trim();
+  if (currentClientId && !/^[a-f0-9-]{36}$/.test(currentClientId)) throw new Error("Desktop client identity is invalid");
   const existingIntentSnapshot = await safeOptionalTextSnapshot(paths.pairing, 4 * 1024);
+  let clientId: string;
   let relayToken: string;
+  let previousClientIdSnapshot: OptionalTextSnapshot;
+  let pairingIntent: PairingIntent;
   if (existingIntentSnapshot.exists) {
     let intent: PairingIntent;
     try { intent = parsePairingIntent(JSON.parse(existingIntentSnapshot.text)); }
     catch { throw new Error("Desktop pairing journal is invalid"); }
-    if (intent.clientId !== clientId) throw new Error("Desktop pairing journal is invalid");
+    if (intent.phase === "rollback") {
+      await restoreOptionalText(paths.clientId, intent.previousClientId);
+      const revoked = await retryRelayOperation(fetcher, intent.origin, "/v1/desktop/pairing/revoke", intent.clientId, intent.relayToken);
+      if (revoked !== 204) throw new Error("Desktop pairing rollback is unconfirmed");
+      await rm(paths.pairing, { force: true });
+      throw new Error("Recovered incomplete Desktop pairing rollback; prior client identity restored");
+    }
+    if ((currentClientId && intent.clientId !== currentClientId) || (!currentClientId && intent.previousClientId.exists)) {
+      throw new Error("Desktop pairing journal is invalid");
+    }
+    pairingIntent = intent;
+    clientId = intent.clientId;
+    previousClientIdSnapshot = intent.previousClientId;
+    if (!currentClientId) await atomicPrivateWrite(paths.clientId, `${clientId}\n`);
     target = Object.freeze({ origin: intent.origin, pairingToken: intent.pairingToken });
     packageSpec = intent.packageSpec;
     relayToken = intent.relayToken;
   } else {
+    clientId = currentClientId || randomUUID();
+    previousClientIdSnapshot = currentClientIdSnapshot;
     relayToken = randomBytes(32).toString("base64url");
     const intent: PairingIntent = Object.freeze({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      phase: "consume",
       origin: target.origin,
       pairingToken: target.pairingToken,
       clientId,
       relayToken,
       packageSpec,
+      previousClientId: previousClientIdSnapshot,
     });
+    pairingIntent = intent;
     await atomicPrivateWrite(paths.pairing, `${JSON.stringify(intent)}\n`);
+    if (!currentClientId) await atomicPrivateWrite(paths.clientId, `${clientId}\n`);
   }
   let response: Response | undefined;
   for (let attempt = 0; attempt < 2 && !response; attempt += 1) {
@@ -302,8 +349,8 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   if (response.status !== 201) {
     await response.body?.cancel().catch(() => undefined);
     if (response.status === 401) {
+      await restoreOptionalText(paths.clientId, previousClientIdSnapshot);
       await rm(paths.pairing, { force: true });
-      if (!existingClientId) await rm(paths.clientId, { force: true });
     }
     throw new Error(response.status === 401 ? "Desktop pairing has expired or was already used" : "Realm refused Desktop pairing");
   }
@@ -313,6 +360,7 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   let profileAttempted = false;
   let configAttempted = false;
   let finalizeIndeterminate = false;
+  let rotationJournal: RotationJournal | undefined;
   try {
     metadata = parseDesktopPairingResponse(target.origin, await boundedJsonResponse(response));
     const managedBlock = renderManagedSshBlock({ realmId: metadata.realmId, sshUser: metadata.sshUser, packageSpec });
@@ -322,16 +370,19 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
     const profile: DesktopRelayProfile = Object.freeze({ ...metadata, relayToken });
     const nextProfile = `${JSON.stringify(profile, null, 2)}\n`;
     const journal: RotationJournal = Object.freeze({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      phase: "forward",
       origin: target.origin,
       clientId,
       relayToken,
       realmId: metadata.realmId,
       previousProfile,
       previousConfig: existingConfigSnapshot,
+      previousClientId: previousClientIdSnapshot,
       nextProfile,
       nextConfig,
     });
+    rotationJournal = journal;
     await atomicPrivateWrite(paths.rotation, `${JSON.stringify(journal)}\n`);
     await rm(paths.pairing, { force: true });
     profileAttempted = true;
@@ -349,6 +400,21 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
   } catch (error) {
     if (finalizeIndeterminate) throw error;
     const failures: unknown[] = [error];
+    if (rotationJournal) {
+      try {
+        rotationJournal = Object.freeze({ ...rotationJournal, phase: "rollback" });
+        await atomicPrivateWrite(paths.rotation, `${JSON.stringify(rotationJournal)}\n`);
+      } catch (journalError) {
+        throw new AggregateError([error, journalError], "Desktop pairing rollback decision could not be persisted");
+      }
+    } else {
+      try {
+        pairingIntent = Object.freeze({ ...pairingIntent, phase: "rollback" });
+        await atomicPrivateWrite(paths.pairing, `${JSON.stringify(pairingIntent)}\n`);
+      } catch (journalError) {
+        throw new AggregateError([error, journalError], "Desktop pairing rollback decision could not be persisted");
+      }
+    }
     if (configAttempted) {
       try { await restoreOptionalText(paths.sshConfig, existingConfigSnapshot); }
       catch (restoreError) { failures.push(restoreError); }
@@ -357,12 +423,13 @@ export async function pairDesktop(pairingUrl: string, options: Readonly<{
       try { await restoreOptionalText(profilePath, previousProfile); }
       catch (restoreError) { failures.push(restoreError); }
     }
+    try { await restoreOptionalText(paths.clientId, previousClientIdSnapshot); }
+    catch (restoreError) { failures.push(restoreError); }
     const revoked = await retryRelayOperation(fetcher, target.origin, "/v1/desktop/pairing/revoke", clientId, relayToken);
     if (revoked !== 204) failures.push(new Error("Realm did not confirm pending Desktop relay revocation"));
     if (failures.length === 1) {
       await rm(paths.rotation, { force: true });
       await rm(paths.pairing, { force: true });
-      if (!existingClientId) await rm(paths.clientId, { force: true });
     }
     if (failures.length > 1) throw new AggregateError(failures, "Desktop pairing rollback failed");
     throw error;
@@ -426,6 +493,10 @@ export function waitForDesktopRelayDrain(stream: DrainEmitter, signal: AbortSign
   });
 }
 
+function closeDesktopRelaySocket(socket: Pick<WebSocket, "close"> | RelayInputSocket, code?: number, reason?: string): void {
+  try { socket.close(code, reason); } catch { /* the primary relay outcome remains authoritative */ }
+}
+
 export function waitForDesktopRelayOpen(socket: Pick<WebSocket, "addEventListener" | "removeEventListener" | "close">, timeoutMs = 15_000): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const cleanup = () => {
@@ -436,13 +507,13 @@ export function waitForDesktopRelayOpen(socket: Pick<WebSocket, "addEventListene
     const onOpen = () => { cleanup(); resolve(); };
     const onError = () => {
       cleanup();
-      socket.close();
       reject(new Error("Desktop relay connection failed"));
+      closeDesktopRelaySocket(socket);
     };
     const timeout = setTimeout(() => {
       cleanup();
-      socket.close();
       reject(new Error("Desktop relay connection timed out"));
+      closeDesktopRelaySocket(socket);
     }, timeoutMs);
     socket.addEventListener("open", onOpen, { once: true });
     socket.addEventListener("error", onError, { once: true });
@@ -451,22 +522,201 @@ export function waitForDesktopRelayOpen(socket: Pick<WebSocket, "addEventListene
 
 type OutputWriter = Readonly<{ write(data: Uint8Array, callback: (error?: Error | null) => void): unknown }>;
 
-export async function writeDesktopRelayOutput(stream: OutputWriter, data: Uint8Array, signal: AbortSignal): Promise<void> {
+export async function writeDesktopRelayOutput(stream: OutputWriter, data: Uint8Array, signal: AbortSignal, timeoutMs = 30_000): Promise<void> {
   if (signal.aborted) throw new Error("Desktop relay output cancelled");
   await new Promise<void>((resolve, reject) => {
     let settled = false;
-    const finish = (error?: Error | null) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const settle = (message?: string) => {
       if (settled) return;
       settled = true;
+      if (timeout) clearTimeout(timeout);
       signal.removeEventListener("abort", onAbort);
-      if (error) reject(new Error("Desktop relay output failed"));
+      if (message) reject(new Error(message));
       else resolve();
     };
-    const onAbort = () => finish(new Error("Desktop relay output cancelled"));
+    const finish = (error?: Error | null) => settle(error ? "Desktop relay output failed" : undefined);
+    const onAbort = () => settle("Desktop relay output cancelled");
     signal.addEventListener("abort", onAbort, { once: true });
+    timeout = setTimeout(() => settle("Desktop relay output timed out"), timeoutMs);
     try { stream.write(data, finish); }
-    catch { finish(new Error("Desktop relay output failed")); }
+    catch { settle("Desktop relay output failed"); }
   });
+}
+
+type RelayInputReader = Readonly<{ read(): Promise<Readonly<{ done: boolean; value?: Uint8Array<ArrayBuffer> }>> }>;
+type RelayInputSocket = Readonly<{
+  readonly readyState: number;
+  readonly bufferedAmount: number;
+  send(data: string | Uint8Array<ArrayBuffer>): unknown;
+  close(code?: number, reason?: string): unknown;
+}>;
+
+export async function pumpDesktopRelayInput(reader: RelayInputReader, socket: RelayInputSocket): Promise<void> {
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) {
+        if (socket.readyState === WebSocket.OPEN) closeDesktopRelaySocket(socket, 1000, "SSH client closed");
+        return;
+      }
+      if (next.value === undefined) throw new Error("Desktop relay input returned an invalid chunk");
+      if (socket.readyState !== WebSocket.OPEN) return;
+      for (let offset = 0; offset < next.value.byteLength; offset += 64 * 1024) {
+        const frame = next.value.subarray(offset, Math.min(offset + 64 * 1024, next.value.byteLength));
+        while (socket.bufferedAmount + frame.byteLength > 512 * 1024 && socket.readyState === WebSocket.OPEN) await Bun.sleep(5);
+        if (socket.readyState !== WebSocket.OPEN) return;
+        socket.send(frame);
+      }
+    }
+  } catch {
+    if (socket.readyState === WebSocket.OPEN) closeDesktopRelaySocket(socket, 1011, "Desktop relay input failed");
+    throw new Error("Desktop relay input failed");
+  }
+}
+
+export async function finishDesktopRelayOutput(output: Promise<void>, controller: AbortController, timeoutMs = 30_000): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      output,
+      new Promise<void>((_, reject) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          reject(new Error("Desktop relay output timed out"));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+type RelaySessionReader = RelayInputReader & Readonly<{ cancel(): Promise<unknown> }>;
+
+async function finishDesktopRelayInput(input: Promise<void>, reader: RelaySessionReader, timeoutMs: number): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const cancellation = Promise.resolve().then(() => reader.cancel());
+  try {
+    await Promise.race([
+      Promise.all([cancellation, input]),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Desktop relay input shutdown timed out")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+export async function runDesktopRelaySession(
+  socket: WebSocket,
+  relayToken: string,
+  reader: RelaySessionReader,
+  outputWriter: OutputWriter,
+  outputTimeoutMs = 30_000,
+): Promise<void> {
+  socket.binaryType = "arraybuffer";
+  const outputAbort = new AbortController();
+  let output = Promise.resolve();
+  let outputFailed = false;
+  let pendingOutputBytes = 0;
+  let reportOutputFailure!: (error: unknown) => void;
+  const outputFailure = new Promise<{ kind: "output-failure"; error: unknown }>((resolve) => {
+    reportOutputFailure = (error) => resolve({ kind: "output-failure", error });
+  });
+  let closed!: (value: { code: number; reason: string }) => void;
+  const didClose = new Promise<{ code: number; reason: string }>((resolveClose) => { closed = resolveClose; });
+  const onSocketMessage = (event: MessageEvent) => {
+    if (!(event.data instanceof ArrayBuffer)) {
+      reportOutputFailure(new Error("Desktop relay received an invalid frame"));
+      closeDesktopRelaySocket(socket, 1008, "invalid relay frame");
+      return;
+    }
+    const copy = new Uint8Array(event.data.slice(0));
+    if (pendingOutputBytes + copy.byteLength > 512 * 1024) {
+      reportOutputFailure(new Error("Desktop relay output limit exceeded"));
+      closeDesktopRelaySocket(socket, 1011, "Desktop relay output limit exceeded");
+      return;
+    }
+    pendingOutputBytes += copy.byteLength;
+    output = output.then(() => writeDesktopRelayOutput(outputWriter, copy, outputAbort.signal, outputTimeoutMs)).catch((error) => {
+      if (!outputFailed) {
+        outputFailed = true;
+      }
+      reportOutputFailure(error);
+      closeDesktopRelaySocket(socket, 1011, "Desktop relay output failed");
+      throw error;
+    }).finally(() => { pendingOutputBytes -= copy.byteLength; });
+    void output.catch(() => undefined);
+  };
+  const onSocketClose = (event: CloseEvent) => {
+    closed({ code: event.code, reason: event.reason });
+  };
+  const onSocketError = () => {
+    reportOutputFailure(new Error("Desktop relay transport failed"));
+    closeDesktopRelaySocket(socket, 1011, "Desktop relay transport failed");
+  };
+  socket.addEventListener("message", onSocketMessage);
+  socket.addEventListener("close", onSocketClose, { once: true });
+  socket.addEventListener("error", onSocketError, { once: true });
+  try {
+  await waitForDesktopRelayOpen(socket);
+  try { socket.send(JSON.stringify({ type: "authenticate", relayToken })); }
+  catch {
+    closeDesktopRelaySocket(socket, 1011, "Desktop relay authentication failed");
+    throw new Error("Desktop relay authentication failed");
+  }
+  const pump = pumpDesktopRelayInput(reader, socket);
+  const pumpResult = pump.then(
+    () => ({ kind: "input-complete" as const }),
+    (error: unknown) => ({ kind: "input-failure" as const, error }),
+  );
+  const initial = await Promise.race([
+    didClose.then((result) => ({ kind: "close" as const, result })),
+    pumpResult,
+    outputFailure,
+  ]);
+  let terminal:
+    | { kind: "close"; result: { code: number; reason: string } }
+    | { kind: "input-failure"; error: unknown }
+    | { kind: "output-failure"; error: unknown }
+    | { kind: "close-timeout" };
+  if (initial.kind === "input-complete") {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      terminal = await Promise.race([
+        didClose.then((result) => ({ kind: "close" as const, result })),
+        outputFailure,
+        new Promise<{ kind: "close-timeout" }>((resolve) => {
+          timeout = setTimeout(() => resolve({ kind: "close-timeout" }), outputTimeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+    }
+  } else terminal = initial;
+  if (terminal.kind === "input-failure" || terminal.kind === "output-failure" || terminal.kind === "close-timeout") {
+    outputAbort.abort();
+    await Promise.allSettled([output, finishDesktopRelayInput(pump, reader, outputTimeoutMs)]);
+    if (terminal.kind === "close-timeout") throw new Error("Desktop relay close timed out");
+    throw terminal.error;
+  }
+  const result = terminal.result;
+  const normalClose = result.code === 1000;
+  if (!normalClose) outputAbort.abort();
+  const [outputResult, inputResult] = await Promise.allSettled([
+    normalClose ? finishDesktopRelayOutput(output, outputAbort, outputTimeoutMs) : output,
+    finishDesktopRelayInput(pump, reader, outputTimeoutMs),
+  ]);
+  if (inputResult.status === "rejected") throw inputResult.reason;
+  if (outputResult.status === "rejected") throw outputResult.reason;
+  if (!normalClose) throw new Error(`Desktop relay closed (${result.code})`);
+  } finally {
+    socket.removeEventListener("message", onSocketMessage);
+    socket.removeEventListener("close", onSocketClose);
+    socket.removeEventListener("error", onSocketError);
+  }
 }
 
 async function relayDesktop(realmId: string): Promise<void> {
@@ -476,55 +726,8 @@ async function relayDesktop(realmId: string): Promise<void> {
   await recoverRotation(paths, fetch);
   const profile = await loadProfile(realmId);
   const socket = new WebSocket(profile.relayUrl);
-  socket.binaryType = "arraybuffer";
-  const outputAbort = new AbortController();
-  let output = Promise.resolve();
-  let outputFailed = false;
-  let pendingOutputBytes = 0;
-  let closed!: (value: { code: number; reason: string }) => void;
-  const didClose = new Promise<{ code: number; reason: string }>((resolveClose) => { closed = resolveClose; });
-  socket.addEventListener("message", (event) => {
-    if (!(event.data instanceof ArrayBuffer)) { socket.close(1008, "invalid relay frame"); return; }
-    const copy = new Uint8Array(event.data.slice(0));
-    if (pendingOutputBytes + copy.byteLength > 512 * 1024) { socket.close(1011, "Desktop relay output limit exceeded"); return; }
-    pendingOutputBytes += copy.byteLength;
-    output = output.then(() => writeDesktopRelayOutput(process.stdout, copy, outputAbort.signal)).catch((error) => {
-      if (!outputFailed) {
-        outputFailed = true;
-        socket.close(1011, "Desktop relay output failed");
-      }
-      throw error;
-    }).finally(() => { pendingOutputBytes -= copy.byteLength; });
-  });
-  socket.addEventListener("close", (event) => {
-    outputAbort.abort();
-    closed({ code: event.code, reason: event.reason });
-  }, { once: true });
-  socket.addEventListener("error", () => { /* close event owns the bounded error result */ });
-  await waitForDesktopRelayOpen(socket);
-  socket.send(JSON.stringify({ type: "authenticate", relayToken: profile.relayToken }));
   const reader = Bun.stdin.stream().getReader();
-  const pump = (async () => {
-    try {
-      while (true) {
-        const next = await reader.read();
-        if (next.done || socket.readyState !== WebSocket.OPEN) break;
-        for (let offset = 0; offset < next.value.byteLength; offset += 64 * 1024) {
-          const frame = next.value.subarray(offset, Math.min(offset + 64 * 1024, next.value.byteLength));
-          while (socket.bufferedAmount + frame.byteLength > 512 * 1024 && socket.readyState === WebSocket.OPEN) await Bun.sleep(5);
-          if (socket.readyState !== WebSocket.OPEN) break;
-          socket.send(frame);
-        }
-      }
-    } finally {
-      if (socket.readyState === WebSocket.OPEN) socket.close(1000, "SSH client closed");
-    }
-  })();
-  const result = await didClose;
-  await reader.cancel().catch(() => undefined);
-  await pump.catch(() => undefined);
-  await output.catch(() => undefined);
-  if (result.code !== 1000) throw new Error(`Desktop relay closed (${result.code})`);
+  await runDesktopRelaySession(socket, profile.relayToken, reader, process.stdout);
 }
 
 export async function main(args = process.argv.slice(2)): Promise<void> {

@@ -20,28 +20,35 @@ The SDK is incomplete if an external agent needs private instructions to configu
 On a fresh Linux x64 or arm64 host with only Bun and `config.json`, run the SDK directly from GitHub:
 
 ```bash
-bunx --package https://github.com/Klivcore/klivcore-sdk-v1 start-realm config.json
+bunx --bun \
+  --package https://github.com/klivcore/klivcore-sdk-v1.git#[SDK_COMMIT] \
+  start-realm config.json
 ```
+
+Replace `[SDK_COMMIT]` with the verified lowercase 40-character commit from the canonical generated SDK repository. Never launch a Realm from a branch, tag, floating package URL, abbreviated commit, or unverified local projection.
 
 Start from `examples/start-realm.config.json`. The command:
 
 1. validates the strict configuration;
 2. creates a private durable state directory;
-3. downloads the pinned `cloudflared` binary and verifies its published SHA-256 digest;
-4. starts Quick Tunnel first and captures its generated HTTPS origin;
+3. either validates the exact HTTPS `publicOrigin` of an existing operator-managed tunnel, or downloads the pinned `cloudflared` binary and verifies its published SHA-256 digest;
+4. preserves an externally managed tunnel unchanged, or starts Quick Tunnel first and captures its generated HTTPS origin;
 5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
 6. verifies local and public `/health` responses identify the configured Realm;
 7. writes a mode-`0600` active-runtime record containing the verified origins, process identity, and a random runtime-scoped registration-control capability;
 8. prints the safe Realm URL, registration command, and whether authenticated **Connect Desktop** pairing is enabled.
 
-The foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
+By default the foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and its managed tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
+
+To preserve an existing tunnel or use a named operator-managed tunnel, set `publicOrigin` to its exact HTTPS origin with no trailing slash, path, query, fragment, or credentials. In that mode `start-realm` does not install, start, signal, or stop `cloudflared`; it verifies the supplied public origin identifies the configured live Realm before becoming ready. Keep the external tunnel supervised separately and pointed only at the configured loopback `port`.
 
 ### Give a user a registration URL
 
 While the Realm is running, an operating agent generates a fresh registration URL with:
 
 ```bash
-bunx --package https://github.com/Klivcore/klivcore-sdk-v1 \
+bunx --bun \
+  --package https://github.com/klivcore/klivcore-sdk-v1.git#[SDK_COMMIT] \
   start-realm registration-url config.json
 ```
 

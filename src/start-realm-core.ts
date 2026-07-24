@@ -5,10 +5,14 @@ export type StartRealmConfig = Readonly<{
   realm: Readonly<{ id: string; name: string; canvasColor: string }>;
   port: number;
   stateDir: string;
+  publicOrigin?: string;
   desktop?: Readonly<{
     ssh: Readonly<{ host: string; port: number; user: string; startingDirectory: string }>;
   }>;
 }>;
+
+export type StartRealmTunnelPlan = Readonly<{ mode: "managed" }>
+  | Readonly<{ mode: "external"; publicOrigin: string }>;
 
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
 export type StartRealmArgs = Readonly<{ command: "run" | "registration-url"; configPath: string }>;
@@ -38,7 +42,7 @@ export function parseStartRealmArgs(args: readonly string[]): StartRealmArgs {
   throw new TypeError(usage);
 }
 
-export function parseActiveRealmRecord(value: unknown, realmId: string, port: number): ActiveRealmRecord {
+export function parseActiveRealmRecord(value: unknown, realmId: string, port: number, expectedPublicOrigin?: string): ActiveRealmRecord {
   const invalid = (): never => { throw new TypeError("active Realm record is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
@@ -54,7 +58,8 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
   const publicUrl = (() => {
     try { return new URL(publicOrigin); } catch { return invalid(); }
   })();
-  if (publicUrl.origin !== publicOrigin || publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password) invalid();
+  if (publicUrl.origin !== publicOrigin || publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password
+    || (expectedPublicOrigin !== undefined && publicOrigin !== expectedPublicOrigin)) invalid();
   return Object.freeze({
     schemaVersion: 1,
     pid: input.pid as number,
@@ -87,9 +92,14 @@ export function parseStartRealmConfig(value: unknown): StartRealmConfig {
   const invalid = (): never => { throw new TypeError("start-realm config is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
-  const allowed = input.desktop === undefined
-    ? ["port", "realm", "schemaVersion", "stateDir"]
-    : ["desktop", "port", "realm", "schemaVersion", "stateDir"];
+  const allowed = [
+    ...(input.desktop === undefined ? [] : ["desktop"]),
+    "port",
+    ...(input.publicOrigin === undefined ? [] : ["publicOrigin"]),
+    "realm",
+    "schemaVersion",
+    "stateDir",
+  ];
   if (!exactKeys(input, allowed) || input.schemaVersion !== 1) invalid();
   if (!input.realm || typeof input.realm !== "object" || Array.isArray(input.realm)) invalid();
   const realm = input.realm as Record<string, unknown>;
@@ -99,6 +109,16 @@ export function parseStartRealmConfig(value: unknown): StartRealmConfig {
     || typeof realm.canvasColor !== "string" || !/^#[0-9a-f]{6}$/.test(realm.canvasColor)) invalid();
   if (!Number.isSafeInteger(input.port) || (input.port as number) < 1 || (input.port as number) > 65_535
     || typeof input.stateDir !== "string" || input.stateDir.length < 1 || input.stateDir.length > 1_024) invalid();
+  let publicOrigin: string | undefined;
+  if (input.publicOrigin !== undefined) {
+    if (typeof input.publicOrigin !== "string") invalid();
+    try {
+      const candidate = new URL(input.publicOrigin as string);
+      if (candidate.protocol !== "https:" || candidate.origin !== input.publicOrigin
+        || candidate.username || candidate.password || candidate.pathname !== "/" || candidate.search || candidate.hash) invalid();
+      publicOrigin = candidate.origin;
+    } catch { invalid(); }
+  }
   let desktop: StartRealmConfig["desktop"];
   if (input.desktop !== undefined) {
     if (!input.desktop || typeof input.desktop !== "object" || Array.isArray(input.desktop)) invalid();
@@ -128,8 +148,15 @@ export function parseStartRealmConfig(value: unknown): StartRealmConfig {
     realm: Object.freeze({ id: realm.id as string, name: realm.name as string, canvasColor: realm.canvasColor as string }),
     port: input.port as number,
     stateDir: input.stateDir as string,
+    ...(publicOrigin ? { publicOrigin } : {}),
     ...(desktop ? { desktop } : {}),
   });
+}
+
+export function planStartRealmTunnel(config: StartRealmConfig): StartRealmTunnelPlan {
+  return config.publicOrigin
+    ? Object.freeze({ mode: "external", publicOrigin: config.publicOrigin })
+    : Object.freeze({ mode: "managed" });
 }
 
 export function resolveCloudflaredAsset(platform: string, arch: string): CloudflaredAsset {

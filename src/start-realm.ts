@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, resolveCloudflaredAsset } from "./start-realm-core";
+import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, resolveCloudflaredAsset } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -116,7 +116,12 @@ async function issueRegistrationUrl(): Promise<void> {
     || info.size < 2 || info.size > 4_096 || (getuid !== undefined && info.uid !== getuid)) {
     throw new Error("active Realm record is unavailable or unsafe; start the Realm first");
   }
-  const record = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
+  const record = parseActiveRealmRecord(
+    JSON.parse(await readFile(activeRealmPath, "utf8")),
+    config.realm.id,
+    config.port,
+    config.publicOrigin,
+  );
   try { process.kill(record.pid, 0); } catch { throw new Error("active Realm process is not running"); }
   await waitForHealth(record.localOrigin, config.realm.id, 5_000);
   await waitForHealth(record.publicOrigin, config.realm.id, 10_000);
@@ -186,15 +191,21 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 }
 
 try {
-  const executable = await cloudflaredPath();
-  tunnel = Bun.spawn([
-    executable,
-    "tunnel",
-    "--config", "/dev/null",
-    "--no-autoupdate",
-    "--url", `http://127.0.0.1:${config.port}`,
-  ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
-  const publicOrigin = await captureTunnelOrigin(tunnel);
+  let publicOrigin: string;
+  const tunnelPlan = planStartRealmTunnel(config);
+  if (tunnelPlan.mode === "external") {
+    publicOrigin = tunnelPlan.publicOrigin;
+  } else {
+    const executable = await cloudflaredPath();
+    tunnel = Bun.spawn([
+      executable,
+      "tunnel",
+      "--config", "/dev/null",
+      "--no-autoupdate",
+      "--url", `http://127.0.0.1:${config.port}`,
+    ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+    publicOrigin = await captureTunnelOrigin(tunnel);
+  }
   const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
   const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const appRoot = await resolvePublishedAppV2Root(resolve(import.meta.dir, "../app-v2"));
@@ -254,13 +265,15 @@ try {
   console.log(`Registration URL command: start-realm registration-url ${configPath}`);
   if (config.desktop) console.log("Connect Desktop: available from the authenticated Realm menu");
   console.log("Stop: Ctrl-C");
-  void tunnel.exited.then(async (code) => {
-    if (!stopping) {
-      console.error(`cloudflared exited unexpectedly (${code})`);
-      await stop();
-      process.exit(code || 1);
-    }
-  });
+  if (tunnel) {
+    void tunnel.exited.then(async (code) => {
+      if (!stopping) {
+        console.error(`cloudflared exited unexpectedly (${code})`);
+        await stop();
+        process.exit(code || 1);
+      }
+    });
+  }
 } catch (error) {
   await stop();
   throw error;
