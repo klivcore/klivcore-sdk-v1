@@ -4,14 +4,18 @@
   "private": false,
   "type": "module",
   "bin": {
+    "connect-desktop": "./bin/connect-desktop.ts",
+    "klivcore": "./bin/klivcore.ts",
     "sdk-v1": "./bin/klivcore.ts",
-    "klivcore": "./bin/klivcore.ts"
+    "start-realm": "./bin/start-realm.ts"
   },
   "exports": {
     ".": "./src/index.ts",
     "./app-launcher": "./src/app-launcher.ts",
     "./conformance": "./src/conformance.ts",
-    "./server": "./src/server.ts"
+    "./server": "./src/server.ts",
+    "./start-realm": "./src/start-realm.ts",
+    "./connect-desktop": "./src/connect-desktop.ts"
   },
   "scripts": {
     "app": "bun bin/klivcore.ts",

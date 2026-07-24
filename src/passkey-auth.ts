@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -16,6 +16,9 @@ import {
 const MAX_BODY_BYTES = 64 * 1024;
 const CHALLENGE_TTL_MS = 2 * 60_000;
 const SESSION_TTL_MS = 8 * 60 * 60_000;
+const AGENT_SESSION_TTL_MS = 7 * 24 * 60 * 60_000;
+const AGENT_PAIRING_TTL_MS = 5 * 60_000;
+const DESKTOP_PAIRING_TTL_MS = 5 * 60_000;
 const MAX_REGISTRATION_TTL_MS = 10 * 60_000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 const FLOW_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
@@ -88,24 +91,56 @@ export type PasskeyAuthOptions = Readonly<{
   engine?: PasskeyEngine;
   now?: () => number;
   allowInsecureLoopback?: boolean;
+  agentAccess?: Readonly<{ capabilities: readonly string[] }>;
+  registrationControlToken?: string;
 }>;
 
-export type RealmSession = Readonly<{ id: string; realmId: string; expiresAt: number }>;
+export type RealmSession = Readonly<{
+  id: string;
+  realmId: string;
+  expiresAt: number;
+  principal?: "human" | "agent";
+  capabilities?: readonly string[];
+}>;
 
 export type PasskeyAuth = Readonly<{
   publicOrigin: string;
   issueRegistrationUrl(options?: Readonly<{ ttlMs?: number }>): string;
+  issueDesktopPairingUrl(request: Request): string;
+  consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
+  finalizeDesktopRelay(clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
+  revokePendingDesktopRelay(clientId: string, relayToken: string): boolean;
+  desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined;
+  revokeDesktopRelay(clientId: string, relayToken: string): boolean;
   handle(request: Request): Promise<Response | undefined>;
   sessionFor(request: Request): RealmSession | undefined;
   sessionById(sessionId: string): RealmSession | undefined;
   onSessionInvalidated(listener: (sessionId: string) => void): () => void;
+  onDesktopRelayInvalidated?(listener: (relayId: string) => void): () => void;
   close(): void;
 }>;
 
-type GrantRow = { token_hash: string; expires_at: number; consumed_at: number | null };
+type GrantRow = { token_hash: string; user_id: Uint8Array; expires_at: number; consumed_at: number | null };
 type CeremonyRow = { id: string; kind: string; token_hash: string | null; challenge: string; expires_at: number; consumed_at: number | null };
 type CredentialRow = { id: string; public_key: Uint8Array; counter: number; transports_json: string; device_type: string; backed_up: number };
-type SessionRow = { expires_at: number };
+type SessionRow = { expires_at: number; principal: string; capabilities_json: string | null };
+type AgentPairingRow = { id: string; expires_at: number; approved_at: number | null; consumed_at: number | null };
+type DesktopPairingRow = { token_hash: string; session_id: string; expires_at: number };
+type DesktopRelayRow = { id: string; client_hash: string; token_hash: string };
+type DesktopRelayCandidateRow = { id: string; client_hash: string; token_hash: string; pairing_hash: string; expires_at: number };
+
+export function approveAgentPairing(input: Readonly<{ databasePath: string; pairingId: string; now?: number }>): boolean {
+  if (!/^[a-f0-9-]{36}$/.test(input.pairingId)) return false;
+  const database = new Database(resolve(input.databasePath), { create: false, strict: true });
+  try {
+    const timestamp = input.now ?? Date.now();
+    const result = database.query("UPDATE agent_pairings SET approved_at = ? WHERE id = ? AND approved_at IS NULL AND consumed_at IS NULL AND expires_at > ?")
+      .run(timestamp, input.pairingId, timestamp);
+    return result.changes === 1;
+  } finally {
+    database.close();
+  }
+}
 
 function base64url(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64url");
@@ -307,6 +342,28 @@ function authPage(kind: "register" | "login", realmName: string, branding: Realm
   return new Response(html, { headers: { ...authHeaders(), "content-type": "text/html; charset=utf-8" } });
 }
 
+function agentPairingPage(pairingId: string, realmName: string, branding: RealmBranding): Response {
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${branding.canvasColor}"><title>Pair agent · ${realmName}</title><style>
+:root{color-scheme:light;--canvas:${branding.canvasColor};font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}*{box-sizing:border-box}html,body{min-height:100%;margin:0}body{display:grid;place-items:center;padding:24px;background:var(--canvas);color:#14202b}.card{width:min(100%,520px);padding:44px;background:#fff;border:1px solid #d9e0e6;border-radius:20px;box-shadow:0 24px 70px rgba(0,0,0,.2)}.eyebrow{margin:0 0 16px;color:#137a92;font-size:12px;font-weight:750;letter-spacing:.14em;text-transform:uppercase}h1{margin:0;font-size:38px;letter-spacing:-.035em}.copy{margin:18px 0;color:#667381;line-height:1.6}.pairing{padding:14px;border-radius:10px;background:#f2f5f7;font:600 13px ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}.status{margin:20px 0 0;color:#137a92;font-weight:700}
+</style></head><body data-agent-pairing-id="${pairingId}"><main class="card"><p class="eyebrow">Scoped agent access</p><h1>${realmName}</h1><p class="copy">Waiting for local DevPod approval. This pairing grants only the capabilities configured by this Realm and contains no browser bearer credential.</p><div class="pairing">${pairingId}</div><p class="status" id="status" role="status" aria-live="polite">Pending approval…</p></main><script src="/auth/agent-pair.js" defer></script></body></html>`;
+  return new Response(html, { headers: { ...authHeaders(), "content-type": "text/html; charset=utf-8" } });
+}
+
+const AGENT_PAIRING_BROWSER_JS = String.raw`(() => {
+  const status = document.querySelector('#status');
+  let stopped = false;
+  async function poll() {
+    if (stopped) return;
+    try {
+      const response = await fetch('/v1/auth/agent/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      if (response.status === 204) { stopped = true; status.textContent = 'Approved. Opening Realm…'; location.replace('/debug/resource-monitor'); return; }
+      if (response.status !== 202) { stopped = true; status.textContent = 'Pairing expired or unavailable.'; return; }
+    } catch { status.textContent = 'Realm unavailable. Retrying…'; }
+    setTimeout(poll, 1000);
+  }
+  poll();
+})();`;
+
 const PASSKEY_BROWSER_JS = String.raw`(() => {
   const body = document.body;
   const button = document.querySelector('#passkey-action');
@@ -361,6 +418,16 @@ const PASSKEY_BROWSER_JS = String.raw`(() => {
 export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const now = options.now ?? Date.now;
   const branding = parseRealmBranding(options.branding);
+  const agentCapabilities = options.agentAccess
+    ? Object.freeze([...new Set(options.agentAccess.capabilities)])
+    : undefined;
+  if (agentCapabilities && (agentCapabilities.length < 1 || agentCapabilities.length > 32
+    || agentCapabilities.some((capability) => !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(capability)))) {
+    throw new TypeError("agent access capabilities are invalid");
+  }
+  if (options.registrationControlToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(options.registrationControlToken)) {
+    throw new TypeError("registration control token is invalid");
+  }
   const publicUrl = new URL(options.publicOrigin);
   const isLoopback = publicUrl.hostname === "127.0.0.1" || publicUrl.hostname === "localhost";
   if (publicUrl.origin !== options.publicOrigin || publicUrl.username || publicUrl.password
@@ -378,9 +445,11 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const database = new Database(databasePath, { create: true, strict: true });
   try { chmodSync(databasePath, 0o600); } catch { database.close(); throw new Error("passkey database permissions could not be restricted"); }
   database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  const realmUserId = createHash("sha256").update(`klivcore-realm-user\0${options.realmId}`).digest();
   database.exec(`
     CREATE TABLE IF NOT EXISTS registration_grants (
       token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
+      user_id BLOB NOT NULL CHECK(length(user_id) = 32),
       expires_at INTEGER NOT NULL,
       consumed_at INTEGER
     ) STRICT;
@@ -394,6 +463,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     ) STRICT;
     CREATE TABLE IF NOT EXISTS credentials (
       id TEXT PRIMARY KEY,
+      user_id BLOB NOT NULL CHECK(length(user_id) = 32),
       public_key BLOB NOT NULL,
       counter INTEGER NOT NULL CHECK(counter >= 0),
       transports_json TEXT NOT NULL,
@@ -405,24 +475,84 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     CREATE TABLE IF NOT EXISTS sessions (
       token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
       expires_at INTEGER NOT NULL,
+      created_at INTEGER NOT NULL,
+      principal TEXT NOT NULL DEFAULT 'human' CHECK(principal IN ('human', 'agent')),
+      capabilities_json TEXT
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS agent_pairings (
+      id TEXT PRIMARY KEY,
+      verifier_hash TEXT NOT NULL UNIQUE CHECK(length(verifier_hash) = 64),
+      expires_at INTEGER NOT NULL,
+      approved_at INTEGER,
+      consumed_at INTEGER
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_pairings (
+      token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
+      session_id TEXT NOT NULL CHECK(length(session_id) = 64),
+      expires_at INTEGER NOT NULL,
+      FOREIGN KEY(session_id) REFERENCES sessions(token_hash) ON DELETE CASCADE
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_relays (
+      id TEXT PRIMARY KEY,
+      client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
+      token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
       created_at INTEGER NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_relay_candidates (
+      id TEXT PRIMARY KEY,
+      client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
+      token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
+      pairing_hash TEXT NOT NULL UNIQUE CHECK(length(pairing_hash) = 64),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
   `);
+  const grantColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(registration_grants)").all().map((column) => column.name));
+  if (!grantColumns.has("user_id")) database.exec("DELETE FROM registration_grants; ALTER TABLE registration_grants ADD COLUMN user_id BLOB");
+  const credentialColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(credentials)").all().map((column) => column.name));
+  if (!credentialColumns.has("user_id")) {
+    database.exec("ALTER TABLE credentials ADD COLUMN user_id BLOB");
+    database.query("UPDATE credentials SET user_id = ? WHERE user_id IS NULL").run(realmUserId);
+  }
+  const sessionColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(sessions)").all().map((column) => column.name));
+  if (!sessionColumns.has("principal")) database.exec("ALTER TABLE sessions ADD COLUMN principal TEXT NOT NULL DEFAULT 'human' CHECK(principal IN ('human', 'agent'))");
+  if (!sessionColumns.has("capabilities_json")) database.exec("ALTER TABLE sessions ADD COLUMN capabilities_json TEXT");
+  const desktopRelayColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(desktop_relays)").all().map((column) => column.name));
+  if (!desktopRelayColumns.has("client_hash")) {
+    database.exec("ALTER TABLE desktop_relays ADD COLUMN client_hash TEXT");
+    const legacyRelays = database.query<{ id: string }, []>("SELECT id FROM desktop_relays").all();
+    for (const relay of legacyRelays) database.query("UPDATE desktop_relays SET client_hash = ? WHERE id = ?").run(tokenHash(`legacy-desktop-relay\0${relay.id}`), relay.id);
+    database.exec("CREATE UNIQUE INDEX IF NOT EXISTS desktop_relays_client_hash ON desktop_relays(client_hash)");
+  }
   const engine = options.engine ?? defaultEngine;
   const invalidationListeners = new Set<(sessionId: string) => void>();
-  const realmUserId = createHash("sha256").update(`klivcore-realm-user\0${options.realmId}`).digest();
+  const desktopRelayInvalidationListeners = new Set<(relayId: string) => void>();
   const cookieName = publicUrl.protocol === "https:"
     ? `__Host-kc-${options.realmId}-session`
     : `kc-${options.realmId}-session`;
-  const cookie = (token: string) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
+  const pairingCookieName = publicUrl.protocol === "https:"
+    ? `__Host-kc-${options.realmId}-agent-pairing`
+    : `kc-${options.realmId}-agent-pairing`;
+  const cookie = (token: string, ttlMs = SESSION_TTL_MS) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(ttlMs / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
+  const pairingCookie = (token: string) => `${pairingCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(AGENT_PAIRING_TTL_MS / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
 
   const allCredentials = () => database.query<CredentialRow, []>("SELECT id, public_key, counter, transports_json, device_type, backed_up FROM credentials ORDER BY id LIMIT 32").all().map(storedCredential);
-  const registrationLocked = () => database.query<{ present: number }, []>("SELECT EXISTS(SELECT 1 FROM credentials LIMIT 1) AS present").get()?.present === 1;
-  const createSession = () => {
+  const createSession = (principal: "human" | "agent" = "human", capabilities?: readonly string[]) => {
     const token = randomToken();
     const createdAt = now();
-    database.query("INSERT INTO sessions(token_hash, expires_at, created_at) VALUES (?, ?, ?)").run(tokenHash(token), createdAt + SESSION_TTL_MS, createdAt);
+    const ttlMs = principal === "agent" ? AGENT_SESSION_TTL_MS : SESSION_TTL_MS;
+    database.query("INSERT INTO sessions(token_hash, expires_at, created_at, principal, capabilities_json) VALUES (?, ?, ?, ?, ?)")
+      .run(tokenHash(token), createdAt + ttlMs, createdAt, principal, capabilities ? JSON.stringify(capabilities) : null);
     return token;
+  };
+  const cookieValue = (request: Request, name: string) => {
+    const cookieHeader = request.headers.get("cookie");
+    if (!cookieHeader) return undefined;
+    for (const part of cookieHeader.split(";")) {
+      const separator = part.indexOf("=");
+      if (separator >= 0 && part.slice(0, separator).trim() === name) return part.slice(separator + 1).trim();
+    }
+    return undefined;
   };
   const exactOrigin = (request: Request) => request.headers.get("origin") === options.publicOrigin;
   const claimCeremony = (id: string, kind: "register" | "login", registrationTokenHash?: string): CeremonyRow | undefined => {
@@ -434,12 +564,173 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     return database.query<CeremonyRow, [string]>("SELECT id, kind, token_hash, challenge, expires_at, consumed_at FROM ceremonies WHERE id = ?").get(id) ?? undefined;
   };
 
+  function issueRegistrationUrl(issueOptions: Readonly<{ ttlMs?: number }> = {}): string {
+    const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
+    const token = randomToken();
+    const timestamp = now();
+    const reserve = database.transaction(() => {
+      database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
+      const capacity = database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0;
+      if (capacity >= 32) throw new Error("registration URL limit reached");
+      database.query("INSERT INTO registration_grants(token_hash, user_id, expires_at, consumed_at) VALUES (?, ?, ?, NULL)")
+        .run(tokenHash(token), randomBytes(32), timestamp + ttlMs);
+    });
+    reserve.immediate();
+    return `${options.publicOrigin}/auth/register#token=${token}`;
+  }
+
+  function issueDesktopPairingUrl(request: Request): string {
+    const session = sessionFor(request);
+    if (!session || session.principal !== "human") throw new Error("Desktop pairing requires a human Realm session");
+    const token = randomToken();
+    const timestamp = now();
+    const reserve = database.transaction(() => {
+      database.query("DELETE FROM desktop_pairings WHERE expires_at <= ?").run(timestamp);
+      const outstanding = database.query<{ count: number }, []>("SELECT count(*) AS count FROM desktop_pairings").get()?.count ?? 0;
+      if (outstanding >= 8) throw new Error("Desktop pairing limit reached");
+      database.query("INSERT INTO desktop_pairings(token_hash, session_id, expires_at) VALUES (?, ?, ?)")
+        .run(tokenHash(token), session.id, timestamp + DESKTOP_PAIRING_TTL_MS);
+    });
+    reserve.immediate();
+    return `${options.publicOrigin}/connect-desktop#token=${token}`;
+  }
+
+  function consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(pairingToken) || !/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const timestamp = now();
+    const pairingHash = tokenHash(pairingToken);
+    const relayHash = tokenHash(relayToken);
+    const clientHash = tokenHash(clientId);
+    let relayId: string | undefined;
+    const consume = database.transaction(() => {
+      database.query("DELETE FROM desktop_pairings WHERE expires_at <= ?").run(timestamp);
+      database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
+      const replay = database.query<DesktopRelayCandidateRow, [string, number]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE pairing_hash = ? AND expires_at > ?",
+      ).get(pairingHash, timestamp);
+      if (replay) {
+        if (replay.client_hash === clientHash && replay.token_hash === relayHash) relayId = replay.id;
+        return;
+      }
+      const pairing = database.query<DesktopPairingRow, [string, number, number]>(
+        "SELECT p.token_hash, p.session_id, p.expires_at FROM desktop_pairings p JOIN sessions s ON s.token_hash = p.session_id WHERE p.token_hash = ? AND p.expires_at > ? AND s.expires_at > ?",
+      ).get(pairingHash, timestamp, timestamp);
+      if (!pairing) return;
+      const pending = database.query<DesktopRelayCandidateRow, [string]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ?",
+      ).get(clientHash);
+      if (pending) return;
+      const existing = database.query<DesktopRelayRow, [string]>("SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?").get(clientHash);
+      const clients = database.query<{ count: number }, []>(
+        "SELECT count(*) AS count FROM (SELECT client_hash FROM desktop_relays UNION SELECT client_hash FROM desktop_relay_candidates)",
+      ).get()?.count ?? 0;
+      if (!existing && clients >= 32) return;
+      const removed = database.query("DELETE FROM desktop_pairings WHERE token_hash = ? AND expires_at > ?").run(pairingHash, timestamp);
+      if (removed.changes !== 1) return;
+      relayId = randomUUID();
+      database.query("INSERT INTO desktop_relay_candidates(id, client_hash, token_hash, pairing_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(relayId, clientHash, relayHash, pairingHash, timestamp, timestamp + DESKTOP_PAIRING_TTL_MS);
+    });
+    try { consume.immediate(); } catch { return undefined; }
+    return relayId ? Object.freeze({ relayId }) : undefined;
+  }
+
+  function finalizeDesktopRelay(clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const timestamp = now();
+    const clientHash = tokenHash(clientId);
+    const relayHash = tokenHash(relayToken);
+    let promoted: Readonly<{ relayId: string; previousRelayId?: string }> | undefined;
+    const finalize = database.transaction(() => {
+      database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
+      const active = database.query<DesktopRelayRow, [string, string]>(
+        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
+      ).get(clientHash, relayHash);
+      if (active) { promoted = Object.freeze({ relayId: active.id }); return; }
+      const candidate = database.query<DesktopRelayCandidateRow, [string, string, number]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ? AND expires_at > ?",
+      ).get(clientHash, relayHash, timestamp);
+      if (!candidate) return;
+      const previous = database.query<DesktopRelayRow, [string]>(
+        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?",
+      ).get(clientHash);
+      if (previous) database.query("DELETE FROM desktop_relays WHERE client_hash = ?").run(clientHash);
+      database.query("INSERT INTO desktop_relays(id, client_hash, token_hash, created_at) VALUES (?, ?, ?, ?)")
+        .run(candidate.id, clientHash, relayHash, timestamp);
+      database.query("DELETE FROM desktop_relay_candidates WHERE id = ?").run(candidate.id);
+      promoted = Object.freeze(previous
+        ? { relayId: candidate.id, previousRelayId: previous.id }
+        : { relayId: candidate.id });
+    });
+    try { finalize.immediate(); } catch { return undefined; }
+    if (promoted?.previousRelayId) {
+      for (const listener of desktopRelayInvalidationListeners) {
+        try { listener(promoted.previousRelayId); } catch { /* finalized rotation remains authoritative */ }
+      }
+    }
+    return promoted ? Object.freeze({ relayId: promoted.relayId }) : undefined;
+  }
+
+  function revokePendingDesktopRelay(clientId: string, relayToken: string): boolean {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return false;
+    const clientHash = tokenHash(clientId);
+    const relayHash = tokenHash(relayToken);
+    const active = database.query<DesktopRelayRow, [string, string]>(
+      "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
+    ).get(clientHash, relayHash);
+    if (active) return false;
+    database.query("DELETE FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ?").run(clientHash, relayHash);
+    return true;
+  }
+
+  function desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const relay = database.query<DesktopRelayRow, [string]>("SELECT id FROM desktop_relays WHERE token_hash = ?").get(tokenHash(relayToken));
+    return relay ? Object.freeze({ relayId: relay.id }) : undefined;
+  }
+
+  function revokeDesktopRelay(clientId: string, relayToken: string): boolean {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return false;
+    const revoked = database.query<DesktopRelayRow, [string, string]>(
+      "DELETE FROM desktop_relays WHERE client_hash = ? AND token_hash = ? RETURNING id",
+    ).get(tokenHash(clientId), tokenHash(relayToken));
+    if (!revoked) return false;
+    for (const listener of desktopRelayInvalidationListeners) {
+      try { listener(revoked.id); } catch { /* revocation remains authoritative */ }
+    }
+    return true;
+  }
+
   async function handle(request: Request): Promise<Response | undefined> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/auth/register") return authPage("register", options.realmName, branding);
     if (request.method === "GET" && url.pathname === "/auth/login") return authPage("login", options.realmName, branding);
+    if (request.method === "GET" && url.pathname === "/auth/agent") {
+      if (!agentCapabilities) return json({ error: "not found" }, 404);
+      const timestamp = now();
+      database.query("DELETE FROM agent_pairings WHERE expires_at <= ? OR consumed_at IS NOT NULL").run(timestamp);
+      const existingSecret = cookieValue(request, pairingCookieName);
+      const existing = existingSecret && TOKEN_PATTERN.test(existingSecret)
+        ? database.query<AgentPairingRow, [string, number]>("SELECT id, expires_at, approved_at, consumed_at FROM agent_pairings WHERE verifier_hash = ? AND expires_at > ? AND consumed_at IS NULL")
+          .get(tokenHash(existingSecret), timestamp)
+        : undefined;
+      if (existing) return agentPairingPage(existing.id, options.realmName, branding);
+      const active = database.query<{ count: number }, []>("SELECT count(*) AS count FROM agent_pairings").get()?.count ?? 0;
+      if (active >= 8) return json({ error: "agent pairing unavailable" }, 429);
+      const pairingId = randomUUID();
+      const secret = randomToken();
+      database.query("INSERT INTO agent_pairings(id, verifier_hash, expires_at, approved_at, consumed_at) VALUES (?, ?, ?, NULL, NULL)")
+        .run(pairingId, tokenHash(secret), timestamp + AGENT_PAIRING_TTL_MS);
+      const response = agentPairingPage(pairingId, options.realmName, branding);
+      response.headers.set("set-cookie", pairingCookie(secret));
+      return response;
+    }
     if (request.method === "GET" && url.pathname === "/auth/passkey.js") {
       return new Response(PASSKEY_BROWSER_JS, { headers: { ...authHeaders(), "content-type": "text/javascript; charset=utf-8" } });
+    }
+    if (request.method === "GET" && url.pathname === "/auth/agent-pair.js" && agentCapabilities) {
+      return new Response(AGENT_PAIRING_BROWSER_JS, { headers: { ...authHeaders(), "content-type": "text/javascript; charset=utf-8" } });
     }
     if (!url.pathname.startsWith("/v1/auth/")) return undefined;
     if (request.method !== "POST") return json({ error: "method not allowed" }, 405);
@@ -448,11 +739,44 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     if (!body) return json({ error: "invalid request" }, 400);
     const timestamp = now();
 
+    if (url.pathname === "/v1/auth/runtime/registration-url") {
+      if (!options.registrationControlToken || !exactKeys(body, [])) return json({ error: "not found" }, 404);
+      const authorization = request.headers.get("authorization");
+      const candidate = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+      if (!candidate || !/^[A-Za-z0-9_-]{43}$/.test(candidate)
+        || !timingSafeEqual(Buffer.from(candidate), Buffer.from(options.registrationControlToken))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      return json({ registrationUrl: issueRegistrationUrl() }, 201);
+    }
+
+    if (url.pathname === "/v1/auth/agent/status") {
+      if (!agentCapabilities || !exactKeys(body, [])) return json({ error: "not found" }, 404);
+      const secret = cookieValue(request, pairingCookieName);
+      if (!secret || !TOKEN_PATTERN.test(secret)) return json({ error: "unauthorized" }, 401);
+      const verifierHash = tokenHash(secret);
+      const pairing = database.query<AgentPairingRow, [string, number]>("SELECT id, expires_at, approved_at, consumed_at FROM agent_pairings WHERE verifier_hash = ? AND expires_at > ? AND consumed_at IS NULL")
+        .get(verifierHash, timestamp);
+      if (!pairing) return json({ error: "unauthorized" }, 401);
+      if (pairing.approved_at === null) return json({ status: "pending" }, 202);
+      const issueAgentSession = database.transaction(() => {
+        const consumed = database.query("UPDATE agent_pairings SET consumed_at = ? WHERE id = ? AND approved_at IS NOT NULL AND consumed_at IS NULL AND expires_at > ?")
+          .run(timestamp, pairing.id, timestamp);
+        return consumed.changes === 1 ? createSession("agent", agentCapabilities) : undefined;
+      });
+      const sessionToken = issueAgentSession();
+      if (!sessionToken) return json({ error: "unauthorized" }, 401);
+      return new Response(null, {
+        status: 204,
+        headers: { "cache-control": "no-store", "set-cookie": cookie(sessionToken, AGENT_SESSION_TTL_MS) },
+      });
+    }
+
     if (url.pathname === "/v1/auth/register/options") {
       if (!exactKeys(body, ["token"]) || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)) return json({ error: "invalid request" }, 400);
-      if (registrationLocked()) return json({ error: "unauthorized" }, 401);
       const hash = tokenHash(body.token);
-      const grant = database.query<GrantRow, [string]>("SELECT token_hash, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
+      database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
+      const grant = database.query<GrantRow, [string]>("SELECT token_hash, user_id, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
       if (!grant || grant.consumed_at !== null || grant.expires_at <= timestamp) return json({ error: "unauthorized" }, 401);
       const challenge = randomToken();
       const flowId = randomToken(18);
@@ -460,8 +784,8 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         challenge,
         rpId: options.rpId,
         rpName: options.realmName,
-        userId: realmUserId,
-        userName: `${options.realmId} owner`,
+        userId: grant.user_id,
+        userName: `${options.realmId} user`,
         excludeCredentials: allCredentials(),
       });
       database.query("INSERT INTO ceremonies(id, kind, token_hash, challenge, expires_at, consumed_at) VALUES (?, 'register', ?, ?, ?, NULL)")
@@ -474,19 +798,26 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)
         || typeof body.flowId !== "string" || !FLOW_PATTERN.test(body.flowId)) return json({ error: "invalid request" }, 400);
       const hash = tokenHash(body.token);
-      const ceremony = claimCeremony(body.flowId, "register", hash);
+      const flowId = body.flowId;
+      const ceremony = claimCeremony(flowId, "register", hash);
       if (!ceremony) return json({ error: "unauthorized" }, 401);
       const result = await engine.verifyRegistration({ challenge: ceremony.challenge, expectedOrigin: options.publicOrigin, rpId: options.rpId, response: body.credential });
       if (!result.verified) return json({ error: "unauthorized", reason: result.reason ?? "malformed-response" }, 401);
       let sessionToken: string | undefined;
       const commit = database.transaction(() => {
-        const consumed = database.query("UPDATE registration_grants SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
-          .run(timestamp, hash, timestamp);
+        const credentialCount = database.query<{ count: number }, []>("SELECT count(*) AS count FROM credentials").get()?.count ?? 0;
+        if (credentialCount >= 32) return;
+        const grant = database.query<Pick<GrantRow, "user_id">, [string, number]>("SELECT user_id FROM registration_grants WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?").get(hash, timestamp);
+        if (!grant) return;
+        const consumed = database.query("DELETE FROM registration_grants WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
+          .run(hash, timestamp);
         if (consumed.changes !== 1) return;
+        const removedCeremony = database.query("DELETE FROM ceremonies WHERE id = ? AND kind = 'register' AND token_hash = ?")
+          .run(flowId, hash);
+        if (removedCeremony.changes !== 1) throw new Error("registration ceremony was not removed");
         const entry = result.credential;
-        database.query("INSERT INTO credentials(id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(entry.id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
-        database.query("UPDATE registration_grants SET consumed_at = ? WHERE consumed_at IS NULL").run(timestamp);
+        database.query("INSERT INTO credentials(id, user_id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(entry.id, grant.user_id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
         sessionToken = createSession();
       });
       try { commit.immediate(); } catch { return json({ error: "unauthorized" }, 401); }
@@ -548,37 +879,39 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
   function sessionById(sessionId: string): RealmSession | undefined {
     if (!/^[a-f0-9]{64}$/.test(sessionId)) return undefined;
-    const row = database.query<SessionRow, [string]>("SELECT expires_at FROM sessions WHERE token_hash = ?").get(sessionId);
+    const row = database.query<SessionRow, [string]>("SELECT expires_at, principal, capabilities_json FROM sessions WHERE token_hash = ?").get(sessionId);
     if (!row || row.expires_at <= now()) return undefined;
-    return Object.freeze({ id: sessionId, realmId: options.realmId, expiresAt: row.expires_at });
+    if (row.principal === "agent") {
+      let capabilities: unknown;
+      try { capabilities = row.capabilities_json ? JSON.parse(row.capabilities_json) : undefined; } catch { return undefined; }
+      if (!Array.isArray(capabilities) || capabilities.some((capability) => typeof capability !== "string")) return undefined;
+      return Object.freeze({
+        id: sessionId,
+        realmId: options.realmId,
+        expiresAt: row.expires_at,
+        principal: "agent" as const,
+        capabilities: Object.freeze([...capabilities]),
+      });
+    }
+    if (row.principal !== "human") return undefined;
+    return Object.freeze({ id: sessionId, realmId: options.realmId, expiresAt: row.expires_at, principal: "human" as const });
   }
 
   function sessionFor(request: Request): RealmSession | undefined {
-    const cookieHeader = request.headers.get("cookie");
-    if (!cookieHeader) return undefined;
-    let token: string | undefined;
-    for (const part of cookieHeader.split(";")) {
-      const separator = part.indexOf("=");
-      if (separator < 0 || part.slice(0, separator).trim() !== cookieName) continue;
-      token = part.slice(separator + 1).trim();
-      break;
-    }
+    const token = cookieValue(request, cookieName);
     if (!token || !TOKEN_PATTERN.test(token)) return undefined;
     return sessionById(tokenHash(token));
   }
 
   return Object.freeze({
     publicOrigin: options.publicOrigin,
-    issueRegistrationUrl(issueOptions = {}) {
-      const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
-      if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
-      if (registrationLocked()) throw new Error("registration is already locked");
-      const token = randomToken();
-      const timestamp = now();
-      database.query("INSERT INTO registration_grants(token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)")
-        .run(tokenHash(token), timestamp + ttlMs);
-      return `${options.publicOrigin}/auth/register#token=${token}`;
-    },
+    issueRegistrationUrl,
+    issueDesktopPairingUrl,
+    consumeDesktopPairing,
+    finalizeDesktopRelay,
+    revokePendingDesktopRelay,
+    desktopRelayForToken,
+    revokeDesktopRelay,
     handle,
     sessionFor,
     sessionById,
@@ -586,6 +919,10 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       invalidationListeners.add(listener);
       return () => invalidationListeners.delete(listener);
     },
-    close() { invalidationListeners.clear(); database.close(); },
+    onDesktopRelayInvalidated(listener) {
+      desktopRelayInvalidationListeners.add(listener);
+      return () => desktopRelayInvalidationListeners.delete(listener);
+    },
+    close() { invalidationListeners.clear(); desktopRelayInvalidationListeners.clear(); database.close(); },
   });
 }
