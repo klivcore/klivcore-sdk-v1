@@ -158,7 +158,7 @@ Run the Realm's tests and build before restarting it. Restart only the Realm pro
 Load the SDK's immutable App V2 publication and pass it to the Gateway:
 
 ```ts
-const appV2 = loadPublishedAppV2(
+const appV2 = await loadPublishedAppV2(
   await resolvePublishedAppV2Root(publicationRoot),
 );
 
