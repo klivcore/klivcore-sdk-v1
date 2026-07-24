@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 
 export type StartRealmConfig = Readonly<{
@@ -23,6 +24,14 @@ export type ActiveRealmRecord = Readonly<{
   localOrigin: string;
   publicOrigin: string;
   registrationControlToken: string;
+}>;
+export type ManagedTunnelRecord = Readonly<{
+  schemaVersion: 1;
+  pid: number;
+  realmId: string;
+  localOrigin: string;
+  publicOrigin: string;
+  sessionName: string;
 }>;
 
 const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
@@ -67,6 +76,41 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
     localOrigin: input.localOrigin as string,
     publicOrigin,
     registrationControlToken: input.registrationControlToken as string,
+  });
+}
+
+export function startRealmSessionNames(realmId: string, stateDir: string): Readonly<{ tunnel: string; realm: string }> {
+  const identity = createHash("sha256").update(stateDir).digest("hex").slice(0, 12);
+  const prefix = `klivcore-${realmId}-${identity}`;
+  return Object.freeze({ tunnel: `${prefix}-tunnel`, realm: `${prefix}-realm` });
+}
+
+export function parseManagedTunnelRecord(
+  value: unknown,
+  realmId: string,
+  port: number,
+  expectedSessionName: string,
+): ManagedTunnelRecord {
+  const invalid = (): never => { throw new TypeError("managed tunnel record is invalid"); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const input = value as Record<string, unknown>;
+  if (!exactKeys(input, ["localOrigin", "pid", "publicOrigin", "realmId", "schemaVersion", "sessionName"])
+    || input.schemaVersion !== 1 || input.realmId !== realmId
+    || input.localOrigin !== `http://127.0.0.1:${port}`
+    || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
+    || input.sessionName !== expectedSessionName || typeof input.publicOrigin !== "string") invalid();
+  const publicOrigin = input.publicOrigin as string;
+  let url: URL;
+  try { url = new URL(publicOrigin); } catch { return invalid(); }
+  if (url.origin !== publicOrigin || url.protocol !== "https:" || url.username || url.password
+    || !url.hostname.endsWith(".trycloudflare.com")) invalid();
+  return Object.freeze({
+    schemaVersion: 1,
+    pid: input.pid as number,
+    realmId,
+    localOrigin: input.localOrigin as string,
+    publicOrigin,
+    sessionName: expectedSessionName,
   });
 }
 
@@ -203,5 +247,39 @@ export async function waitForManagedPublicHealth(input: ManagedPublicHealthWait)
       }
     }
     await sleep(retryDelayMs);
+  }
+}
+
+const FRESH_BUN_HEALTH_PROBE = String.raw`
+const [origin, realmId] = process.argv.slice(1);
+try {
+  const response = await fetch(origin + "/health", { signal: AbortSignal.timeout(5000) });
+  const body = await response.json();
+  if (response.status !== 200 || body?.status !== "ok" || body?.realmId !== realmId) {
+    throw new Error("unexpected Realm health response");
+  }
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  const cause = error && typeof error === "object" && "cause" in error && error.cause
+    ? " (" + (error.cause.code ?? error.cause.message ?? String(error.cause)) + ")"
+    : "";
+  console.error(message + cause);
+  process.exit(1);
+}
+`;
+
+export async function probeHealthInFreshBun(origin: string, realmId: string): Promise<void> {
+  const child = Bun.spawn([process.execPath, "-e", FRESH_BUN_HEALTH_PROBE, origin, realmId], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || stdout.trim() || `fresh Bun health probe exited ${exitCode}`);
   }
 }

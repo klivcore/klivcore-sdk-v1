@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
+import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probeHealthInFreshBun, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -19,6 +19,19 @@ const stateDir = resolve(dirname(configPath), config.stateDir);
 await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await chmod(stateDir, 0o700);
 const activeRealmPath = resolve(stateDir, "active-realm.json");
+const managedTunnelPath = resolve(stateDir, "managed-tunnel.json");
+const workerMode = process.env.KLIVCORE_START_REALM_MODE;
+if (workerMode !== undefined && workerMode !== "tunnel" && workerMode !== "realm") {
+  throw new Error("invalid internal start-realm worker mode");
+}
+const forcedPublicOrigin = process.env.KLIVCORE_START_REALM_PUBLIC_ORIGIN;
+const managedTunnelPid = (() => {
+  const value = process.env.KLIVCORE_START_REALM_TUNNEL_PID;
+  if (value === undefined) return undefined;
+  const pid = Number(value);
+  if (!Number.isSafeInteger(pid) || pid < 1) throw new Error("invalid managed tunnel worker pid");
+  return pid;
+})();
 
 async function digest(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
@@ -165,6 +178,13 @@ async function removeOwnedActiveRecord(): Promise<void> {
   } catch { /* absent, stale, or foreign runtime records are not ours to remove */ }
 }
 
+async function removeOwnedTunnelRecord(): Promise<void> {
+  try {
+    const value = JSON.parse(await readFile(managedTunnelPath, "utf8")) as Record<string, unknown>;
+    if (value.pid === process.pid) await rm(managedTunnelPath, { force: true });
+  } catch { /* absent or foreign tunnel records are not ours to remove */ }
+}
+
 let tunnel: Bun.Subprocess<"ignore", "ignore", "pipe"> | undefined;
 let gateway: ReturnType<typeof createRealmGateway> | undefined;
 let auth: ReturnType<typeof createPasskeyAuth> | undefined;
@@ -174,6 +194,7 @@ async function stop(): Promise<void> {
   stopping = (async () => {
     gateway?.stop();
     await removeOwnedActiveRecord();
+    await removeOwnedTunnelRecord();
     auth?.close();
     if (tunnel && tunnel.exitCode === null) {
       tunnel.kill("SIGTERM");
@@ -192,7 +213,9 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
 
 try {
   let publicOrigin: string;
-  const tunnelPlan = planStartRealmTunnel(config);
+  const tunnelPlan = forcedPublicOrigin
+    ? planStartRealmTunnel(parseStartRealmConfig({ ...config, publicOrigin: forcedPublicOrigin }))
+    : planStartRealmTunnel(config);
   if (tunnelPlan.mode === "external") {
     publicOrigin = tunnelPlan.publicOrigin;
     console.log(`Using externally managed tunnel: ${publicOrigin}`);
@@ -208,6 +231,30 @@ try {
     ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
     publicOrigin = await captureTunnelOrigin(tunnel);
     console.log(`Quick Tunnel allocated: ${publicOrigin}`);
+  }
+  if (workerMode === "tunnel") {
+    if (!tunnel) throw new Error("managed tunnel worker requires a managed Quick Tunnel");
+    const sessionName = process.env.KLIVCORE_START_REALM_TUNNEL_SESSION;
+    if (!sessionName) throw new Error("managed tunnel worker session identity is missing");
+    const stage = `${managedTunnelPath}.stage-${crypto.randomUUID()}`;
+    try {
+      await writeFile(stage, `${JSON.stringify({
+        schemaVersion: 1,
+        pid: process.pid,
+        realmId: config.realm.id,
+        localOrigin: `http://127.0.0.1:${config.port}`,
+        publicOrigin,
+        sessionName,
+      })}\n`, { flag: "wx", mode: 0o600 });
+      await rename(stage, managedTunnelPath);
+      await chmod(managedTunnelPath, 0o600);
+    } finally {
+      await rm(stage, { force: true });
+    }
+    console.log(`Managed Quick Tunnel ready: ${publicOrigin}`);
+    const code = await tunnel.exited;
+    await removeOwnedTunnelRecord();
+    process.exit(code);
   }
   const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
   const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
@@ -253,11 +300,14 @@ try {
   });
   await waitForHealth(gateway.endpoint, config.realm.id, 10_000);
   console.log(`Local Realm health: ok (${gateway.endpoint})`);
-  if (tunnel) {
-    const managedTunnel = tunnel;
+  if (tunnel || managedTunnelPid) {
+    const tunnelExitCode = (): number | null => {
+      if (tunnel) return tunnel.exitCode;
+      try { process.kill(managedTunnelPid!, 0); return null; } catch { return 1; }
+    };
     await waitForManagedPublicHealth({
-      probe: () => waitForHealth(publicOrigin, config.realm.id, 5_000),
-      tunnelExitCode: () => managedTunnel.exitCode,
+      probe: () => probeHealthInFreshBun(publicOrigin, config.realm.id),
+      tunnelExitCode,
       onWaiting: (message) => {
         console.error(`Realm is locally ready; waiting for Quick Tunnel public health: ${message}`);
         console.error(`Realm URL (propagating): ${publicOrigin}`);
@@ -282,10 +332,12 @@ try {
   } finally {
     await rm(activeStage, { force: true });
   }
-  const registrationUrl = await issueRegistrationUrl();
   console.log("\nRealm ready");
   console.log(`Realm URL: ${publicOrigin}`);
-  console.log(`Registration URL (one use, expires in five minutes): ${registrationUrl}`);
+  if (!workerMode) {
+    const registrationUrl = await issueRegistrationUrl();
+    console.log(`Registration URL (one use, expires in five minutes): ${registrationUrl}`);
+  }
   console.log(`Registration URL command: start-realm registration-url ${configPath}`);
   console.log("Next steps:");
   console.log("  1. Open the registration URL now and create the first passkey.");
