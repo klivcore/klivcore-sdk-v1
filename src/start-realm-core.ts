@@ -60,6 +60,27 @@ export function formatRegistrationUrlBlock(value: string): string {
   ].join("\n");
 }
 
+export function renderLoopbackSshdDropIn(user: string, authorizedKeysFile: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(user)
+    || !authorizedKeysFile.startsWith("/")
+    || /[\u0000-\u0020\u007f-\u009f]/u.test(authorizedKeysFile)) {
+    throw new Error("invalid loopback SSH Gateway configuration");
+  }
+  return [
+    `Match User ${user} LocalAddress 127.0.0.1`,
+    `    AuthorizedKeysFile .ssh/authorized_keys ${authorizedKeysFile}`,
+    "Match all",
+    "",
+  ].join("\n");
+}
+
+export function effectiveSshdUsesAuthorizedKeysFile(output: string, authorizedKeysFile: string): boolean {
+  return output.split(/\r?\n/u).some((line) => {
+    const fields = line.trim().split(/\s+/u);
+    return fields[0]?.toLowerCase() === "authorizedkeysfile" && fields.slice(1).includes(authorizedKeysFile);
+  });
+}
+
 const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
 
 function validLauncherHost(host: string): boolean {

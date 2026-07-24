@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
+  effectiveSshdUsesAuthorizedKeysFile,
   formatRegistrationUrlBlock,
   parseActiveRealmRecord,
   parseManagedTunnelRecord,
@@ -8,6 +9,7 @@ import {
   parseStartRealmConfig,
   probeHealthInFreshBun,
   probePublicHealth,
+  renderLoopbackSshdDropIn,
   startRealmSessionNames,
   type ManagedTunnelRecord,
 } from "./start-realm-core";
@@ -42,6 +44,46 @@ async function run(command: readonly string[], env?: Readonly<Record<string, str
     child.exited,
   ]);
   return Object.freeze({ code, stdout, stderr });
+}
+
+async function ensureLoopbackSshGateway(): Promise<void> {
+  const ssh = config.desktop?.ssh;
+  if (!ssh || ssh.host !== "127.0.0.1" || ssh.port !== 22 || process.platform !== "linux") return;
+  const authorizedKeysFile = resolve(stateDir, "desktop-authorized-keys");
+  const context = `user=${ssh.user},host=${config.realm.id}.klivcore.invalid,addr=127.0.0.1,laddr=127.0.0.1,lport=22`;
+  const effective = await run(["sudo", "-n", "sshd", "-T", "-C", context]);
+  if (effective.code === 0 && effectiveSshdUsesAuthorizedKeysFile(effective.stdout, authorizedKeysFile)) {
+    console.log("Reusing SSH Gateway host integration");
+    return;
+  }
+  const target = "/etc/ssh/sshd_config.d/99-klivcore-realm-gateway.conf";
+  const exists = await run(["sudo", "-n", "test", "-e", target]);
+  if (exists.code === 0) throw new Error(`SSH Gateway host integration exists but is ineffective: ${target}`);
+  const stage = resolve(stateDir, ".sshd-realm-gateway.conf");
+  await writeFile(stage, renderLoopbackSshdDropIn(ssh.user, authorizedKeysFile), { mode: 0o600 });
+  try {
+    const install = await run(["sudo", "-n", "install", "-m", "0644", stage, target]);
+    if (install.code !== 0) throw new Error(install.stderr.trim() || "passwordless sudo is required to configure the SSH Gateway");
+    const validate = await run(["sudo", "-n", "sshd", "-t"]);
+    if (validate.code !== 0) {
+      await run(["sudo", "-n", "rm", "-f", target]);
+      throw new Error(validate.stderr.trim() || "sshd rejected the SSH Gateway configuration");
+    }
+    const reload = await run(["sudo", "-n", "systemctl", "reload", "sshd"]);
+    if (reload.code !== 0) {
+      await run(["sudo", "-n", "rm", "-f", target]);
+      throw new Error(reload.stderr.trim() || "failed to reload sshd after SSH Gateway setup");
+    }
+    const verified = await run(["sudo", "-n", "sshd", "-T", "-C", context]);
+    if (verified.code !== 0 || !effectiveSshdUsesAuthorizedKeysFile(verified.stdout, authorizedKeysFile)) {
+      await run(["sudo", "-n", "rm", "-f", target]);
+      await run(["sudo", "-n", "systemctl", "reload", "sshd"]);
+      throw new Error("sshd did not activate the Realm Desktop authorized-keys projection");
+    }
+    console.log("Configured and verified SSH Gateway host integration");
+  } finally {
+    await rm(stage, { force: true });
+  }
 }
 
 async function tmux(args: readonly string[]): Promise<Readonly<{ code: number; stdout: string; stderr: string }>> {
@@ -189,6 +231,8 @@ if (invocation.command === "registration-url") {
   console.log(await registrationUrl());
   process.exit(0);
 }
+
+await ensureLoopbackSshGateway();
 
 const tmuxVersion = await tmux(["-V"]);
 if (tmuxVersion.code !== 0) throw new Error("start-realm requires tmux for durable managed sessions");
