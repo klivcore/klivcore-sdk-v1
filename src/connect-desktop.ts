@@ -834,6 +834,11 @@ export async function listenDesktop(realmId: string, port = 2222, log: (message:
   const sshPublicKey = await loadOrCreateDesktopSshPublicKey(paths);
   await recoverRotation(paths, fetch, sshPublicKey);
   const profile = await loadProfile(realmId);
+  const existingConfig = await safeOptionalTextSnapshot(paths.sshConfig, 1024 * 1024);
+  preflightManagedSshConfig(existingConfig.text);
+  const managedBlock = renderManagedSshBlock({ realmId, sshUser: profile.sshUser, port });
+  const nextConfig = mergeManagedSshConfig(existingConfig.text, realmId, managedBlock);
+  if (!existingConfig.exists || existingConfig.text !== nextConfig) await atomicPrivateWrite(paths.sshConfig, nextConfig);
   const controller = new AbortController();
   const shutdown = () => controller.abort();
   process.once("SIGINT", shutdown);
