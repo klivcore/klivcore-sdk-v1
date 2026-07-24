@@ -10,7 +10,7 @@ The SDK is incomplete if an external agent needs private instructions to configu
 2. choose and apply bounded Realm branding;
 3. configure the exact browser-visible origin used by WebAuthn;
 4. start a private loopback Realm and its public HTTPS tunnel in the correct order;
-5. bootstrap the first passkey without logging registration capability material;
+5. issue short-lived single-use registration URLs for multiple users without persisting plaintext capability material;
 6. run tests, build, conformance, and public deployment checks;
 7. diagnose failures at the Realm, tunnel, authentication, and publication boundaries.
 
@@ -30,10 +30,30 @@ Start from `examples/start-realm.config.json`. The command:
 4. starts Quick Tunnel first and captures its generated HTTPS origin;
 5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
 6. verifies local and public `/health` responses identify the configured Realm;
-7. writes first-registration material only to a mode-`0600` private file;
-8. prints the safe Realm URL, registration file path, and optional **Connect Desktop SSH URL**.
+7. writes a mode-`0600` active-runtime record containing the verified origin and process identity, but no registration secret;
+8. prints the safe Realm URL, registration command, and optional **Connect Desktop SSH URL**.
 
 The foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
+
+### Give a user a registration URL
+
+While the Realm is running, an operating agent generates a fresh registration URL with:
+
+```bash
+bunx --package https://github.com/Klivcore/klivcore-sdk-v1 \
+  start-realm registration-url config.json
+```
+
+The command verifies the private active-runtime record, running process, exact local Realm identity, and exact public Realm identity before issuing the URL. It prints one URL and exits. The URL:
+
+- expires after five minutes;
+- is valid for one successful passkey registration;
+- represents a distinct human credential for this Realm;
+- is stored only as a SHA-256 hash in the Realm database;
+- has its grant and registration ceremony physically deleted in the same transaction that saves the credential;
+- does not invalidate other users' outstanding registration URLs.
+
+When the user explicitly asks for a registration URL, the agent runs this command and returns the exact output only in that private conversation. The agent must not place the URL in logs, issues, commits, summaries, memory, or public channels. Generate a new URL for every user; never reuse one. Expired grants are rejected and physically removed. Normal Realm startup never generates a registration URL.
 
 ## Install and verify the SDK
 
@@ -140,9 +160,9 @@ Do not start the Realm with a guessed origin, a stale Quick Tunnel URL, or only 
 
 A production launcher should capture the generated origin, pass it directly to the Realm process, preserve both process identities, and stop or restart only the failed component. It must not expose the loopback gateway on `0.0.0.0` merely to make the tunnel work.
 
-## First-user passkey registration
+## Template passkey registration
 
-The template never prints registration capability material. To request initial registration, provide a new private output path:
+The standalone template never prints registration capability material. To request a registration URL, provide a new private output path:
 
 ```bash
 REALM_PUBLIC_ORIGIN=https://generated-name.trycloudflare.com \
@@ -150,7 +170,7 @@ REALM_REGISTRATION_FILE="$HOME/.local/state/example-realm/registration-url" \
 bun run dev
 ```
 
-The server creates that file once with mode `0600`. Open the URL in the intended human browser, complete registration, then delete the file. Do not paste the URL into chat, logs, source control, shell history, or monitoring events. After the first credential is registered, the Realm locks further initial registration.
+The server creates that file once with mode `0600`. Deliver the URL privately to the intended human, complete registration within five minutes, then delete the file. The URL is single-use and its database grant is deleted immediately after successful registration. A later run with a new output path can issue a separate URL for another user. Do not put the URL in logs, source control, shell history, monitoring events, summaries, or memory.
 
 Omit `REALM_REGISTRATION_FILE` during normal startup.
 

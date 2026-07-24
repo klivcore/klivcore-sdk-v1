@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "@klivcore/sdk-v1/app-launcher";
 import { createPasskeyAuth, createRealmGateway, type RealmGatewayConfig } from "@klivcore/sdk-v1/server";
@@ -56,12 +56,17 @@ const config = {
 const gateway = createRealmGateway(config);
 const registrationFile = process.env.REALM_REGISTRATION_FILE;
 if (registrationFile) {
-  await mkdir(dirname(registrationFile), { recursive: true, mode: 0o700 });
-  await writeFile(registrationFile, `${gateway.issueRegistrationUrl()}\n`, {
-    encoding: "utf8",
-    flag: "wx",
-    mode: 0o600,
-  });
-  console.log(`Initial registration URL written to private file ${registrationFile}`);
+  const registrationPath = resolve(registrationFile);
+  await mkdir(dirname(registrationPath), { recursive: true, mode: 0o700 });
+  const output = await open(registrationPath, "wx", 0o600);
+  let complete = false;
+  try {
+    await output.writeFile(`${gateway.issueRegistrationUrl()}\n`, "utf8");
+    complete = true;
+  } finally {
+    await output.close();
+    if (!complete) await rm(registrationPath, { force: true });
+  }
+  console.log(`Registration URL written to private file ${registrationPath}`);
 }
 console.log(`${realmName} listening at ${gateway.endpoint} for ${publicOrigin}`);

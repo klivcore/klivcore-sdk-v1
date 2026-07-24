@@ -3,19 +3,22 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseQuickTunnelUrl, parseStartRealmConfig, resolveCloudflaredAsset } from "./start-realm-core";
+import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, resolveCloudflaredAsset } from "./start-realm-core";
 
-const configArgument = process.argv[2];
-if (!configArgument || process.argv.length !== 3) {
-  console.error("Usage: start-realm config.json");
+let invocation: ReturnType<typeof parseStartRealmArgs>;
+try {
+  invocation = parseStartRealmArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
   process.exit(2);
 }
 
-const configPath = resolve(configArgument);
+const configPath = resolve(invocation.configPath);
 const config = parseStartRealmConfig(JSON.parse(await readFile(configPath, "utf8")));
 const stateDir = resolve(dirname(configPath), config.stateDir);
 await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await chmod(stateDir, 0o700);
+const activeRealmPath = resolve(stateDir, "active-realm.json");
 
 async function digest(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
@@ -106,6 +109,41 @@ async function waitForHealth(origin: string, realmId: string, timeoutMs: number)
   throw new Error(`Realm health check failed for ${origin}: ${last}`);
 }
 
+async function issueRegistrationUrl(): Promise<void> {
+  const info = await lstat(activeRealmPath).catch(() => undefined);
+  const getuid = process.getuid?.();
+  if (!info || !info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600
+    || info.size < 2 || info.size > 4_096 || (getuid !== undefined && info.uid !== getuid)) {
+    throw new Error("active Realm record is unavailable or unsafe; start the Realm first");
+  }
+  const record = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
+  try { process.kill(record.pid, 0); } catch { throw new Error("active Realm process is not running"); }
+  await waitForHealth(record.localOrigin, config.realm.id, 5_000);
+  await waitForHealth(record.publicOrigin, config.realm.id, 10_000);
+  const registrationAuth = createPasskeyAuth({
+    branding: Object.freeze({ canvasColor: config.realm.canvasColor }),
+    databasePath: resolve(stateDir, "auth.sqlite"),
+    realmId: config.realm.id,
+    realmName: config.realm.name,
+    publicOrigin: record.publicOrigin,
+    rpId: new URL(record.publicOrigin).hostname,
+  });
+  try { console.log(registrationAuth.issueRegistrationUrl()); }
+  finally { registrationAuth.close(); }
+}
+
+if (invocation.command === "registration-url") {
+  await issueRegistrationUrl();
+  process.exit(0);
+}
+
+async function removeOwnedActiveRecord(): Promise<void> {
+  try {
+    const record = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
+    if (record.pid === process.pid) await rm(activeRealmPath, { force: true });
+  } catch { /* absent, stale, or foreign runtime records are not ours to remove */ }
+}
+
 let tunnel: Bun.Subprocess<"ignore", "ignore", "pipe"> | undefined;
 let gateway: ReturnType<typeof createRealmGateway> | undefined;
 let auth: ReturnType<typeof createPasskeyAuth> | undefined;
@@ -113,6 +151,7 @@ let stopping: Promise<void> | undefined;
 async function stop(): Promise<void> {
   if (stopping) return stopping;
   stopping = (async () => {
+    await removeOwnedActiveRecord();
     gateway?.stop();
     auth?.close();
     if (tunnel && tunnel.exitCode === null) {
@@ -173,14 +212,26 @@ try {
       css: `:host{display:block;min-height:100%;background:${config.realm.canvasColor};color:#f7f3e8;font-family:ui-sans-serif,system-ui,sans-serif}main{box-sizing:border-box;min-height:100%;padding:clamp(3rem,9vw,7rem);display:grid;align-content:center}h1{font-size:clamp(3rem,8vw,7rem);margin:0}`,
     },
   });
-  const registrationFile = resolve(stateDir, "first-registration.url");
-  await writeFile(registrationFile, `${gateway.issueRegistrationUrl()}\n`, { mode: 0o600 });
-  await chmod(registrationFile, 0o600);
   await waitForHealth(gateway.endpoint, config.realm.id, 10_000);
   await waitForHealth(publicOrigin, config.realm.id, 45_000);
+  await rm(resolve(stateDir, "first-registration.url"), { force: true });
+  const activeStage = `${activeRealmPath}.stage-${crypto.randomUUID()}`;
+  try {
+    await writeFile(activeStage, `${JSON.stringify({
+      schemaVersion: 1,
+      pid: process.pid,
+      realmId: config.realm.id,
+      localOrigin: gateway.endpoint,
+      publicOrigin,
+    })}\n`, { flag: "wx", mode: 0o600 });
+    await rename(activeStage, activeRealmPath);
+    await chmod(activeRealmPath, 0o600);
+  } finally {
+    await rm(activeStage, { force: true });
+  }
   console.log("\nRealm ready");
   console.log(`Realm URL: ${publicOrigin}`);
-  console.log(`First registration file: ${registrationFile}`);
+  console.log(`Registration URL command: start-realm registration-url ${configPath}`);
   if (config.desktop) console.log(`Connect Desktop SSH URL: ${config.desktop.sshUrl}`);
   console.log("Stop: Ctrl-C");
   void tunnel.exited.then(async (code) => {

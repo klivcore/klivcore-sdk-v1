@@ -111,7 +111,7 @@ export type PasskeyAuth = Readonly<{
   close(): void;
 }>;
 
-type GrantRow = { token_hash: string; expires_at: number; consumed_at: number | null };
+type GrantRow = { token_hash: string; user_id: Uint8Array; expires_at: number; consumed_at: number | null };
 type CeremonyRow = { id: string; kind: string; token_hash: string | null; challenge: string; expires_at: number; consumed_at: number | null };
 type CredentialRow = { id: string; public_key: Uint8Array; counter: number; transports_json: string; device_type: string; backed_up: number };
 type SessionRow = { expires_at: number; principal: string; capabilities_json: string | null };
@@ -430,9 +430,11 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const database = new Database(databasePath, { create: true, strict: true });
   try { chmodSync(databasePath, 0o600); } catch { database.close(); throw new Error("passkey database permissions could not be restricted"); }
   database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  const realmUserId = createHash("sha256").update(`klivcore-realm-user\0${options.realmId}`).digest();
   database.exec(`
     CREATE TABLE IF NOT EXISTS registration_grants (
       token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
+      user_id BLOB NOT NULL CHECK(length(user_id) = 32),
       expires_at INTEGER NOT NULL,
       consumed_at INTEGER
     ) STRICT;
@@ -446,6 +448,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     ) STRICT;
     CREATE TABLE IF NOT EXISTS credentials (
       id TEXT PRIMARY KEY,
+      user_id BLOB NOT NULL CHECK(length(user_id) = 32),
       public_key BLOB NOT NULL,
       counter INTEGER NOT NULL CHECK(counter >= 0),
       transports_json TEXT NOT NULL,
@@ -469,12 +472,18 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       consumed_at INTEGER
     ) STRICT;
   `);
+  const grantColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(registration_grants)").all().map((column) => column.name));
+  if (!grantColumns.has("user_id")) database.exec("DELETE FROM registration_grants; ALTER TABLE registration_grants ADD COLUMN user_id BLOB");
+  const credentialColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(credentials)").all().map((column) => column.name));
+  if (!credentialColumns.has("user_id")) {
+    database.exec("ALTER TABLE credentials ADD COLUMN user_id BLOB");
+    database.query("UPDATE credentials SET user_id = ? WHERE user_id IS NULL").run(realmUserId);
+  }
   const sessionColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(sessions)").all().map((column) => column.name));
   if (!sessionColumns.has("principal")) database.exec("ALTER TABLE sessions ADD COLUMN principal TEXT NOT NULL DEFAULT 'human' CHECK(principal IN ('human', 'agent'))");
   if (!sessionColumns.has("capabilities_json")) database.exec("ALTER TABLE sessions ADD COLUMN capabilities_json TEXT");
   const engine = options.engine ?? defaultEngine;
   const invalidationListeners = new Set<(sessionId: string) => void>();
-  const realmUserId = createHash("sha256").update(`klivcore-realm-user\0${options.realmId}`).digest();
   const cookieName = publicUrl.protocol === "https:"
     ? `__Host-kc-${options.realmId}-session`
     : `kc-${options.realmId}-session`;
@@ -485,7 +494,6 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const pairingCookie = (token: string) => `${pairingCookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(AGENT_PAIRING_TTL_MS / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
 
   const allCredentials = () => database.query<CredentialRow, []>("SELECT id, public_key, counter, transports_json, device_type, backed_up FROM credentials ORDER BY id LIMIT 32").all().map(storedCredential);
-  const registrationLocked = () => database.query<{ present: number }, []>("SELECT EXISTS(SELECT 1 FROM credentials LIMIT 1) AS present").get()?.present === 1;
   const createSession = (principal: "human" | "agent" = "human", capabilities?: readonly string[]) => {
     const token = randomToken();
     const createdAt = now();
@@ -574,9 +582,9 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
     if (url.pathname === "/v1/auth/register/options") {
       if (!exactKeys(body, ["token"]) || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)) return json({ error: "invalid request" }, 400);
-      if (registrationLocked()) return json({ error: "unauthorized" }, 401);
       const hash = tokenHash(body.token);
-      const grant = database.query<GrantRow, [string]>("SELECT token_hash, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
+      database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
+      const grant = database.query<GrantRow, [string]>("SELECT token_hash, user_id, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
       if (!grant || grant.consumed_at !== null || grant.expires_at <= timestamp) return json({ error: "unauthorized" }, 401);
       const challenge = randomToken();
       const flowId = randomToken(18);
@@ -584,8 +592,8 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         challenge,
         rpId: options.rpId,
         rpName: options.realmName,
-        userId: realmUserId,
-        userName: `${options.realmId} owner`,
+        userId: grant.user_id,
+        userName: `${options.realmId} user`,
         excludeCredentials: allCredentials(),
       });
       database.query("INSERT INTO ceremonies(id, kind, token_hash, challenge, expires_at, consumed_at) VALUES (?, 'register', ?, ?, ?, NULL)")
@@ -598,19 +606,26 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)
         || typeof body.flowId !== "string" || !FLOW_PATTERN.test(body.flowId)) return json({ error: "invalid request" }, 400);
       const hash = tokenHash(body.token);
-      const ceremony = claimCeremony(body.flowId, "register", hash);
+      const flowId = body.flowId;
+      const ceremony = claimCeremony(flowId, "register", hash);
       if (!ceremony) return json({ error: "unauthorized" }, 401);
       const result = await engine.verifyRegistration({ challenge: ceremony.challenge, expectedOrigin: options.publicOrigin, rpId: options.rpId, response: body.credential });
       if (!result.verified) return json({ error: "unauthorized", reason: result.reason ?? "malformed-response" }, 401);
       let sessionToken: string | undefined;
       const commit = database.transaction(() => {
-        const consumed = database.query("UPDATE registration_grants SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
-          .run(timestamp, hash, timestamp);
+        const credentialCount = database.query<{ count: number }, []>("SELECT count(*) AS count FROM credentials").get()?.count ?? 0;
+        if (credentialCount >= 32) return;
+        const grant = database.query<Pick<GrantRow, "user_id">, [string, number]>("SELECT user_id FROM registration_grants WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?").get(hash, timestamp);
+        if (!grant) return;
+        const consumed = database.query("DELETE FROM registration_grants WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
+          .run(hash, timestamp);
         if (consumed.changes !== 1) return;
+        const removedCeremony = database.query("DELETE FROM ceremonies WHERE id = ? AND kind = 'register' AND token_hash = ?")
+          .run(flowId, hash);
+        if (removedCeremony.changes !== 1) throw new Error("registration ceremony was not removed");
         const entry = result.credential;
-        database.query("INSERT INTO credentials(id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(entry.id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
-        database.query("UPDATE registration_grants SET consumed_at = ? WHERE consumed_at IS NULL").run(timestamp);
+        database.query("INSERT INTO credentials(id, user_id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(entry.id, grant.user_id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
         sessionToken = createSession();
       });
       try { commit.immediate(); } catch { return json({ error: "unauthorized" }, 401); }
@@ -701,11 +716,16 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     issueRegistrationUrl(issueOptions = {}) {
       const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
       if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
-      if (registrationLocked()) throw new Error("registration is already locked");
       const token = randomToken();
       const timestamp = now();
-      database.query("INSERT INTO registration_grants(token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)")
-        .run(tokenHash(token), timestamp + ttlMs);
+      const reserve = database.transaction(() => {
+        database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
+        const capacity = database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0;
+        if (capacity >= 32) throw new Error("registration URL limit reached");
+        database.query("INSERT INTO registration_grants(token_hash, user_id, expires_at, consumed_at) VALUES (?, ?, ?, NULL)")
+          .run(tokenHash(token), randomBytes(32), timestamp + ttlMs);
+      });
+      reserve.immediate();
       return `${options.publicOrigin}/auth/register#token=${token}`;
     },
     handle,

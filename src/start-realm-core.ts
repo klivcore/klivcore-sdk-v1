@@ -7,6 +7,48 @@ export type StartRealmConfig = Readonly<{
 }>;
 
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
+export type StartRealmArgs = Readonly<{ command: "run" | "registration-url"; configPath: string }>;
+export type ActiveRealmRecord = Readonly<{
+  schemaVersion: 1;
+  pid: number;
+  realmId: string;
+  localOrigin: string;
+  publicOrigin: string;
+}>;
+
+const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
+
+export function parseStartRealmArgs(args: readonly string[]): StartRealmArgs {
+  if (args.length === 1 && args[0] && args[0] !== "registration-url") return Object.freeze({ command: "run", configPath: args[0] });
+  if (args.length === 2 && args[0] === "registration-url" && args[1]) {
+    return Object.freeze({ command: "registration-url", configPath: args[1] });
+  }
+  throw new TypeError(usage);
+}
+
+export function parseActiveRealmRecord(value: unknown, realmId: string, port: number): ActiveRealmRecord {
+  const invalid = (): never => { throw new TypeError("active Realm record is invalid"); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const input = value as Record<string, unknown>;
+  if (!exactKeys(input, ["localOrigin", "pid", "publicOrigin", "realmId", "schemaVersion"])
+    || input.schemaVersion !== 1 || input.realmId !== realmId
+    || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
+    || input.localOrigin !== `http://127.0.0.1:${port}`
+    || typeof input.publicOrigin !== "string") invalid();
+  const publicOrigin = input.publicOrigin as string;
+  if (typeof publicOrigin !== "string") invalid();
+  const publicUrl = (() => {
+    try { return new URL(publicOrigin); } catch { return invalid(); }
+  })();
+  if (publicUrl.origin !== publicOrigin || publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password) invalid();
+  return Object.freeze({
+    schemaVersion: 1,
+    pid: input.pid as number,
+    realmId,
+    localOrigin: input.localOrigin as string,
+    publicOrigin,
+  });
+}
 
 const cloudflaredVersion = "2026.7.3";
 const assets: Readonly<Record<string, CloudflaredAsset>> = Object.freeze({
