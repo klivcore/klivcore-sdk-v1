@@ -13,9 +13,9 @@
     ".": "./src/index.ts",
     "./app-launcher": "./src/app-launcher.ts",
     "./conformance": "./src/conformance.ts",
+    "./connect-desktop": "./src/connect-desktop.ts",
     "./server": "./src/server.ts",
-    "./start-realm": "./src/start-realm.ts",
-    "./connect-desktop": "./src/connect-desktop.ts"
+    "./start-realm": "./src/start-realm.ts"
   },
   "scripts": {
     "app": "bun bin/klivcore.ts",
