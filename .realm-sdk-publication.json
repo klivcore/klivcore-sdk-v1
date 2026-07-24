@@ -62,18 +62,18 @@
     },
     {
       "path": "src/start-realm-coordinator.ts",
-      "bytes": 9227,
-      "sha256": "5b388420428aedad736c93a2a8ffe4601ce81d548a0dce083c1d7aaa5d0878a3"
+      "bytes": 9244,
+      "sha256": "1597bf3e808badf4298265586e0cd109810886c8c6e46f75117bc6163fbd6324"
     },
     {
       "path": "src/start-realm-core.ts",
-      "bytes": 12483,
-      "sha256": "f389699e8f4cfd9b4df369b09c6455db842ec21a8fc94eaba1a055c9e91dea91"
+      "bytes": 14548,
+      "sha256": "07ef11cac7f2ff5f31ff1949a383e9f943af848809acf98992cad31d76603150"
     },
     {
       "path": "src/start-realm.ts",
-      "bytes": 15420,
-      "sha256": "9bf4ef6abcaef8708232066a2cdb48ac17518f501615315d9c85616550de34f5"
+      "bytes": 15412,
+      "sha256": "10d0661312850dc8b20a5538fd720cdc82ea1d281987726f6206ef0701c18d0b"
     },
     {
       "path": "templates/minimal-realm/README.md",

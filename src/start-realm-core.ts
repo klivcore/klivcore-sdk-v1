@@ -283,3 +283,61 @@ export async function probeHealthInFreshBun(origin: string, realmId: string): Pr
     throw new Error(stderr.trim() || stdout.trim() || `fresh Bun health probe exited ${exitCode}`);
   }
 }
+
+async function probeHealthWithDnsOverHttps(origin: string, realmId: string): Promise<void> {
+  const child = Bun.spawn([
+    "curl",
+    "--silent",
+    "--show-error",
+    "--fail",
+    "--max-time", "10",
+    "--max-filesize", "4096",
+    "--proto", "=https",
+    "--doh-url", "https://1.1.1.1/dns-query",
+    `${origin}/health`,
+  ], {
+    stdin: "ignore",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(stderr.trim() || stdout.trim() || `DNS-over-HTTPS health probe exited ${exitCode}`);
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(stdout);
+  } catch {
+    throw new Error("DNS-over-HTTPS health probe returned invalid JSON");
+  }
+  if (!body || typeof body !== "object" || (body as { status?: unknown }).status !== "ok" || (body as { realmId?: unknown }).realmId !== realmId) {
+    throw new Error("DNS-over-HTTPS health probe returned an unexpected Realm health response");
+  }
+}
+
+export async function probePublicHealth(
+  origin: string,
+  realmId: string,
+  probes: Readonly<{
+    normalProbe?: (origin: string, realmId: string) => Promise<void>;
+    dnsOverHttpsProbe?: (origin: string, realmId: string) => Promise<void>;
+  }> = {},
+): Promise<void> {
+  const normalProbe = probes.normalProbe ?? probeHealthInFreshBun;
+  const dnsOverHttpsProbe = probes.dnsOverHttpsProbe ?? probeHealthWithDnsOverHttps;
+  try {
+    await normalProbe(origin, realmId);
+  } catch (normalError) {
+    try {
+      await dnsOverHttpsProbe(origin, realmId);
+    } catch (dnsOverHttpsError) {
+      const normalMessage = normalError instanceof Error ? normalError.message : String(normalError);
+      const dnsOverHttpsMessage = dnsOverHttpsError instanceof Error ? dnsOverHttpsError.message : String(dnsOverHttpsError);
+      throw new Error(`normal DNS health probe failed: ${normalMessage}; DNS-over-HTTPS fallback failed: ${dnsOverHttpsMessage}`);
+    }
+  }
+}

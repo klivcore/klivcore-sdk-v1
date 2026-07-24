@@ -6,6 +6,7 @@ import {
   parseStartRealmArgs,
   parseStartRealmConfig,
   probeHealthInFreshBun,
+  probePublicHealth,
   startRealmSessionNames,
   type ManagedTunnelRecord,
 } from "./start-realm-core";
@@ -142,7 +143,7 @@ async function waitForRealm(expectedPublicOrigin: string): Promise<void> {
     try {
       const record = await readActiveRealm(expectedPublicOrigin);
       await probeHealthInFreshBun(record.localOrigin, config.realm.id);
-      await probeHealthInFreshBun(record.publicOrigin, config.realm.id);
+      await probePublicHealth(record.publicOrigin, config.realm.id);
       return;
     } catch {
       if (Date.now() >= nextReport) {

@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probeHealthInFreshBun, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
+import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -306,7 +306,7 @@ try {
       try { process.kill(managedTunnelPid!, 0); return null; } catch { return 1; }
     };
     await waitForManagedPublicHealth({
-      probe: () => probeHealthInFreshBun(publicOrigin, config.realm.id),
+      probe: () => probePublicHealth(publicOrigin, config.realm.id),
       tunnelExitCode,
       onWaiting: (message) => {
         console.error(`Realm is locally ready; waiting for Quick Tunnel public health: ${message}`);
