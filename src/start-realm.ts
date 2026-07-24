@@ -220,6 +220,7 @@ try {
     publicBindingCapabilities: ["realm:view"],
     appV2,
     auth,
+    desktop: config.desktop,
     defaultRoute: {
       id: "home",
       path: "/",
@@ -251,7 +252,7 @@ try {
   console.log("\nRealm ready");
   console.log(`Realm URL: ${publicOrigin}`);
   console.log(`Registration URL command: start-realm registration-url ${configPath}`);
-  if (config.desktop) console.log(`Connect Desktop SSH URL: ${config.desktop.sshUrl}`);
+  if (config.desktop) console.log("Connect Desktop: available from the authenticated Realm menu");
   console.log("Stop: Ctrl-C");
   void tunnel.exited.then(async (code) => {
     if (!stopping) {

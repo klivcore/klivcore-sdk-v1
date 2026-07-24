@@ -18,6 +18,7 @@ const CHALLENGE_TTL_MS = 2 * 60_000;
 const SESSION_TTL_MS = 8 * 60 * 60_000;
 const AGENT_SESSION_TTL_MS = 7 * 24 * 60 * 60_000;
 const AGENT_PAIRING_TTL_MS = 5 * 60_000;
+const DESKTOP_PAIRING_TTL_MS = 5 * 60_000;
 const MAX_REGISTRATION_TTL_MS = 10 * 60_000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,128}$/;
 const FLOW_PATTERN = /^[A-Za-z0-9_-]{16,128}$/;
@@ -105,10 +106,17 @@ export type RealmSession = Readonly<{
 export type PasskeyAuth = Readonly<{
   publicOrigin: string;
   issueRegistrationUrl(options?: Readonly<{ ttlMs?: number }>): string;
+  issueDesktopPairingUrl(request: Request): string;
+  consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
+  finalizeDesktopRelay(clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined;
+  revokePendingDesktopRelay(clientId: string, relayToken: string): boolean;
+  desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined;
+  revokeDesktopRelay(clientId: string, relayToken: string): boolean;
   handle(request: Request): Promise<Response | undefined>;
   sessionFor(request: Request): RealmSession | undefined;
   sessionById(sessionId: string): RealmSession | undefined;
   onSessionInvalidated(listener: (sessionId: string) => void): () => void;
+  onDesktopRelayInvalidated?(listener: (relayId: string) => void): () => void;
   close(): void;
 }>;
 
@@ -117,6 +125,9 @@ type CeremonyRow = { id: string; kind: string; token_hash: string | null; challe
 type CredentialRow = { id: string; public_key: Uint8Array; counter: number; transports_json: string; device_type: string; backed_up: number };
 type SessionRow = { expires_at: number; principal: string; capabilities_json: string | null };
 type AgentPairingRow = { id: string; expires_at: number; approved_at: number | null; consumed_at: number | null };
+type DesktopPairingRow = { token_hash: string; session_id: string; expires_at: number };
+type DesktopRelayRow = { id: string; client_hash: string; token_hash: string };
+type DesktopRelayCandidateRow = { id: string; client_hash: string; token_hash: string; pairing_hash: string; expires_at: number };
 
 export function approveAgentPairing(input: Readonly<{ databasePath: string; pairingId: string; now?: number }>): boolean {
   if (!/^[a-f0-9-]{36}$/.test(input.pairingId)) return false;
@@ -475,6 +486,26 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       approved_at INTEGER,
       consumed_at INTEGER
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_pairings (
+      token_hash TEXT PRIMARY KEY CHECK(length(token_hash) = 64),
+      session_id TEXT NOT NULL CHECK(length(session_id) = 64),
+      expires_at INTEGER NOT NULL,
+      FOREIGN KEY(session_id) REFERENCES sessions(token_hash) ON DELETE CASCADE
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_relays (
+      id TEXT PRIMARY KEY,
+      client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
+      token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
+      created_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS desktop_relay_candidates (
+      id TEXT PRIMARY KEY,
+      client_hash TEXT NOT NULL UNIQUE CHECK(length(client_hash) = 64),
+      token_hash TEXT NOT NULL UNIQUE CHECK(length(token_hash) = 64),
+      pairing_hash TEXT NOT NULL UNIQUE CHECK(length(pairing_hash) = 64),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    ) STRICT;
   `);
   const grantColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(registration_grants)").all().map((column) => column.name));
   if (!grantColumns.has("user_id")) database.exec("DELETE FROM registration_grants; ALTER TABLE registration_grants ADD COLUMN user_id BLOB");
@@ -486,8 +517,16 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const sessionColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(sessions)").all().map((column) => column.name));
   if (!sessionColumns.has("principal")) database.exec("ALTER TABLE sessions ADD COLUMN principal TEXT NOT NULL DEFAULT 'human' CHECK(principal IN ('human', 'agent'))");
   if (!sessionColumns.has("capabilities_json")) database.exec("ALTER TABLE sessions ADD COLUMN capabilities_json TEXT");
+  const desktopRelayColumns = new Set(database.query<{ name: string }, []>("PRAGMA table_info(desktop_relays)").all().map((column) => column.name));
+  if (!desktopRelayColumns.has("client_hash")) {
+    database.exec("ALTER TABLE desktop_relays ADD COLUMN client_hash TEXT");
+    const legacyRelays = database.query<{ id: string }, []>("SELECT id FROM desktop_relays").all();
+    for (const relay of legacyRelays) database.query("UPDATE desktop_relays SET client_hash = ? WHERE id = ?").run(tokenHash(`legacy-desktop-relay\0${relay.id}`), relay.id);
+    database.exec("CREATE UNIQUE INDEX IF NOT EXISTS desktop_relays_client_hash ON desktop_relays(client_hash)");
+  }
   const engine = options.engine ?? defaultEngine;
   const invalidationListeners = new Set<(sessionId: string) => void>();
+  const desktopRelayInvalidationListeners = new Set<(relayId: string) => void>();
   const cookieName = publicUrl.protocol === "https:"
     ? `__Host-kc-${options.realmId}-session`
     : `kc-${options.realmId}-session`;
@@ -539,6 +578,128 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     });
     reserve.immediate();
     return `${options.publicOrigin}/auth/register#token=${token}`;
+  }
+
+  function issueDesktopPairingUrl(request: Request): string {
+    const session = sessionFor(request);
+    if (!session || session.principal !== "human") throw new Error("Desktop pairing requires a human Realm session");
+    const token = randomToken();
+    const timestamp = now();
+    const reserve = database.transaction(() => {
+      database.query("DELETE FROM desktop_pairings WHERE expires_at <= ?").run(timestamp);
+      const outstanding = database.query<{ count: number }, []>("SELECT count(*) AS count FROM desktop_pairings").get()?.count ?? 0;
+      if (outstanding >= 8) throw new Error("Desktop pairing limit reached");
+      database.query("INSERT INTO desktop_pairings(token_hash, session_id, expires_at) VALUES (?, ?, ?)")
+        .run(tokenHash(token), session.id, timestamp + DESKTOP_PAIRING_TTL_MS);
+    });
+    reserve.immediate();
+    return `${options.publicOrigin}/connect-desktop#token=${token}`;
+  }
+
+  function consumeDesktopPairing(pairingToken: string, clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(pairingToken) || !/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const timestamp = now();
+    const pairingHash = tokenHash(pairingToken);
+    const relayHash = tokenHash(relayToken);
+    const clientHash = tokenHash(clientId);
+    let relayId: string | undefined;
+    const consume = database.transaction(() => {
+      database.query("DELETE FROM desktop_pairings WHERE expires_at <= ?").run(timestamp);
+      database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
+      const replay = database.query<DesktopRelayCandidateRow, [string, number]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE pairing_hash = ? AND expires_at > ?",
+      ).get(pairingHash, timestamp);
+      if (replay) {
+        if (replay.client_hash === clientHash && replay.token_hash === relayHash) relayId = replay.id;
+        return;
+      }
+      const pairing = database.query<DesktopPairingRow, [string, number, number]>(
+        "SELECT p.token_hash, p.session_id, p.expires_at FROM desktop_pairings p JOIN sessions s ON s.token_hash = p.session_id WHERE p.token_hash = ? AND p.expires_at > ? AND s.expires_at > ?",
+      ).get(pairingHash, timestamp, timestamp);
+      if (!pairing) return;
+      const pending = database.query<DesktopRelayCandidateRow, [string]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ?",
+      ).get(clientHash);
+      if (pending) return;
+      const existing = database.query<DesktopRelayRow, [string]>("SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?").get(clientHash);
+      const clients = database.query<{ count: number }, []>(
+        "SELECT count(*) AS count FROM (SELECT client_hash FROM desktop_relays UNION SELECT client_hash FROM desktop_relay_candidates)",
+      ).get()?.count ?? 0;
+      if (!existing && clients >= 32) return;
+      const removed = database.query("DELETE FROM desktop_pairings WHERE token_hash = ? AND expires_at > ?").run(pairingHash, timestamp);
+      if (removed.changes !== 1) return;
+      relayId = randomUUID();
+      database.query("INSERT INTO desktop_relay_candidates(id, client_hash, token_hash, pairing_hash, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(relayId, clientHash, relayHash, pairingHash, timestamp, timestamp + DESKTOP_PAIRING_TTL_MS);
+    });
+    try { consume.immediate(); } catch { return undefined; }
+    return relayId ? Object.freeze({ relayId }) : undefined;
+  }
+
+  function finalizeDesktopRelay(clientId: string, relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const timestamp = now();
+    const clientHash = tokenHash(clientId);
+    const relayHash = tokenHash(relayToken);
+    let promoted: Readonly<{ relayId: string; previousRelayId?: string }> | undefined;
+    const finalize = database.transaction(() => {
+      database.query("DELETE FROM desktop_relay_candidates WHERE expires_at <= ?").run(timestamp);
+      const active = database.query<DesktopRelayRow, [string, string]>(
+        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
+      ).get(clientHash, relayHash);
+      if (active) { promoted = Object.freeze({ relayId: active.id }); return; }
+      const candidate = database.query<DesktopRelayCandidateRow, [string, string, number]>(
+        "SELECT id, client_hash, token_hash, pairing_hash, expires_at FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ? AND expires_at > ?",
+      ).get(clientHash, relayHash, timestamp);
+      if (!candidate) return;
+      const previous = database.query<DesktopRelayRow, [string]>(
+        "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ?",
+      ).get(clientHash);
+      if (previous) database.query("DELETE FROM desktop_relays WHERE client_hash = ?").run(clientHash);
+      database.query("INSERT INTO desktop_relays(id, client_hash, token_hash, created_at) VALUES (?, ?, ?, ?)")
+        .run(candidate.id, clientHash, relayHash, timestamp);
+      database.query("DELETE FROM desktop_relay_candidates WHERE id = ?").run(candidate.id);
+      promoted = Object.freeze(previous
+        ? { relayId: candidate.id, previousRelayId: previous.id }
+        : { relayId: candidate.id });
+    });
+    try { finalize.immediate(); } catch { return undefined; }
+    if (promoted?.previousRelayId) {
+      for (const listener of desktopRelayInvalidationListeners) {
+        try { listener(promoted.previousRelayId); } catch { /* finalized rotation remains authoritative */ }
+      }
+    }
+    return promoted ? Object.freeze({ relayId: promoted.relayId }) : undefined;
+  }
+
+  function revokePendingDesktopRelay(clientId: string, relayToken: string): boolean {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return false;
+    const clientHash = tokenHash(clientId);
+    const relayHash = tokenHash(relayToken);
+    const active = database.query<DesktopRelayRow, [string, string]>(
+      "SELECT id, client_hash, token_hash FROM desktop_relays WHERE client_hash = ? AND token_hash = ?",
+    ).get(clientHash, relayHash);
+    if (active) return false;
+    database.query("DELETE FROM desktop_relay_candidates WHERE client_hash = ? AND token_hash = ?").run(clientHash, relayHash);
+    return true;
+  }
+
+  function desktopRelayForToken(relayToken: string): Readonly<{ relayId: string }> | undefined {
+    if (!/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return undefined;
+    const relay = database.query<DesktopRelayRow, [string]>("SELECT id FROM desktop_relays WHERE token_hash = ?").get(tokenHash(relayToken));
+    return relay ? Object.freeze({ relayId: relay.id }) : undefined;
+  }
+
+  function revokeDesktopRelay(clientId: string, relayToken: string): boolean {
+    if (!/^[a-f0-9-]{36}$/.test(clientId) || !/^[A-Za-z0-9_-]{43}$/.test(relayToken)) return false;
+    const revoked = database.query<DesktopRelayRow, [string, string]>(
+      "DELETE FROM desktop_relays WHERE client_hash = ? AND token_hash = ? RETURNING id",
+    ).get(tokenHash(clientId), tokenHash(relayToken));
+    if (!revoked) return false;
+    for (const listener of desktopRelayInvalidationListeners) {
+      try { listener(revoked.id); } catch { /* revocation remains authoritative */ }
+    }
+    return true;
   }
 
   async function handle(request: Request): Promise<Response | undefined> {
@@ -745,6 +906,12 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   return Object.freeze({
     publicOrigin: options.publicOrigin,
     issueRegistrationUrl,
+    issueDesktopPairingUrl,
+    consumeDesktopPairing,
+    finalizeDesktopRelay,
+    revokePendingDesktopRelay,
+    desktopRelayForToken,
+    revokeDesktopRelay,
     handle,
     sessionFor,
     sessionById,
@@ -752,6 +919,10 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       invalidationListeners.add(listener);
       return () => invalidationListeners.delete(listener);
     },
-    close() { invalidationListeners.clear(); database.close(); },
+    onDesktopRelayInvalidated(listener) {
+      desktopRelayInvalidationListeners.add(listener);
+      return () => desktopRelayInvalidationListeners.delete(listener);
+    },
+    close() { invalidationListeners.clear(); desktopRelayInvalidationListeners.clear(); database.close(); },
   });
 }

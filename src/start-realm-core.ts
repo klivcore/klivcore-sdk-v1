@@ -1,9 +1,13 @@
+import { isIP } from "node:net";
+
 export type StartRealmConfig = Readonly<{
   schemaVersion: 1;
   realm: Readonly<{ id: string; name: string; canvasColor: string }>;
   port: number;
   stateDir: string;
-  desktop?: Readonly<{ sshUrl: string }>;
+  desktop?: Readonly<{
+    ssh: Readonly<{ host: string; port: number; user: string; startingDirectory: string }>;
+  }>;
 }>;
 
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
@@ -18,6 +22,13 @@ export type ActiveRealmRecord = Readonly<{
 }>;
 
 const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
+
+function validLauncherHost(host: string): boolean {
+  if (host.length < 1 || host.length > 253 || /[\u0000-\u0020\u007f]/u.test(host)) return false;
+  if (isIP(host) !== 0) return true;
+  if (/^[0-9.]+$/.test(host)) return false;
+  return host.split(".").every((label) => /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+}
 
 export function parseStartRealmArgs(args: readonly string[]): StartRealmArgs {
   if (args.length === 1 && args[0] && args[0] !== "registration-url") return Object.freeze({ command: "run", configPath: args[0] });
@@ -88,19 +99,29 @@ export function parseStartRealmConfig(value: unknown): StartRealmConfig {
     || typeof realm.canvasColor !== "string" || !/^#[0-9a-f]{6}$/.test(realm.canvasColor)) invalid();
   if (!Number.isSafeInteger(input.port) || (input.port as number) < 1 || (input.port as number) > 65_535
     || typeof input.stateDir !== "string" || input.stateDir.length < 1 || input.stateDir.length > 1_024) invalid();
-  let desktop: Readonly<{ sshUrl: string }> | undefined;
+  let desktop: StartRealmConfig["desktop"];
   if (input.desktop !== undefined) {
     if (!input.desktop || typeof input.desktop !== "object" || Array.isArray(input.desktop)) invalid();
     const candidate = input.desktop as Record<string, unknown>;
-    if (!exactKeys(candidate, ["sshUrl"])) invalid();
-    const sshUrl = candidate.sshUrl;
-    if (typeof sshUrl !== "string") throw new TypeError("start-realm config is invalid");
-    let url: URL;
-    try { url = new URL(sshUrl); } catch { throw new TypeError("Desktop SSH URL must use ssh://"); }
-    if (url.protocol !== "ssh:" || url.username === "" || url.hostname === "" || url.password !== "") {
-      throw new TypeError("Desktop SSH URL must use ssh:// without a password");
-    }
-    desktop = Object.freeze({ sshUrl: url.href });
+    if (!exactKeys(candidate, ["ssh"]) || !candidate.ssh || typeof candidate.ssh !== "object" || Array.isArray(candidate.ssh)) invalid();
+    const ssh = candidate.ssh as Record<string, unknown>;
+    if (!exactKeys(ssh, ["host", "port", "startingDirectory", "user"])
+      || typeof ssh.host !== "string" || !validLauncherHost(ssh.host)
+      || !Number.isSafeInteger(ssh.port) || (ssh.port as number) < 1 || (ssh.port as number) > 65_535
+      || typeof ssh.user !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(ssh.user)
+      || typeof ssh.startingDirectory !== "string" || !ssh.startingDirectory.startsWith("/")
+      || ssh.startingDirectory.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(ssh.startingDirectory)) invalid();
+    const host = ssh.host as string;
+    const user = ssh.user as string;
+    const startingDirectory = ssh.startingDirectory as string;
+    desktop = Object.freeze({
+      ssh: Object.freeze({
+        host,
+        port: ssh.port as number,
+        user,
+        startingDirectory,
+      }),
+    });
   }
   return Object.freeze({
     schemaVersion: 1,

@@ -1,8 +1,16 @@
 import { HOST_API_VERSION, PROTOCOL_VERSION, SCHEMA_VERSION, parseRealmCatalog, parseRealmDescriptor } from "./contracts";
 import { sha256Hex } from "./client";
 import { createPasskeyAuth, parseRealmBranding, type PasskeyAuth, type RealmBranding, type RealmSession } from "./passkey-auth";
+import { isIP } from "node:net";
 
 export { createPasskeyAuth };
+
+function validDesktopSshHost(host: string): boolean {
+  if (host.length < 1 || host.length > 253 || /[\u0000-\u0020\u007f]/u.test(host)) return false;
+  if (isIP(host) !== 0) return true;
+  if (/^[0-9.]+$/.test(host)) return false;
+  return host.split(".").every((label) => /^(?=.{1,63}$)[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label));
+}
 
 export type RealmAppPublication = Readonly<{
   respond(request: Request, fallbackToIndex: boolean | undefined, branding: RealmBranding): Response | undefined;
@@ -67,6 +75,9 @@ export type RealmGatewayConfig = Readonly<{
   auth?: PasskeyAuth;
   httpRelays?: readonly RealmGatewayHttpRelay[];
   services?: readonly RealmGatewayService[];
+  desktop?: Readonly<{
+    ssh: Readonly<{ host: string; port: number; user: string; startingDirectory: string }>;
+  }>;
   defaultRoute: RealmGatewayRouteConfig;
   routes?: readonly RealmGatewayRouteConfig[];
 }>;
@@ -79,6 +90,93 @@ export type RunningRealmGateway = Readonly<{
   stop(): void;
 }>;
 
+type DesktopRelayTcp = { write(data: Uint8Array): number; end(): void; pause?(): void; resume?(): void };
+export type DesktopRelayFlow = Readonly<{
+  attachTcp(tcp: DesktopRelayTcp): void;
+  receiveWebSocket(data: Uint8Array): void;
+  receiveTcp(data: Uint8Array): void;
+  tcpDrain(): void;
+  webSocketDrain(): void;
+  close(): void;
+}>;
+
+const DESKTOP_RELAY_BUFFER_BYTES = 512 * 1024;
+
+export function createDesktopRelayFlow(channel: Readonly<{
+  send(data: Uint8Array): number;
+  bufferedAmount(): number;
+  close(code: number, reason: string): void;
+}>): DesktopRelayFlow {
+  let tcp: DesktopRelayTcp | undefined;
+  let closed = false;
+  let tcpPending: Uint8Array[] = [];
+  let tcpPendingBytes = 0;
+  let tcpPaused = false;
+  const fail = () => {
+    if (closed) return;
+    closed = true;
+    tcpPending = [];
+    tcpPendingBytes = 0;
+    try { tcp?.end(); } catch { /* deterministic relay shutdown */ }
+    channel.close(1011, "Desktop relay buffer limit exceeded");
+  };
+  const flushTcp = () => {
+    if (closed || !tcp) return;
+    while (tcpPending.length > 0) {
+      const frame = tcpPending[0]!;
+      let written = 0;
+      try { written = tcp.write(frame); } catch { fail(); return; }
+      if (written <= 0) return;
+      const accepted = Math.min(written, frame.byteLength);
+      tcpPendingBytes -= accepted;
+      if (accepted < frame.byteLength) { tcpPending[0] = frame.subarray(accepted); return; }
+      tcpPending.shift();
+    }
+  };
+  const pauseTcp = () => {
+    if (tcpPaused) return;
+    tcpPaused = true;
+    try { tcp?.pause?.(); } catch { fail(); }
+  };
+  const drainWebSocket = () => {
+    if (closed) return;
+    if (channel.bufferedAmount() > DESKTOP_RELAY_BUFFER_BYTES) { pauseTcp(); return; }
+    if (tcpPaused) {
+      tcpPaused = false;
+      try { tcp?.resume?.(); } catch { fail(); }
+    }
+  };
+  return Object.freeze({
+    attachTcp(value) { if (closed) { value.end(); return; } tcp = value; flushTcp(); if (tcpPaused) value.pause?.(); },
+    receiveWebSocket(data) {
+      if (closed) return;
+      if (tcpPendingBytes + data.byteLength > DESKTOP_RELAY_BUFFER_BYTES) { fail(); return; }
+      const frame = Uint8Array.from(data);
+      tcpPending.push(frame);
+      tcpPendingBytes += frame.byteLength;
+      flushTcp();
+    },
+    receiveTcp(data) {
+      if (closed) return;
+      if (channel.bufferedAmount() + data.byteLength > DESKTOP_RELAY_BUFFER_BYTES) { fail(); return; }
+      let sent = 0;
+      try { sent = channel.send(data); } catch { fail(); return; }
+      if (sent === 0) { fail(); return; }
+      if (sent === -1 || channel.bufferedAmount() > 0) pauseTcp();
+    },
+    tcpDrain: flushTcp,
+    webSocketDrain: drainWebSocket,
+    close() {
+      if (closed) return;
+      closed = true;
+      tcpPending = [];
+      tcpPendingBytes = 0;
+      try { tcp?.end(); } catch { /* deterministic relay shutdown */ }
+      tcp = undefined;
+    },
+  });
+}
+
 const corsHeaders = {
   "access-control-allow-headers": "authorization, content-type",
   "access-control-allow-methods": "GET, POST, OPTIONS",
@@ -88,6 +186,19 @@ const corsHeaders = {
 type RealmSocketData =
   | { authenticated: boolean; bindingId?: string; kind: "notifications" }
   | { authenticated: boolean; bindingId?: string; kind: "service"; service: RealmGatewayService; session?: RealmGatewayServiceSession }
+  | {
+    admitted: boolean;
+    authenticated: boolean;
+    authTimer?: ReturnType<typeof setTimeout>;
+    closed: boolean;
+    connectTimer?: ReturnType<typeof setTimeout>;
+    connecting: boolean;
+    dialPending: boolean;
+    flow?: DesktopRelayFlow;
+    kind: "desktop-ssh";
+    relayId?: string;
+    tcp?: DesktopRelayTcp;
+  }
   | {
     authenticated: true;
     kind: "http-relay";
@@ -112,6 +223,39 @@ function withHeaders(response: Response, extraHeaders: Readonly<Record<string, s
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(extraHeaders)) if (!headers.has(name)) headers.set(name, value);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function boundedJsonObject(request: Request, maxBytes = 4 * 1024): Promise<Record<string, unknown> | undefined> {
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") return undefined;
+  const declared = request.headers.get("content-length");
+  if (declared !== null && (!/^\d+$/.test(declared) || Number(declared) > maxBytes)) return undefined;
+  if (!request.body) return undefined;
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        void reader.cancel().catch(() => undefined);
+        return undefined;
+      }
+      chunks.push(next.value);
+    }
+  } catch { return undefined; }
+  finally { reader.releaseLock(); }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  } catch { return undefined; }
 }
 
 const relayRequestHeaderNames = Object.freeze(["accept", "authorization", "content-type"]);
@@ -157,6 +301,14 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   const trustedBindings = new Map<string, ReadonlySet<string>>();
   const activeBindingSockets = new Map<string, Set<BoundSocket>>();
   const activeSessionSockets = new Map<string, Set<BoundSocket>>();
+  const activeDesktopSockets = new Set<BoundSocket>();
+  const activeDesktopRelaySockets = new Map<string, Set<BoundSocket>>();
+  let desktopAdmissions = 0;
+  const releaseDesktopAdmission = (data: RealmSocketData) => {
+    if (data.kind !== "desktop-ssh" || !data.closed || data.dialPending || !data.admitted) return;
+    data.admitted = false;
+    desktopAdmissions = Math.max(0, desktopAdmissions - 1);
+  };
   const routeConfigs = [config.defaultRoute, ...(config.routes ?? [])];
   const services = [...(config.services ?? [])];
   const httpRelays = [...(config.httpRelays ?? [])];
@@ -169,6 +321,19 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     throw new TypeError("Realm binding limits are invalid");
   }
   if (httpRelays.length > 0 && !config.auth) throw new TypeError("Realm HTTP relays require session authentication");
+  if (config.desktop) {
+    const ssh = config.desktop.ssh;
+    if (!ssh || typeof ssh.host !== "string" || !validDesktopSshHost(ssh.host)
+      || !Number.isSafeInteger(ssh.port) || ssh.port < 1 || ssh.port > 65_535
+      || typeof ssh.user !== "string" || !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(ssh.user)
+      || typeof ssh.startingDirectory !== "string" || !ssh.startingDirectory.startsWith("/")
+      || ssh.startingDirectory.length > 1_024 || /[\u0000-\u001f\u007f]/u.test(ssh.startingDirectory)) {
+      throw new TypeError("Realm Desktop SSH configuration is invalid");
+    }
+    if (!config.auth || typeof config.auth.onDesktopRelayInvalidated !== "function") {
+      throw new TypeError("Realm Desktop SSH relay requires revocable session authentication");
+    }
+  }
   for (const [index, relay] of httpRelays.entries()) {
     if (!Number.isSafeInteger(relay.port) || relay.port < 1 || relay.port > 65_535
       || httpRelays.some((candidate, candidateIndex) => candidateIndex < index && candidate.port === relay.port)) {
@@ -280,6 +445,11 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     activeSessionSockets.delete(sessionId);
     for (const socket of sockets ?? []) socket.close(1008, "Realm session revoked");
   });
+  const unsubscribeDesktopRelayInvalidation = config.auth?.onDesktopRelayInvalidated?.((relayId) => {
+    const sockets = activeDesktopRelaySockets.get(relayId);
+    activeDesktopRelaySockets.delete(relayId);
+    for (const socket of sockets ?? []) socket.close(1008, "Desktop relay credential revoked");
+  });
 
   async function publication(origin: string) {
     const catalog = parseRealmCatalog({
@@ -310,6 +480,16 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     websocket: {
       maxPayloadLength: 512 * 1024,
       open(socket) {
+        if (socket.data.kind === "desktop-ssh") {
+          activeDesktopSockets.add(socket);
+          socket.data.flow = createDesktopRelayFlow({
+            send(data) { return socket.send(data); },
+            bufferedAmount() { return socket.getBufferedAmount(); },
+            close(code, reason) { socket.close(code, reason); },
+          });
+          socket.data.authTimer = setTimeout(() => socket.close(1008, "Desktop relay authentication timed out"), 5_000);
+          return;
+        }
         if (socket.data.kind !== "http-relay") return;
         const sessionSockets = activeSessionSockets.get(socket.data.sessionId) ?? new Set<BoundSocket>();
         sessionSockets.add(socket);
@@ -336,6 +516,96 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         });
       },
       message(socket, message) {
+        if (socket.data.kind === "desktop-ssh") {
+          if (!socket.data.authenticated) {
+            if (typeof message !== "string" || new TextEncoder().encode(message).byteLength > 1_024) {
+              socket.close(1008, "invalid Desktop relay authentication");
+              return;
+            }
+            let input: unknown;
+            try { input = JSON.parse(message); } catch {
+              socket.close(1008, "invalid Desktop relay authentication");
+              return;
+            }
+            const record = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+            const relay = record && Object.keys(record).sort().join(",") === "relayToken,type"
+              && record.type === "authenticate" && typeof record.relayToken === "string"
+              ? config.auth?.desktopRelayForToken(record.relayToken)
+              : undefined;
+            if (!relay || !config.desktop) {
+              socket.close(1008, "invalid Desktop relay authentication");
+              return;
+            }
+            socket.data.authenticated = true;
+            socket.data.relayId = relay.relayId;
+            const relaySockets = activeDesktopRelaySockets.get(relay.relayId) ?? new Set<BoundSocket>();
+            relaySockets.add(socket);
+            activeDesktopRelaySockets.set(relay.relayId, relaySockets);
+            socket.data.connecting = true;
+            socket.data.dialPending = true;
+            if (socket.data.authTimer) clearTimeout(socket.data.authTimer);
+            socket.data.authTimer = undefined;
+            socket.data.connectTimer = setTimeout(() => {
+              if (socket.data.kind !== "desktop-ssh" || socket.data.closed || !socket.data.connecting) return;
+              socket.data.connecting = false;
+              socket.close(1011, "Desktop SSH target timed out");
+            }, 5_000);
+            void Bun.connect({
+              hostname: config.desktop.ssh.host,
+              port: config.desktop.ssh.port,
+              socket: {
+                open(tcp) {
+                  if (socket.data.kind !== "desktop-ssh") { tcp.end(); return; }
+                  socket.data.dialPending = false;
+                  if (socket.data.closed || !socket.data.authenticated || !socket.data.connecting) {
+                    tcp.end();
+                    releaseDesktopAdmission(socket.data);
+                    return;
+                  }
+                  if (socket.data.connectTimer) clearTimeout(socket.data.connectTimer);
+                  socket.data.connectTimer = undefined;
+                  socket.data.tcp = tcp;
+                  socket.data.connecting = false;
+                  socket.data.flow?.attachTcp(tcp);
+                },
+                data(tcp, data) {
+                  if (socket.data.kind !== "desktop-ssh" || socket.data.closed || socket.data.tcp !== tcp) { tcp.end(); return; }
+                  socket.data.flow?.receiveTcp(data);
+                },
+                drain(tcp) {
+                  if (socket.data.kind === "desktop-ssh" && !socket.data.closed && socket.data.tcp === tcp) socket.data.flow?.tcpDrain();
+                },
+                close(tcp) {
+                  if (socket.data.kind === "desktop-ssh" && !socket.data.closed && socket.data.tcp === tcp) socket.close(1000, "Desktop SSH target closed");
+                },
+                error(_tcp) {
+                  if (socket.data.kind !== "desktop-ssh") return;
+                  socket.data.dialPending = false;
+                  if (!socket.data.closed) socket.close(1011, "Desktop SSH target unavailable");
+                  else releaseDesktopAdmission(socket.data);
+                },
+              },
+            }).catch(() => {
+              if (socket.data.kind !== "desktop-ssh") return;
+              socket.data.dialPending = false;
+              if (!socket.data.closed) socket.close(1011, "Desktop SSH target unavailable");
+              else releaseDesktopAdmission(socket.data);
+            });
+            return;
+          }
+          if (typeof message === "string") {
+            socket.close(1008, "Desktop relay requires binary SSH frames");
+            return;
+          }
+          const frame = new Uint8Array(message);
+          if (frame.byteLength > 256 * 1024) {
+            socket.close(1008, "Desktop SSH frame too large");
+            return;
+          }
+          if (socket.data.connecting || socket.data.tcp) socket.data.flow?.receiveWebSocket(frame);
+          else socket.close(1011, "Desktop SSH target unavailable");
+          return;
+        }
         if (socket.data.kind === "http-relay") {
           if (!config.auth?.sessionById(socket.data.sessionId)) {
             socket.close(1008, "Realm session expired");
@@ -418,7 +688,30 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           socket.close(1008, "invalid Realm service message");
         }
       },
+      drain(socket) {
+        if (socket.data.kind === "desktop-ssh" && !socket.data.closed) socket.data.flow?.webSocketDrain();
+      },
       close(socket) {
+        if (socket.data.kind === "desktop-ssh") {
+          activeDesktopSockets.delete(socket);
+          socket.data.closed = true;
+          socket.data.connecting = false;
+          if (socket.data.authTimer) clearTimeout(socket.data.authTimer);
+          socket.data.authTimer = undefined;
+          if (socket.data.connectTimer) clearTimeout(socket.data.connectTimer);
+          socket.data.connectTimer = undefined;
+          socket.data.flow?.close();
+          socket.data.flow = undefined;
+          socket.data.tcp = undefined;
+          if (socket.data.relayId) {
+            const relaySockets = activeDesktopRelaySockets.get(socket.data.relayId);
+            relaySockets?.delete(socket);
+            if (relaySockets?.size === 0) activeDesktopRelaySockets.delete(socket.data.relayId);
+            socket.data.relayId = undefined;
+          }
+          releaseDesktopAdmission(socket.data);
+          return;
+        }
         if (socket.data.kind === "http-relay") {
           const sessionSockets = activeSessionSockets.get(socket.data.sessionId);
           sessionSockets?.delete(socket);
@@ -452,6 +745,78 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       }
       const authResponse = await config.auth?.handle(request);
       if (authResponse) return authResponse;
+      if (config.desktop && request.method === "GET" && url.pathname === "/v1/desktop/ssh") {
+        if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return json({ error: "websocket upgrade required" }, 426);
+        const requestOrigin = request.headers.get("origin");
+        if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        if (desktopAdmissions >= 64) return json({ error: "Desktop relay unavailable" }, 429);
+        desktopAdmissions += 1;
+        if (bunServer.upgrade(request, {
+          data: { admitted: true, authenticated: false, closed: false, connecting: false, dialPending: false, kind: "desktop-ssh" },
+        })) return;
+        desktopAdmissions -= 1;
+        return json({ error: "websocket upgrade failed" }, 500);
+      }
+      if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing") {
+        if (request.headers.get("origin") !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        const session = config.auth!.sessionFor(request);
+        if (!session || session.realmId !== config.realmId || session.principal !== "human") return json({ error: "unauthorized" }, 401);
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).length !== 0) return json({ error: "invalid request" }, 400);
+        try { return json({ pairingUrl: config.auth!.issueDesktopPairingUrl(request) }, 201); }
+        catch { return json({ error: "Desktop pairing unavailable" }, 429); }
+      }
+      if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing/consume") {
+        const requestOrigin = request.headers.get("origin");
+        if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).sort().join(",") !== "clientId,pairingToken,relayToken"
+          || typeof body.pairingToken !== "string" || typeof body.clientId !== "string"
+          || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
+        const paired = config.auth!.consumeDesktopPairing(body.pairingToken, body.clientId, body.relayToken);
+        if (!paired) return json({ error: "unauthorized" }, 401);
+        const relayUrl = new URL(config.auth!.publicOrigin);
+        relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
+        relayUrl.pathname = "/v1/desktop/ssh";
+        return json({
+          schemaVersion: 1,
+          realmId: config.realmId,
+          realmName: config.name,
+          relayUrl: relayUrl.toString(),
+          sshUser: config.desktop.ssh.user,
+          startingDirectory: config.desktop.ssh.startingDirectory,
+        }, 201);
+      }
+      if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/relay/revoke") {
+        const requestOrigin = request.headers.get("origin");
+        if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
+          || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
+        return config.auth!.revokeDesktopRelay(body.clientId, body.relayToken)
+          ? new Response(null, { status: 204, headers: responseHeaders })
+          : json({ error: "unauthorized" }, 401);
+      }
+      if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing/finalize") {
+        const requestOrigin = request.headers.get("origin");
+        if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
+          || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
+        return config.auth!.finalizeDesktopRelay(body.clientId, body.relayToken)
+          ? new Response(null, { status: 204, headers: responseHeaders })
+          : json({ error: "unauthorized" }, 401);
+      }
+      if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing/revoke") {
+        const requestOrigin = request.headers.get("origin");
+        if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).sort().join(",") !== "clientId,relayToken"
+          || typeof body.clientId !== "string" || typeof body.relayToken !== "string") return json({ error: "invalid request" }, 400);
+        return config.auth!.revokePendingDesktopRelay(body.clientId, body.relayToken)
+          ? new Response(null, { status: 204, headers: responseHeaders })
+          : json({ error: "conflict" }, 409);
+      }
       const relayMatch = /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
       if (relayMatch) {
         const relay = httpRelays.find((candidate) => candidate.port === Number(relayMatch[1]));
@@ -611,6 +976,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     },
     stop() {
       unsubscribeSessionInvalidation?.();
+      unsubscribeDesktopRelayInvalidation?.();
       server.stop(true);
       config.auth?.close();
     },

@@ -8,6 +8,11 @@
   "port": 47002,
   "stateDir": "./my-realm-state",
   "desktop": {
-    "sshUrl": "ssh://user@realm-host.example"
+    "ssh": {
+      "host": "127.0.0.1",
+      "port": 22,
+      "user": "ubuntu",
+      "startingDirectory": "/home/ubuntu/my-realm"
+    }
   }
 }

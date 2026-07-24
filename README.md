@@ -12,7 +12,8 @@ The SDK is incomplete if an external agent needs private instructions to configu
 4. start a private loopback Realm and its public HTTPS tunnel in the correct order;
 5. issue short-lived single-use registration URLs for multiple users without persisting plaintext capability material;
 6. run tests, build, conformance, and public deployment checks;
-7. diagnose failures at the Realm, tunnel, authentication, and publication boundaries.
+7. connect system OpenSSH through the authenticated HTTPS Realm relay without a public SSH port;
+8. diagnose failures at the Realm, tunnel, authentication, relay, and publication boundaries.
 
 ## One-command fresh-server Realm
 
@@ -31,7 +32,7 @@ Start from `examples/start-realm.config.json`. The command:
 5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
 6. verifies local and public `/health` responses identify the configured Realm;
 7. writes a mode-`0600` active-runtime record containing the verified origins, process identity, and a random runtime-scoped registration-control capability;
-8. prints the safe Realm URL, registration command, and optional **Connect Desktop SSH URL**.
+8. prints the safe Realm URL, registration command, and whether authenticated **Connect Desktop** pairing is enabled.
 
 The foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
 
@@ -54,6 +55,14 @@ The command verifies the private active-runtime record, running process, exact l
 - does not invalidate other users' outstanding registration URLs.
 
 When the user explicitly asks for a registration URL, the agent runs this command and returns the exact output only in that private conversation. The agent must not place the URL in logs, issues, commits, summaries, memory, or public channels. Generate a new URL for every user; never reuse one. Expired grants are rejected and physically removed. Normal Realm startup never generates a registration URL.
+
+### Connect Hermes Desktop through the Realm
+
+Configure `desktop.ssh` with the fixed private SSH target reachable by the Realm process. For an EC2 instance hosting its own Realm, use `127.0.0.1`, port `22`, the ordinary SSH user, and the absolute Realm working directory. Do not put passwords, private keys, public tunnel URLs, or shell commands in the config.
+
+After passkey sign-in, choose **Connect Desktop** in the Realm menu. It copies a command containing a five-minute one-use pairing capability. Run that command on the machine containing Hermes Desktop. The command consumes the capability, creates a mode-`0600` relay profile, and installs a managed `~/.ssh/config` host named `klivcore-<realm-id>`. The helper authenticates a WSS connection through the existing Quick Tunnel; the Realm Gateway then connects only to its configured private SSH target.
+
+OpenSSH authentication and host-key verification remain end to end. The Realm relay credential authorizes only transport to the configured SSH service; it is not an administrator credential and does not replace the user's SSH key or agent. The private target is never returned to the browser or Desktop client.
 
 ## Install and verify the SDK
 
