@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
@@ -23,6 +24,20 @@ const activeRealmPath = resolve(stateDir, "active-realm.json");
 const managedTunnelPath = resolve(stateDir, "managed-tunnel.json");
 const workerPath = resolve(import.meta.dir, "start-realm.ts");
 const sessions = startRealmSessionNames(config.realm.id, stateDir);
+
+async function currentRuntimeRevision(): Promise<string> {
+  const hash = createHash("sha256");
+  try {
+    hash.update(await readFile(resolve(import.meta.dir, "../.realm-sdk-publication.json")));
+    hash.update(await readFile(resolve(import.meta.dir, "../app-v2/current.json")));
+  } catch {
+    hash.update(await readFile(import.meta.path));
+    hash.update(await readFile(workerPath));
+  }
+  return hash.digest("hex");
+}
+
+const runtimeRevision = await currentRuntimeRevision();
 
 await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await chmod(stateDir, 0o700);
@@ -203,16 +218,27 @@ async function waitForRealm(expectedPublicOrigin: string): Promise<void> {
 
 async function ensureRealm(publicOrigin: string, tunnelPid?: number): Promise<void> {
   if (await tmuxExists(sessions.realm)) {
-    console.log(`Reusing Realm session: ${sessions.realm}`);
-  } else {
+    let active: Awaited<ReturnType<typeof readActiveRealm>> | undefined;
+    try { active = await readActiveRealm(publicOrigin); } catch { /* readiness below reports invalid workers */ }
+    if (active && active.runtimeRevision !== runtimeRevision) {
+      console.log(`Updating Realm runtime: ${active.runtimeRevision?.slice(0, 12) ?? "legacy"} -> ${runtimeRevision.slice(0, 12)}`);
+      const stopped = await tmux(["kill-session", "-t", `=${sessions.realm}`]);
+      if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || "failed to stop outdated Realm session");
+      await rm(activeRealmPath, { force: true });
+    } else {
+      console.log(`Reusing Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
+    }
+  }
+  if (!await tmuxExists(sessions.realm)) {
     try {
       const stale = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
       if (!processIsAlive(stale.pid)) await rm(activeRealmPath, { force: true });
     } catch { await rm(activeRealmPath, { force: true }); }
-    console.log(`Starting Realm session: ${sessions.realm}`);
+    console.log(`Starting Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
     await startTmuxWorker(sessions.realm, {
       KLIVCORE_START_REALM_MODE: "realm",
       KLIVCORE_START_REALM_PUBLIC_ORIGIN: publicOrigin,
+      KLIVCORE_START_REALM_RUNTIME_REVISION: runtimeRevision,
       ...(tunnelPid ? { KLIVCORE_START_REALM_TUNNEL_PID: String(tunnelPid) } : {}),
     });
   }
@@ -244,6 +270,7 @@ const firstRegistrationUrl = await registrationUrl();
 
 console.log("\nRealm ready");
 console.log(`Realm URL: ${publicOrigin}`);
+console.log(`SDK runtime: ${runtimeRevision.slice(0, 12)}`);
 console.log(formatRegistrationUrlBlock(firstRegistrationUrl));
 console.log("Next steps:");
 console.log("  1. Open the registration URL now and create the first passkey.");

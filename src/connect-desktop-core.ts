@@ -116,12 +116,19 @@ export function mergeManagedSshConfig(existing: string, realmId: string, block: 
   const startMarker = marker(realmId, ">>>");
   const endMarker = marker(realmId, "<<<");
   const lines = existing.replace(/\r\n/g, "\n").split("\n");
-  const start = lines.indexOf(startMarker);
-  const end = lines.indexOf(endMarker);
-  if ((start < 0) !== (end < 0) || (start >= 0 && (end < start || lines.indexOf(startMarker, start + 1) >= 0 || lines.indexOf(endMarker, end + 1) >= 0))) {
-    throw new Error("Existing managed SSH config block is malformed");
+  const retained: string[] = [];
+  let removing = false;
+  for (const line of lines) {
+    if (line === startMarker) {
+      removing = true;
+      continue;
+    }
+    if (removing) {
+      if (line === endMarker) removing = false;
+      continue;
+    }
+    retained.push(line);
   }
-  if (start >= 0) lines.splice(start, end - start + 1);
-  const base = lines.join("\n").trim();
+  const base = retained.join("\n").trim();
   return `${block}\n${base ? `\n${base}\n` : ""}`;
 }

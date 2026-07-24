@@ -24,6 +24,10 @@ const workerMode = process.env.KLIVCORE_START_REALM_MODE;
 if (workerMode !== undefined && workerMode !== "tunnel" && workerMode !== "realm") {
   throw new Error("invalid internal start-realm worker mode");
 }
+const runtimeRevision = process.env.KLIVCORE_START_REALM_RUNTIME_REVISION;
+if (workerMode === "realm" && (!runtimeRevision || !/^[a-f0-9]{64}$/.test(runtimeRevision))) {
+  throw new Error("managed Realm worker runtime revision is missing or invalid");
+}
 const forcedPublicOrigin = process.env.KLIVCORE_START_REALM_PUBLIC_ORIGIN;
 const managedTunnelPid = (() => {
   const value = process.env.KLIVCORE_START_REALM_TUNNEL_PID;
@@ -278,6 +282,7 @@ try {
     name: config.realm.name,
     authorityEpoch: `${config.realm.id}-1`,
     generation: `${config.realm.id}-1`,
+    runtimeVersion: runtimeRevision?.slice(0, 12),
     capabilities: ["realm:view"],
     publicBindingCapabilities: ["realm:view"],
     appV2,
@@ -320,12 +325,13 @@ try {
   const activeStage = `${activeRealmPath}.stage-${crypto.randomUUID()}`;
   try {
     await writeFile(activeStage, `${JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: runtimeRevision ? 2 : 1,
       pid: process.pid,
       realmId: config.realm.id,
       localOrigin: gateway.endpoint,
       publicOrigin,
       registrationControlToken,
+      ...(runtimeRevision ? { runtimeRevision } : {}),
     })}\n`, { flag: "wx", mode: 0o600 });
     await rename(activeStage, activeRealmPath);
     await chmod(activeRealmPath, 0o600);

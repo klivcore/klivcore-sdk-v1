@@ -18,12 +18,13 @@ export type StartRealmTunnelPlan = Readonly<{ mode: "managed" }>
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
 export type StartRealmArgs = Readonly<{ command: "run" | "registration-url"; configPath: string }>;
 export type ActiveRealmRecord = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   pid: number;
   realmId: string;
   localOrigin: string;
   publicOrigin: string;
   registrationControlToken: string;
+  runtimeRevision?: string;
 }>;
 export type ManagedTunnelRecord = Readonly<{
   schemaVersion: 1;
@@ -102,12 +103,16 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
   const invalid = (): never => { throw new TypeError("active Realm record is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
-  if (!exactKeys(input, ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "schemaVersion"])
-    || input.schemaVersion !== 1 || input.realmId !== realmId
+  const expectedKeys = input.schemaVersion === 2
+    ? ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "runtimeRevision", "schemaVersion"]
+    : ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "schemaVersion"];
+  if (!exactKeys(input, expectedKeys)
+    || (input.schemaVersion !== 1 && input.schemaVersion !== 2) || input.realmId !== realmId
     || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
     || input.localOrigin !== `http://127.0.0.1:${port}`
     || typeof input.publicOrigin !== "string"
     || typeof input.registrationControlToken !== "string"
+    || (input.schemaVersion === 2 && (typeof input.runtimeRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.runtimeRevision)))
     || !/^[A-Za-z0-9_-]{43}$/.test(input.registrationControlToken)) invalid();
   const publicOrigin = input.publicOrigin as string;
   if (typeof publicOrigin !== "string") invalid();
@@ -117,12 +122,13 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
   if (publicUrl.origin !== publicOrigin || publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password
     || (expectedPublicOrigin !== undefined && publicOrigin !== expectedPublicOrigin)) invalid();
   return Object.freeze({
-    schemaVersion: 1,
+    schemaVersion: input.schemaVersion as 1 | 2,
     pid: input.pid as number,
     realmId,
     localOrigin: input.localOrigin as string,
     publicOrigin,
     registrationControlToken: input.registrationControlToken as string,
+    ...(input.schemaVersion === 2 ? { runtimeRevision: input.runtimeRevision as string } : {}),
   });
 }
 

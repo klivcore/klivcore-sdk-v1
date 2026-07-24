@@ -93,6 +93,7 @@ export type RealmGatewayConfig = Readonly<{
   name: string;
   authorityEpoch: string;
   generation: string;
+  runtimeVersion?: string;
   capabilities: readonly string[];
   publicBindingCapabilities?: readonly string[];
   maxPublicBindings?: number;
@@ -316,6 +317,9 @@ type PublicBinding = Readonly<{
 
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
   const branding = parseRealmBranding(config.branding);
+  if (config.runtimeVersion !== undefined && !/^[a-f0-9]{12}$/.test(config.runtimeVersion)) {
+    throw new TypeError("Realm runtime version is invalid");
+  }
   const responseHeaders = config.auth ? {} : corsHeaders;
   const json = (value: unknown, status = 200) => jsonResponse(value, status, responseHeaders);
   const configuredCapabilities = new Set(config.capabilities);
@@ -766,6 +770,9 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       const url = new URL(request.url);
       const origin = config.auth?.publicOrigin ?? url.origin;
       if (request.method === "GET" && url.pathname === "/health") return json({ status: "ok", realmId: config.realmId });
+      if (request.method === "GET" && url.pathname === "/version") {
+        return json({ schemaVersion: 1, realmId: config.realmId, runtimeVersion: config.runtimeVersion ?? null });
+      }
       if (request.method === "GET" && url.pathname === "/.well-known/klivcore-realm") {
         return new Response(JSON.stringify({ schemaVersion: 1, realmId: config.realmId, name: config.name }), {
           headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" },

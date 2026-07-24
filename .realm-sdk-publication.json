@@ -37,8 +37,8 @@
     },
     {
       "path": "src/connect-desktop-core.ts",
-      "bytes": 5937,
-      "sha256": "ac148a61496a15116be560f266536776f44d5699cf794b3510205c60b92f5f75"
+      "bytes": 5852,
+      "sha256": "fddab87f3b12914028d08f97c5c9540fec774b1256b9c8698eb251b4aecf1fe3"
     },
     {
       "path": "src/connect-desktop.ts",
@@ -57,23 +57,23 @@
     },
     {
       "path": "src/server.ts",
-      "bytes": 50467,
-      "sha256": "082cf048598a36022a135c8ab22801722d8a56ba841b814e6f183ad9eefa2d8a"
+      "bytes": 50845,
+      "sha256": "a9ad089fa4942974210ecce99195e824a99ee6c59cdbc4498838fb2b0774aaa5"
     },
     {
       "path": "src/start-realm-coordinator.ts",
-      "bytes": 11671,
-      "sha256": "5c024fafcf220d77bff802cb59f425ce43b68c779272495f72988ecd3eb9ebd0"
+      "bytes": 13071,
+      "sha256": "5a9b003fb6132d95890b2e560d6716c4627686977babfb7a614ee49d446735bd"
     },
     {
       "path": "src/start-realm-core.ts",
-      "bytes": 18448,
-      "sha256": "be8c08853fe97322e6836a84c2b9dc16471b72238b1c5a31ef5bf81efe9e55d6"
+      "bytes": 18954,
+      "sha256": "cdb7660bbbb0ee0ed220c921eaa1399e2ce87c68eeca04215f00035eeb72dcad"
     },
     {
       "path": "src/start-realm.ts",
-      "bytes": 15408,
-      "sha256": "9721773f3d7301b3932841e6e7f345d89460e1b36ea58b8a59d5cff34026056c"
+      "bytes": 15790,
+      "sha256": "9ebc65baf55bdcb05cec255d5d8b9279d8055f97dffce4e65324db918fd09c3d"
     },
     {
       "path": "templates/minimal-realm/README.md",
