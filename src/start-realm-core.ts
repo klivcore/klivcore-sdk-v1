@@ -34,6 +34,32 @@ export type ManagedTunnelRecord = Readonly<{
   sessionName: string;
 }>;
 
+export function formatRegistrationUrlBlock(value: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error("registration URL must be a safe single-line HTTPS URL");
+  }
+  if (value.length < 1 || value.length > 4096 || parsed.protocol !== "https:" || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    throw new Error("registration URL must be a safe single-line HTTPS URL");
+  }
+  const rule = "=".repeat(72);
+  return [
+    "",
+    rule,
+    "!!!              ACTION REQUIRED: REGISTER THIS REALM NOW              !!!",
+    rule,
+    "",
+    value,
+    "",
+    rule,
+    "!!!                 ONE USE • EXPIRES IN 5 MINUTES                    !!!",
+    rule,
+    "",
+  ].join("\n");
+}
+
 const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
 
 function validLauncherHost(host: string): boolean {

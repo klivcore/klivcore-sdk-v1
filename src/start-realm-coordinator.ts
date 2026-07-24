@@ -1,6 +1,7 @@
 import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
+  formatRegistrationUrlBlock,
   parseActiveRealmRecord,
   parseManagedTunnelRecord,
   parseStartRealmArgs,
@@ -199,7 +200,7 @@ const firstRegistrationUrl = await registrationUrl();
 
 console.log("\nRealm ready");
 console.log(`Realm URL: ${publicOrigin}`);
-console.log(`Registration URL (one use, expires in five minutes): ${firstRegistrationUrl}`);
+console.log(formatRegistrationUrlBlock(firstRegistrationUrl));
 console.log("Next steps:");
 console.log("  1. Open the registration URL now and create the first passkey.");
 console.log("  2. Sign in to the Realm URL.");
