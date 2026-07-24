@@ -120,16 +120,32 @@ async function issueRegistrationUrl(): Promise<void> {
   try { process.kill(record.pid, 0); } catch { throw new Error("active Realm process is not running"); }
   await waitForHealth(record.localOrigin, config.realm.id, 5_000);
   await waitForHealth(record.publicOrigin, config.realm.id, 10_000);
-  const registrationAuth = createPasskeyAuth({
-    branding: Object.freeze({ canvasColor: config.realm.canvasColor }),
-    databasePath: resolve(stateDir, "auth.sqlite"),
-    realmId: config.realm.id,
-    realmName: config.realm.name,
-    publicOrigin: record.publicOrigin,
-    rpId: new URL(record.publicOrigin).hostname,
+  const response = await fetch(`${record.localOrigin}/v1/auth/runtime/registration-url`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${record.registrationControlToken}`,
+      "content-type": "application/json",
+      origin: record.publicOrigin,
+    },
+    body: "{}",
+    redirect: "error",
+    signal: AbortSignal.timeout(5_000),
   });
-  try { console.log(registrationAuth.issueRegistrationUrl()); }
-  finally { registrationAuth.close(); }
+  if (response.status !== 201 || !response.headers.get("content-type")?.includes("application/json")) {
+    await response.body?.cancel().catch(() => undefined);
+    throw new Error("live Realm refused registration URL issuance");
+  }
+  const value = await response.json() as Record<string, unknown>;
+  if (Object.keys(value).join(",") !== "registrationUrl" || typeof value.registrationUrl !== "string") {
+    throw new Error("live Realm returned an invalid registration URL");
+  }
+  const registrationUrl = new URL(value.registrationUrl);
+  if (registrationUrl.origin !== record.publicOrigin || registrationUrl.pathname !== "/auth/register"
+    || registrationUrl.search || registrationUrl.username || registrationUrl.password
+    || !/^#token=[A-Za-z0-9_-]{32,128}$/.test(registrationUrl.hash)) {
+    throw new Error("live Realm returned an invalid registration URL");
+  }
+  console.log(registrationUrl.href);
 }
 
 if (invocation.command === "registration-url") {
@@ -151,8 +167,8 @@ let stopping: Promise<void> | undefined;
 async function stop(): Promise<void> {
   if (stopping) return stopping;
   stopping = (async () => {
-    await removeOwnedActiveRecord();
     gateway?.stop();
+    await removeOwnedActiveRecord();
     auth?.close();
     if (tunnel && tunnel.exitCode === null) {
       tunnel.kill("SIGTERM");
@@ -180,6 +196,7 @@ try {
   ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
   const publicOrigin = await captureTunnelOrigin(tunnel);
   const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
+  const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const appRoot = await resolvePublishedAppV2Root(resolve(import.meta.dir, "../app-v2"));
   const appV2 = await loadPublishedAppV2(appRoot);
   auth = createPasskeyAuth({
@@ -189,6 +206,7 @@ try {
     realmName: config.realm.name,
     publicOrigin,
     rpId: new URL(publicOrigin).hostname,
+    registrationControlToken,
   });
   gateway = createRealmGateway({
     branding,
@@ -223,6 +241,7 @@ try {
       realmId: config.realm.id,
       localOrigin: gateway.endpoint,
       publicOrigin,
+      registrationControlToken,
     })}\n`, { flag: "wx", mode: 0o600 });
     await rename(activeStage, activeRealmPath);
     await chmod(activeRealmPath, 0o600);

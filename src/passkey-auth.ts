@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { chmodSync, mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import {
@@ -91,6 +91,7 @@ export type PasskeyAuthOptions = Readonly<{
   now?: () => number;
   allowInsecureLoopback?: boolean;
   agentAccess?: Readonly<{ capabilities: readonly string[] }>;
+  registrationControlToken?: string;
 }>;
 
 export type RealmSession = Readonly<{
@@ -413,6 +414,9 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     || agentCapabilities.some((capability) => !/^[A-Za-z0-9][A-Za-z0-9:._-]{0,127}$/.test(capability)))) {
     throw new TypeError("agent access capabilities are invalid");
   }
+  if (options.registrationControlToken !== undefined && !/^[A-Za-z0-9_-]{43}$/.test(options.registrationControlToken)) {
+    throw new TypeError("registration control token is invalid");
+  }
   const publicUrl = new URL(options.publicOrigin);
   const isLoopback = publicUrl.hostname === "127.0.0.1" || publicUrl.hostname === "localhost";
   if (publicUrl.origin !== options.publicOrigin || publicUrl.username || publicUrl.password
@@ -521,6 +525,22 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     return database.query<CeremonyRow, [string]>("SELECT id, kind, token_hash, challenge, expires_at, consumed_at FROM ceremonies WHERE id = ?").get(id) ?? undefined;
   };
 
+  function issueRegistrationUrl(issueOptions: Readonly<{ ttlMs?: number }> = {}): string {
+    const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
+    if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
+    const token = randomToken();
+    const timestamp = now();
+    const reserve = database.transaction(() => {
+      database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
+      const capacity = database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0;
+      if (capacity >= 32) throw new Error("registration URL limit reached");
+      database.query("INSERT INTO registration_grants(token_hash, user_id, expires_at, consumed_at) VALUES (?, ?, ?, NULL)")
+        .run(tokenHash(token), randomBytes(32), timestamp + ttlMs);
+    });
+    reserve.immediate();
+    return `${options.publicOrigin}/auth/register#token=${token}`;
+  }
+
   async function handle(request: Request): Promise<Response | undefined> {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/auth/register") return authPage("register", options.realmName, branding);
@@ -557,6 +577,17 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     const body = await boundedJson(request);
     if (!body) return json({ error: "invalid request" }, 400);
     const timestamp = now();
+
+    if (url.pathname === "/v1/auth/runtime/registration-url") {
+      if (!options.registrationControlToken || !exactKeys(body, [])) return json({ error: "not found" }, 404);
+      const authorization = request.headers.get("authorization");
+      const candidate = authorization?.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : undefined;
+      if (!candidate || !/^[A-Za-z0-9_-]{43}$/.test(candidate)
+        || !timingSafeEqual(Buffer.from(candidate), Buffer.from(options.registrationControlToken))) {
+        return json({ error: "unauthorized" }, 401);
+      }
+      return json({ registrationUrl: issueRegistrationUrl() }, 201);
+    }
 
     if (url.pathname === "/v1/auth/agent/status") {
       if (!agentCapabilities || !exactKeys(body, [])) return json({ error: "not found" }, 404);
@@ -713,21 +744,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
   return Object.freeze({
     publicOrigin: options.publicOrigin,
-    issueRegistrationUrl(issueOptions = {}) {
-      const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
-      if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
-      const token = randomToken();
-      const timestamp = now();
-      const reserve = database.transaction(() => {
-        database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
-        const capacity = database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0;
-        if (capacity >= 32) throw new Error("registration URL limit reached");
-        database.query("INSERT INTO registration_grants(token_hash, user_id, expires_at, consumed_at) VALUES (?, ?, ?, NULL)")
-          .run(tokenHash(token), randomBytes(32), timestamp + ttlMs);
-      });
-      reserve.immediate();
-      return `${options.publicOrigin}/auth/register#token=${token}`;
-    },
+    issueRegistrationUrl,
     handle,
     sessionFor,
     sessionById,

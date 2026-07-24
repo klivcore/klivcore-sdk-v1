@@ -14,6 +14,7 @@ export type ActiveRealmRecord = Readonly<{
   realmId: string;
   localOrigin: string;
   publicOrigin: string;
+  registrationControlToken: string;
 }>;
 
 const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
@@ -30,11 +31,13 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
   const invalid = (): never => { throw new TypeError("active Realm record is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
-  if (!exactKeys(input, ["localOrigin", "pid", "publicOrigin", "realmId", "schemaVersion"])
+  if (!exactKeys(input, ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "schemaVersion"])
     || input.schemaVersion !== 1 || input.realmId !== realmId
     || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
     || input.localOrigin !== `http://127.0.0.1:${port}`
-    || typeof input.publicOrigin !== "string") invalid();
+    || typeof input.publicOrigin !== "string"
+    || typeof input.registrationControlToken !== "string"
+    || !/^[A-Za-z0-9_-]{43}$/.test(input.registrationControlToken)) invalid();
   const publicOrigin = input.publicOrigin as string;
   if (typeof publicOrigin !== "string") invalid();
   const publicUrl = (() => {
@@ -47,6 +50,7 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
     realmId,
     localOrigin: input.localOrigin as string,
     publicOrigin,
+    registrationControlToken: input.registrationControlToken as string,
   });
 }
 

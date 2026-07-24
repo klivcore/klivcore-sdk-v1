@@ -30,7 +30,7 @@ Start from `examples/start-realm.config.json`. The command:
 4. starts Quick Tunnel first and captures its generated HTTPS origin;
 5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
 6. verifies local and public `/health` responses identify the configured Realm;
-7. writes a mode-`0600` active-runtime record containing the verified origin and process identity, but no registration secret;
+7. writes a mode-`0600` active-runtime record containing the verified origins, process identity, and a random runtime-scoped registration-control capability;
 8. prints the safe Realm URL, registration command, and optional **Connect Desktop SSH URL**.
 
 The foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
@@ -44,7 +44,7 @@ bunx --package https://github.com/Klivcore/klivcore-sdk-v1 \
   start-realm registration-url config.json
 ```
 
-The command verifies the private active-runtime record, running process, exact local Realm identity, and exact public Realm identity before issuing the URL. It prints one URL and exits. The URL:
+The command verifies the private active-runtime record, running process, exact local Realm identity, and exact public Realm identity. It then authenticates a local POST with the runtime-scoped control capability. The exact live Realm—not the command process—creates the grant and returns the URL. A stopped or replacement process cannot issue from a stale record because it does not hold the matching capability in memory. The active record is sensitive host-local state: never log or copy it, and let the launcher remove it during shutdown. The command prints one URL and exits. The URL:
 
 - expires after five minutes;
 - is valid for one successful passkey registration;
