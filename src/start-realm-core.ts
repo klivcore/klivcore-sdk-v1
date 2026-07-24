@@ -284,7 +284,7 @@ export async function probeHealthInFreshBun(origin: string, realmId: string): Pr
   }
 }
 
-async function probeHealthWithDnsOverHttps(origin: string, realmId: string): Promise<void> {
+async function runBoundedCurl(arguments_: readonly string[], label: string): Promise<string> {
   const child = Bun.spawn([
     "curl",
     "--silent",
@@ -293,8 +293,8 @@ async function probeHealthWithDnsOverHttps(origin: string, realmId: string): Pro
     "--max-time", "10",
     "--max-filesize", "4096",
     "--proto", "=https",
-    "--doh-url", "https://1.1.1.1/dns-query",
-    `${origin}/health`,
+    "--noproxy", "*",
+    ...arguments_,
   ], {
     stdin: "ignore",
     stdout: "pipe",
@@ -306,17 +306,75 @@ async function probeHealthWithDnsOverHttps(origin: string, realmId: string): Pro
     child.exited,
   ]);
   if (exitCode !== 0) {
-    throw new Error(stderr.trim() || stdout.trim() || `DNS-over-HTTPS health probe exited ${exitCode}`);
+    throw new Error(stderr.trim() || stdout.trim() || `${label} exited ${exitCode}`);
   }
-  let body: unknown;
-  try {
-    body = JSON.parse(stdout);
-  } catch {
-    throw new Error("DNS-over-HTTPS health probe returned invalid JSON");
+  return stdout;
+}
+
+export function parseDnsOverHttpsIpv4Answers(value: unknown, hostname: string): readonly string[] {
+  if (!value || typeof value !== "object" || (value as { Status?: unknown }).Status !== 0) {
+    throw new Error(`DNS-over-HTTPS did not resolve ${hostname}`);
   }
-  if (!body || typeof body !== "object" || (body as { status?: unknown }).status !== "ok" || (body as { realmId?: unknown }).realmId !== realmId) {
-    throw new Error("DNS-over-HTTPS health probe returned an unexpected Realm health response");
+  const answer = (value as { Answer?: unknown }).Answer;
+  if (!Array.isArray(answer) || answer.length > 32) throw new Error(`DNS-over-HTTPS did not resolve ${hostname}`);
+  const expectedName = `${hostname.toLowerCase()}.`;
+  const addresses = answer.flatMap((entry) => {
+    if (!entry || typeof entry !== "object") return [];
+    const { name, type, data } = entry as { name?: unknown; type?: unknown; data?: unknown };
+    return typeof name === "string" && name.toLowerCase() === expectedName && type === 1 && typeof data === "string" && isIP(data) === 4
+      ? [data]
+      : [];
+  });
+  const unique = [...new Set(addresses)].slice(0, 8);
+  if (unique.length === 0) throw new Error(`DNS-over-HTTPS did not resolve ${hostname}`);
+  return unique;
+}
+
+async function probeHealthWithDnsOverHttps(origin: string, realmId: string): Promise<void> {
+  const url = new URL(origin);
+  const lookupUrls = [
+    `https://8.8.8.8/resolve?name=${encodeURIComponent(url.hostname)}&type=A`,
+    `https://1.1.1.1/dns-query?name=${encodeURIComponent(url.hostname)}&type=A`,
+  ];
+  let addresses: readonly string[] | undefined;
+  let lastLookupError: unknown;
+  for (const lookupUrl of lookupUrls) {
+    try {
+      const dnsText = await runBoundedCurl([
+        "--header", "accept: application/dns-json",
+        lookupUrl,
+      ], "DNS-over-HTTPS lookup");
+      addresses = parseDnsOverHttpsIpv4Answers(JSON.parse(dnsText), url.hostname);
+      break;
+    } catch (error) {
+      lastLookupError = error;
+    }
   }
+  if (!addresses) {
+    throw lastLookupError instanceof Error ? lastLookupError : new Error("DNS-over-HTTPS lookup failed");
+  }
+  let lastError: unknown;
+  for (const address of addresses) {
+    try {
+      const stdout = await runBoundedCurl([
+        "--resolve", `${url.hostname}:${url.port || "443"}:${address}`,
+        `${origin}/health`,
+      ], "DNS-over-HTTPS health probe");
+      let body: unknown;
+      try {
+        body = JSON.parse(stdout);
+      } catch {
+        throw new Error("DNS-over-HTTPS health probe returned invalid JSON");
+      }
+      if (!body || typeof body !== "object" || (body as { status?: unknown }).status !== "ok" || (body as { realmId?: unknown }).realmId !== realmId) {
+        throw new Error("DNS-over-HTTPS health probe returned an unexpected Realm health response");
+      }
+      return;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("DNS-over-HTTPS health probe failed");
 }
 
 export async function probePublicHealth(
