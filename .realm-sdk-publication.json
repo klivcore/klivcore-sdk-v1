@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@klivcore/realm-workspace",
+    "version": "0.1.0"
+  },
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 13729,
+      "sha256": "b3154d3a64613ab8a27aca937005191623d09752fc1353954cd824780de31d7b"
+    },
+    {
+      "path": "bin/connect-desktop.ts",
+      "bytes": 215,
+      "sha256": "29b0dd7593ba59ad2abf7d603b813bd94f2e4424c9e5db935d568910978e8eff"
+    },
+    {
+      "path": "bin/start-realm.ts",
+      "bytes": 55,
+      "sha256": "39a9d3fd0c1358f9dc1d3fe4bdae4af788c7c8bc4348d538f0fc40391d41c01d"
+    },
+    {
+      "path": "examples/start-realm.config.json",
+      "bytes": 328,
+      "sha256": "9143f4bc30c1368380e026126615a0ec7115c0cd22fb13f5c1e3b5e02bdcec09"
+    },
+    {
+      "path": "package.json",
+      "bytes": 865,
+      "sha256": "c917e3eb6e56264118a27f3a80816dd92191d03f020ce1faceecc66a52ea5afe"
+    },
+    {
+      "path": "src/client.ts",
+      "bytes": 8133,
+      "sha256": "3e75153185e37d5fb7a39a51f6c44a5f565483b0809cf29a23f48ca6c3294c69"
+    },
+    {
+      "path": "src/connect-desktop-core.ts",
+      "bytes": 5874,
+      "sha256": "79a4b4486b49da02511dc329f1951db60c99a91e080b6427bd9f87531b4d4a0b"
+    },
+    {
+      "path": "src/connect-desktop.ts",
+      "bytes": 34153,
+      "sha256": "3824a726b59a8c148d3c6a3db1b39a52e27df571cc6e7c9ba109faf92b1a7d9a"
+    },
+    {
+      "path": "src/contracts.ts",
+      "bytes": 9571,
+      "sha256": "599b498e1cfe0bd52b6ffd60730a54189e473e82deebbd270a05c1a8d5a019ba"
+    },
+    {
+      "path": "src/passkey-auth.ts",
+      "bytes": 58875,
+      "sha256": "e6cb0c97cc9e8edf26a77e3f81a7dbf0dd410064dcf36bedd342d955d65f8e3b"
+    },
+    {
+      "path": "src/server.ts",
+      "bytes": 48427,
+      "sha256": "b0c5be66f7de4345dfe4d24c64942b2f4b4a93d3bbfd10e8f52e83395dd55182"
+    },
+    {
+      "path": "src/start-realm-core.ts",
+      "bytes": 8255,
+      "sha256": "db3083f42a3812d9387c18bed20f0a40a390f219e9278e996af71f751a9c5fd6"
+    },
+    {
+      "path": "src/start-realm.ts",
+      "bytes": 11846,
+      "sha256": "24eb8829ddb0b7b5fce8e4c07021b66c814b79ec8964ec211e78f0fd795b7738"
+    },
+    {
+      "path": "templates/minimal-realm/README.md",
+      "bytes": 927,
+      "sha256": "b6426bf247a57df5a475ea4ef4d62d6c725e86ef67726dab1d735b4dbfd3e007"
+    },
+    {
+      "path": "templates/minimal-realm/package.json",
+      "bytes": 368,
+      "sha256": "6f78a181270df1ce092ace4c670c997041ae85e028ea9d03355aa1379a028f30"
+    },
+    {
+      "path": "templates/minimal-realm/src/server.ts",
+      "bytes": 3109,
+      "sha256": "bca80a4483ccee26f0c11d0964515afcd929864b55cf9770902c9c98728c68fa"
+    },
+    {
+      "path": "templates/minimal-realm/tsconfig.json",
+      "bytes": 221,
+      "sha256": "e3845670a16e00f294b254d234a3fb41cae120e93bfb7d3cb0281ce89f167ba9"
+    }
+  ]
+}
