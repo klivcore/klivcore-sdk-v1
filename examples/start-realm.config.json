@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "realm": {
+    "id": "my-realm",
+    "name": "My Realm",
+    "canvasColor": "#101820"
+  },
+  "port": 47002,
+  "stateDir": "./my-realm-state",
+  "desktop": {
+    "sshUrl": "ssh://user@realm-host.example"
+  }
+}

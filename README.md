@@ -14,6 +14,27 @@ The SDK is incomplete if an external agent needs private instructions to configu
 6. run tests, build, conformance, and public deployment checks;
 7. diagnose failures at the Realm, tunnel, authentication, and publication boundaries.
 
+## One-command fresh-server Realm
+
+On a fresh Linux x64 or arm64 host with only Bun and `config.json`, run the SDK directly from GitHub:
+
+```bash
+bunx --package https://github.com/Klivcore/klivcore-sdk-v1 start-realm config.json
+```
+
+Start from `examples/start-realm.config.json`. The command:
+
+1. validates the strict configuration;
+2. creates a private durable state directory;
+3. downloads the pinned `cloudflared` binary and verifies its published SHA-256 digest;
+4. starts Quick Tunnel first and captures its generated HTTPS origin;
+5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
+6. verifies local and public `/health` responses identify the configured Realm;
+7. writes first-registration material only to a mode-`0600` private file;
+8. prints the safe Realm URL, registration file path, and optional **Connect Desktop SSH URL**.
+
+The foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
+
 ## Install and verify the SDK
 
 Use a clean checkout or a pinned release of this generated repository. Do not hand-edit generated SDK files.
