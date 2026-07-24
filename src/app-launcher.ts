@@ -14,11 +14,13 @@ export type RunningAppV2Launcher = Readonly<{
 }>;
 
 export type PublishedAppV2 = Readonly<{
-  respond(request: Request, fallbackToIndex?: boolean): Response | undefined;
+  respond(request: Request, fallbackToIndex: boolean | undefined, branding: RealmBranding): Response | undefined;
 }>;
 
+export type RealmBranding = Readonly<{ canvasColor: string }>;
+
 type PublishedFile = Readonly<{ path: string; bytes: number; sha256: string }>;
-type PublishedAsset = Readonly<{ body: Blob; bytes: number; contentType: string }>;
+type PublishedAsset = Readonly<{ body: Blob; bytes: number; contentType: string; text?: string }>;
 
 type PublicationManifest = Readonly<{
   schemaVersion: 1;
@@ -31,6 +33,9 @@ const pathPattern = /^(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/;
 const MAX_MANIFEST_BYTES = 1024 * 1024;
 const MAX_FILES = 512;
 const MAX_TOTAL_BYTES = 64 * 1024 * 1024;
+const canvasCssMarker = "/*klivcore-realm-canvas*/#07090d";
+const canvasThemeMarker = '<meta name="theme-color" content="#07090d" data-klivcore-realm-canvas>';
+const defaultBranding = Object.freeze({ canvasColor: "#07090d" });
 
 export async function resolvePublishedAppV2Root(publicationRoot: string): Promise<string> {
   const root = resolve(publicationRoot);
@@ -129,17 +134,27 @@ async function loadPublication(assetsRoot: string): Promise<ReadonlyMap<string, 
     const digest = createHash("sha256").update(data).digest("hex");
     if (digest !== file.sha256) throw new Error(`App V2 publication integrity check failed: ${file.path}`);
     const contentType = Bun.file(absolute).type || "application/octet-stream";
+    let text: string | undefined;
+    if (file.path === "index.html") {
+      try {
+        text = new TextDecoder("utf-8", { fatal: true }).decode(data);
+      } catch {
+        failManifest();
+      }
+      if (text.split(canvasCssMarker).length !== 2 || text.split(canvasThemeMarker).length !== 2) failManifest();
+    }
     files.set(`/${file.path}`, Object.freeze({
       body: new Blob([data], { type: contentType }),
       bytes: data.byteLength,
       contentType,
+      ...(text === undefined ? {} : { text }),
     }));
   }
   if (!files.has("/index.html")) failManifest();
   return files;
 }
 
-function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, request: Request, fallbackToIndex = true): Response | undefined {
+function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, request: Request, fallbackToIndex: boolean | undefined, branding: RealmBranding): Response | undefined {
   if (request.method !== "GET" && request.method !== "HEAD") return undefined;
   const url = new URL(request.url);
   let pathname: string;
@@ -150,13 +165,22 @@ function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, reques
   }
   if (pathname.includes("\0") || pathname.split("/").includes("..")) return new Response("Bad Request\n", { status: 400 });
   const exact = pathname === "/" ? files.get("/index.html") : files.get(pathname);
-  const fallback = fallbackToIndex && !exact && !pathname.split("/").at(-1)?.includes(".") ? files.get("/index.html") : undefined;
+  const fallback = (fallbackToIndex ?? true) && !exact && !pathname.split("/").at(-1)?.includes(".") ? files.get("/index.html") : undefined;
   const asset = exact ?? fallback;
   if (!asset) return undefined;
-  return new Response(request.method === "HEAD" ? null : asset.body, {
+  if (!/^#[0-9a-f]{6}$/.test(branding.canvasColor) || Object.keys(branding).join(",") !== "canvasColor") {
+    throw new TypeError("Realm branding is invalid");
+  }
+  const brandedText = asset.text
+    ? asset.text
+      .replace(canvasCssMarker, branding.canvasColor)
+      .replace(canvasThemeMarker, `<meta name="theme-color" content="${branding.canvasColor}">`)
+    : undefined;
+  const bytes = brandedText === undefined ? asset.bytes : Buffer.byteLength(brandedText);
+  return new Response(request.method === "HEAD" ? null : brandedText ?? asset.body, {
     headers: {
       "cache-control": pathname === "/" || pathname === "/index.html" || fallback ? "no-store" : "public, max-age=31536000, immutable",
-      "content-length": String(asset.bytes),
+      "content-length": String(bytes),
       "content-type": asset.contentType,
       "x-content-type-options": "nosniff",
     },
@@ -165,7 +189,7 @@ function publishedAppResponse(files: ReadonlyMap<string, PublishedAsset>, reques
 
 export async function loadPublishedAppV2(assetsRoot: string): Promise<PublishedAppV2> {
   const files = await loadPublication(resolve(assetsRoot));
-  return Object.freeze({ respond(request, fallbackToIndex) { return publishedAppResponse(files, request, fallbackToIndex); } });
+  return Object.freeze({ respond(request, fallbackToIndex, branding) { return publishedAppResponse(files, request, fallbackToIndex, branding); } });
 }
 
 export async function startAppV2Launcher(options: AppV2LauncherOptions): Promise<RunningAppV2Launcher> {
@@ -182,7 +206,7 @@ export async function startAppV2Launcher(options: AppV2LauncherOptions): Promise
     hostname,
     port,
     fetch(request) {
-      return app.respond(request)
+      return app.respond(request, undefined, defaultBranding)
         ?? new Response("Method Not Allowed\n", { status: 405, headers: { allow: "GET, HEAD" } });
     },
   });

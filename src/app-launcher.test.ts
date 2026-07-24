@@ -20,7 +20,7 @@ async function assetsFixture() {
   const root = await mkdtemp(join(tmpdir(), "klivcore-sdk-launcher-"));
   roots.push(root);
   await mkdir(join(root, "assets"), { recursive: true });
-  const index = "<!doctype html><main>Empty Klivcore App</main>\n";
+  const index = "<!doctype html><html style=\"--realm-canvas-color:/*klivcore-realm-canvas*/#07090d\"><meta name=\"theme-color\" content=\"#07090d\" data-klivcore-realm-canvas><main>Empty Klivcore App</main></html>\n";
   const script = "document.body.dataset.ready='true'\n";
   await writeFile(join(root, "index.html"), index);
   await writeFile(join(root, "assets", "app.js"), script);

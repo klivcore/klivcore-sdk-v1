@@ -30,8 +30,11 @@ type StoredCredential = Readonly<{
 }>;
 
 export type PasskeyRegistrationResult =
-  | Readonly<{ verified: false }>
+  | Readonly<{ verified: false; reason?: PasskeyVerificationFailure }>
   | Readonly<{ verified: true; credential: StoredCredential }>;
+
+export type PasskeyVerificationFailure = "credential-id" | "credential-type" | "challenge" | "origin" | "rp-id"
+  | "user-presence" | "user-verification" | "attestation" | "malformed-response";
 
 export type PasskeyAuthenticationResult =
   | Readonly<{ verified: false }>
@@ -66,7 +69,17 @@ export type PasskeyEngine = Readonly<{
   }>): Promise<PasskeyAuthenticationResult>;
 }>;
 
+export type RealmBranding = Readonly<{ canvasColor: string }>;
+
+export function parseRealmBranding(value: RealmBranding): RealmBranding {
+  if (!value || Object.keys(value).join(",") !== "canvasColor" || !/^#[0-9a-f]{6}$/.test(value.canvasColor)) {
+    throw new TypeError("Realm branding is invalid");
+  }
+  return Object.freeze({ canvasColor: value.canvasColor });
+}
+
 export type PasskeyAuthOptions = Readonly<{
+  branding: RealmBranding;
   databasePath: string;
   realmId: string;
   realmName: string;
@@ -185,7 +198,7 @@ const defaultEngine: PasskeyEngine = Object.freeze({
       userID: Uint8Array.from(input.userId),
       userName: input.userName,
       userDisplayName: input.userName,
-      challenge: input.challenge,
+      challenge: Uint8Array.from(Buffer.from(input.challenge, "base64url")),
       timeout: CHALLENGE_TTL_MS,
       attestationType: "none",
       excludeCredentials: input.excludeCredentials.map((entry) => ({
@@ -218,14 +231,24 @@ const defaultEngine: PasskeyEngine = Object.freeze({
           backedUp: info.credentialBackedUp,
         }),
       });
-    } catch {
-      return Object.freeze({ verified: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      const reason: PasskeyVerificationFailure = /credential ID|base64url-encoded/i.test(message) ? "credential-id"
+        : /credential type|registration response type/i.test(message) ? "credential-type"
+          : /challenge/i.test(message) ? "challenge"
+            : /origin/i.test(message) ? "origin"
+              : /RP ID/i.test(message) ? "rp-id"
+                : /user presence/i.test(message) ? "user-presence"
+                  : /user verification|user could not be verified/i.test(message) ? "user-verification"
+                    : /attestation|AAGUID|public key|authenticator data/i.test(message) ? "attestation"
+                      : "malformed-response";
+      return Object.freeze({ verified: false, reason });
     }
   },
   async authenticationOptions(input) {
     return generateAuthenticationOptions({
       rpID: input.rpId,
-      challenge: input.challenge,
+      challenge: Uint8Array.from(Buffer.from(input.challenge, "base64url")),
       timeout: CHALLENGE_TTL_MS,
       userVerification: "required",
       allowCredentials: input.credentials.map((entry) => ({
@@ -275,9 +298,12 @@ function authHeaders(): HeadersInit {
   };
 }
 
-function authPage(kind: "register" | "login", realmName: string): Response {
+function authPage(kind: "register" | "login", realmName: string, branding: RealmBranding): Response {
   const action = kind === "register" ? "Register passkey" : "Sign in with passkey";
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${action} · ${realmName}</title></head><body data-passkey-page="${kind}"><main><p>Klivcore Realm</p><h1>${realmName}</h1><button type="button" id="passkey-action">${action}</button><p id="status" role="status"></p></main><script src="/auth/passkey.js" defer></script></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="${branding.canvasColor}"><title>${action} · ${realmName}</title><style>
+:root{color-scheme:light;--realm-ink:#14202b;--realm-muted:#667381;--realm-line:#d9e0e6;--realm-surface:#fff;--realm-canvas:${branding.canvasColor};--realm-canvas-ink:#e9edf3;--realm-canvas-muted:#8f99a8;--realm-canvas-line:#232833;--realm-accent:#137a92;--realm-accent-hover:#0d6074;font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+*{box-sizing:border-box}html,body{min-height:100%;margin:0}body{background:var(--realm-canvas);color:var(--realm-canvas-ink);-webkit-font-smoothing:antialiased}.auth-shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr auto}.auth-header,.auth-footer{display:flex;align-items:center;justify-content:space-between;padding:24px clamp(24px,5vw,72px);font-size:12px;letter-spacing:.14em;text-transform:uppercase}.auth-header{border-bottom:1px solid var(--realm-canvas-line);font-weight:700}.auth-header span:last-child,.auth-footer{color:var(--realm-canvas-muted)}.auth-main{display:grid;place-items:center;padding:48px 24px}.auth-card{width:min(100%,520px);padding:clamp(32px,6vw,56px);background:var(--realm-surface);color:var(--realm-ink);border:1px solid var(--realm-line);border-radius:20px;box-shadow:0 24px 70px rgba(20,32,43,.09)}.auth-eyebrow{margin:0 0 18px;color:var(--realm-accent);font-size:12px;font-weight:750;letter-spacing:.14em;text-transform:uppercase}.auth-card h1{margin:0;font-size:clamp(34px,7vw,54px);font-weight:540;letter-spacing:-.045em;line-height:1.02}.auth-copy{margin:20px 0 32px;color:var(--realm-muted);font-size:16px;line-height:1.65}.auth-action{width:100%;min-height:52px;border:0;border-radius:12px;padding:14px 20px;background:var(--realm-accent);color:#fff;font:inherit;font-weight:700;cursor:pointer;transition:background-color .16s ease,transform .16s ease}.auth-action:hover{background:var(--realm-accent-hover)}.auth-action:active{transform:translateY(1px)}.auth-action:disabled{cursor:wait;opacity:.65}.auth-action:focus-visible,.auth-log summary:focus-visible,.auth-log-copy:focus-visible{outline:3px solid rgba(19,122,146,.28);outline-offset:3px}.auth-status{min-height:24px;margin:18px 0 0;color:#a13b35;font-size:14px;line-height:1.5}.auth-log{margin-top:8px;border-top:1px solid var(--realm-line);padding-top:18px}.auth-log summary{color:var(--realm-accent);cursor:pointer;font-size:14px;font-weight:700}.auth-log-body{margin-top:14px}.auth-log-toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}.auth-log-note{margin:0;color:var(--realm-muted);font-size:12px;line-height:1.4}.auth-log-copy{border:1px solid var(--realm-line);border-radius:8px;padding:7px 11px;background:var(--realm-surface);color:var(--realm-ink);font:inherit;font-size:12px;font-weight:700;cursor:pointer}.auth-log-copy:hover{background:var(--realm-canvas)}.auth-log-output{max-height:240px;margin:0;overflow:auto;border:1px solid var(--realm-line);border-radius:10px;padding:12px;background:#101820;color:#d9e5ec;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;word-break:break-word}.auth-footer{border-top:1px solid var(--realm-canvas-line);letter-spacing:0;text-transform:none}@media(max-width:540px){.auth-header{align-items:flex-start;gap:8px;flex-direction:column}.auth-card{border-radius:16px}.auth-footer{align-items:flex-start;gap:6px;flex-direction:column}.auth-log-toolbar{align-items:flex-start;flex-direction:column}}@media(prefers-reduced-motion:reduce){.auth-action{transition:none}}
+</style></head><body data-passkey-page="${kind}"><div class="auth-shell"><header class="auth-header"><span>Klivcore Realm</span><span>Identity authority</span></header><main class="auth-main"><section class="auth-card" aria-labelledby="realm-title"><p class="auth-eyebrow">Secure Realm access</p><h1 id="realm-title">${realmName}</h1><p class="auth-copy">Use a passkey to continue to this Realm. Authentication is scoped to this exact Realm origin.</p><button class="auth-action" type="button" id="passkey-action">${action}</button><p class="auth-status" id="status" role="status" aria-live="polite"></p><details class="auth-log" id="auth-log-panel"><summary>Full auth log</summary><div class="auth-log-body"><div class="auth-log-toolbar"><p class="auth-log-note">Safe diagnostics only. Secrets and credential data are excluded.</p><button class="auth-log-copy" type="button" id="copy-auth-log">Copy log</button></div><pre class="auth-log-output" id="auth-log-output" aria-live="polite"></pre></div></details></section></main><footer class="auth-footer"><span>Private by default</span><span>Passkey-protected access</span></footer></div><script src="/auth/passkey.js" defer></script></body></html>`;
   return new Response(html, { headers: { ...authHeaders(), "content-type": "text/html; charset=utf-8" } });
 }
 
@@ -285,35 +311,56 @@ const PASSKEY_BROWSER_JS = String.raw`(() => {
   const body = document.body;
   const button = document.querySelector('#passkey-action');
   const status = document.querySelector('#status');
+  const logPanel = document.querySelector('#auth-log-panel');
+  const logOutput = document.querySelector('#auth-log-output');
+  const copyLog = document.querySelector('#copy-auth-log');
+  const startedAt = performance.now();
+  const entries = [];
+  const safeReasons = new Set(['credential-id', 'credential-type', 'challenge', 'origin', 'rp-id', 'user-presence', 'user-verification', 'attestation', 'malformed-response']);
+  const clean = (value) => String(value).replace(/[^A-Za-z0-9 ._:/=+-]/g, '?').slice(0, 180);
+  const log = (event, detail = '') => { const elapsed = String(Math.round(performance.now() - startedAt)).padStart(5, '0'); const line = '[+' + elapsed + 'ms] ' + clean(event) + (detail ? ' ' + clean(detail) : ''); entries.push(line); if (entries.length > 200) entries.shift(); logOutput.textContent = entries.join('\n'); logOutput.scrollTop = logOutput.scrollHeight; };
+  const safeError = (error) => error instanceof DOMException ? error.name : error instanceof Error && (/^Request failed \([0-9]{3}\)(: [a-z-]+)?$/.test(error.message) || error.message === 'Registration capability is missing' || /was cancelled$/.test(error.message)) ? error.message : 'UnexpectedError';
+  const pageKind = body.dataset.passkeyPage === 'register' ? 'register' : 'login';
+  const registrationToken = pageKind === 'register' ? new URL(location.href).hash.slice('#token='.length) : '';
+  if (pageKind === 'register') history.replaceState(null, '', '/auth/register');
+  log('page.loaded', 'kind=' + pageKind + ' origin=' + location.origin + ' webauthn=' + ('PublicKeyCredential' in window));
+  if (pageKind === 'register') log('registration.capability present=' + Boolean(registrationToken));
+  copyLog.addEventListener('click', async () => { try { await navigator.clipboard.writeText(entries.join('\n')); copyLog.textContent = 'Copied'; setTimeout(() => { copyLog.textContent = 'Copy log'; }, 1600); } catch { copyLog.textContent = 'Copy unavailable'; } });
   const b64 = (value) => { const input = value.replace(/-/g, '+').replace(/_/g, '/'); const raw = atob(input + '='.repeat((4 - input.length % 4) % 4)); return Uint8Array.from(raw, c => c.charCodeAt(0)); };
   const enc = (value) => { const bytes = new Uint8Array(value); let raw = ''; for (const byte of bytes) raw += String.fromCharCode(byte); return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); };
   const creation = (value) => PublicKeyCredential.parseCreationOptionsFromJSON ? PublicKeyCredential.parseCreationOptionsFromJSON(value) : { ...value, challenge: b64(value.challenge), user: { ...value.user, id: b64(value.user.id) }, excludeCredentials: (value.excludeCredentials || []).map(x => ({ ...x, id: b64(x.id) })) };
   const request = (value) => PublicKeyCredential.parseRequestOptionsFromJSON ? PublicKeyCredential.parseRequestOptionsFromJSON(value) : { ...value, challenge: b64(value.challenge), allowCredentials: (value.allowCredentials || []).map(x => ({ ...x, id: b64(x.id) })) };
   const serialize = (credential) => ({ id: credential.id, rawId: enc(credential.rawId), type: credential.type, authenticatorAttachment: credential.authenticatorAttachment, clientExtensionResults: credential.getClientExtensionResults(), response: credential.response.attestationObject ? { clientDataJSON: enc(credential.response.clientDataJSON), attestationObject: enc(credential.response.attestationObject), transports: credential.response.getTransports ? credential.response.getTransports() : [] } : { clientDataJSON: enc(credential.response.clientDataJSON), authenticatorData: enc(credential.response.authenticatorData), signature: enc(credential.response.signature), userHandle: credential.response.userHandle ? enc(credential.response.userHandle) : undefined } });
-  async function post(path, value) { const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }); if (!response.ok) throw new Error('Request failed (' + response.status + ')'); return response.status === 204 ? undefined : response.json(); }
+  async function post(path, value) { const requestAt = performance.now(); log('request.start', 'path=' + path); const response = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) }); const payload = response.status === 204 ? undefined : await response.json().catch(() => undefined); const reason = payload && safeReasons.has(payload.reason) ? payload.reason : ''; log('request.end', 'path=' + path + ' status=' + response.status + ' duration_ms=' + Math.round(performance.now() - requestAt) + (reason ? ' reason=' + reason : '')); if (!response.ok) throw new Error('Request failed (' + response.status + ')' + (reason ? ': ' + reason : '')); return payload; }
   button.addEventListener('click', async () => {
     button.disabled = true; status.textContent = 'Waiting for your authenticator…';
+    log('flow.start', 'kind=' + pageKind);
     try {
-      if (body.dataset.passkeyPage === 'register') {
-        const token = new URL(location.href).hash.slice('#token='.length); history.replaceState(null, '', '/auth/register');
-        if (!token) throw new Error('Registration capability is missing');
-        const flow = await post('/v1/auth/register/options', { token });
+      if (pageKind === 'register') {
+        if (!registrationToken) throw new Error('Registration capability is missing');
+        const flow = await post('/v1/auth/register/options', { token: registrationToken });
+        log('webauthn.create.start');
         const credential = await navigator.credentials.create({ publicKey: creation(flow.publicKey) });
         if (!credential) throw new Error('Passkey registration was cancelled');
-        await post('/v1/auth/register/verify', { token, flowId: flow.flowId, credential: serialize(credential) });
+        log('webauthn.create.end', 'result=credential-created');
+        await post('/v1/auth/register/verify', { token: registrationToken, flowId: flow.flowId, credential: serialize(credential) });
       } else {
         const flow = await post('/v1/auth/login/options', {});
+        log('webauthn.get.start');
         const credential = await navigator.credentials.get({ publicKey: request(flow.publicKey) });
         if (!credential) throw new Error('Passkey authentication was cancelled');
+        log('webauthn.get.end', 'result=credential-received');
         await post('/v1/auth/login/verify', { flowId: flow.flowId, credential: serialize(credential) });
       }
+      log('flow.complete', 'redirect=/');
       location.replace('/');
-    } catch (error) { status.textContent = error instanceof Error ? error.message : String(error); button.disabled = false; }
+    } catch (error) { const category = safeError(error); log('flow.failed', 'category=' + category); status.textContent = category; logPanel.open = true; button.disabled = false; }
   });
 })();`;
 
 export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const now = options.now ?? Date.now;
+  const branding = parseRealmBranding(options.branding);
   const publicUrl = new URL(options.publicOrigin);
   const isLoopback = publicUrl.hostname === "127.0.0.1" || publicUrl.hostname === "localhost";
   if (publicUrl.origin !== options.publicOrigin || publicUrl.username || publicUrl.password
@@ -370,6 +417,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
   const cookie = (token: string) => `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}${publicUrl.protocol === "https:" ? "; Secure" : ""}`;
 
   const allCredentials = () => database.query<CredentialRow, []>("SELECT id, public_key, counter, transports_json, device_type, backed_up FROM credentials ORDER BY id LIMIT 32").all().map(storedCredential);
+  const registrationLocked = () => database.query<{ present: number }, []>("SELECT EXISTS(SELECT 1 FROM credentials LIMIT 1) AS present").get()?.present === 1;
   const createSession = () => {
     const token = randomToken();
     const createdAt = now();
@@ -388,8 +436,8 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
   async function handle(request: Request): Promise<Response | undefined> {
     const url = new URL(request.url);
-    if (request.method === "GET" && url.pathname === "/auth/register") return authPage("register", options.realmName);
-    if (request.method === "GET" && url.pathname === "/auth/login") return authPage("login", options.realmName);
+    if (request.method === "GET" && url.pathname === "/auth/register") return authPage("register", options.realmName, branding);
+    if (request.method === "GET" && url.pathname === "/auth/login") return authPage("login", options.realmName, branding);
     if (request.method === "GET" && url.pathname === "/auth/passkey.js") {
       return new Response(PASSKEY_BROWSER_JS, { headers: { ...authHeaders(), "content-type": "text/javascript; charset=utf-8" } });
     }
@@ -402,6 +450,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
 
     if (url.pathname === "/v1/auth/register/options") {
       if (!exactKeys(body, ["token"]) || typeof body.token !== "string" || !TOKEN_PATTERN.test(body.token)) return json({ error: "invalid request" }, 400);
+      if (registrationLocked()) return json({ error: "unauthorized" }, 401);
       const hash = tokenHash(body.token);
       const grant = database.query<GrantRow, [string]>("SELECT token_hash, expires_at, consumed_at FROM registration_grants WHERE token_hash = ?").get(hash);
       if (!grant || grant.consumed_at !== null || grant.expires_at <= timestamp) return json({ error: "unauthorized" }, 401);
@@ -428,7 +477,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
       const ceremony = claimCeremony(body.flowId, "register", hash);
       if (!ceremony) return json({ error: "unauthorized" }, 401);
       const result = await engine.verifyRegistration({ challenge: ceremony.challenge, expectedOrigin: options.publicOrigin, rpId: options.rpId, response: body.credential });
-      if (!result.verified) return json({ error: "unauthorized" }, 401);
+      if (!result.verified) return json({ error: "unauthorized", reason: result.reason ?? "malformed-response" }, 401);
       let sessionToken: string | undefined;
       const commit = database.transaction(() => {
         const consumed = database.query("UPDATE registration_grants SET consumed_at = ? WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > ?")
@@ -437,6 +486,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
         const entry = result.credential;
         database.query("INSERT INTO credentials(id, public_key, counter, transports_json, device_type, backed_up, created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
           .run(entry.id, entry.publicKey, entry.counter, JSON.stringify(entry.transports), entry.deviceType, entry.backedUp ? 1 : 0, timestamp, timestamp);
+        database.query("UPDATE registration_grants SET consumed_at = ? WHERE consumed_at IS NULL").run(timestamp);
         sessionToken = createSession();
       });
       try { commit.immediate(); } catch { return json({ error: "unauthorized" }, 401); }
@@ -522,6 +572,7 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     issueRegistrationUrl(issueOptions = {}) {
       const ttlMs = issueOptions.ttlMs ?? 5 * 60_000;
       if (!Number.isSafeInteger(ttlMs) || ttlMs < 1_000 || ttlMs > MAX_REGISTRATION_TTL_MS) throw new RangeError("registration URL lifetime is invalid");
+      if (registrationLocked()) throw new Error("registration is already locked");
       const token = randomToken();
       const timestamp = now();
       database.query("INSERT INTO registration_grants(token_hash, expires_at, consumed_at) VALUES (?, ?, NULL)")
