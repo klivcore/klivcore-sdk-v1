@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import {
   parseActiveRealmRecord,
@@ -55,12 +55,17 @@ async function tmuxExists(sessionName: string): Promise<boolean> {
 
 async function tmuxOutput(sessionName: string): Promise<string> {
   const result = await tmux(["capture-pane", "-p", "-t", `${sessionName}:0.0`, "-S", "-80"]);
-  return result.code === 0 ? result.stdout.trim() : result.stderr.trim();
+  if (result.code === 0) return result.stdout.trim();
+  const logPath = resolve(stateDir, sessionName === sessions.tunnel ? "managed-tunnel.log" : "realm.log");
+  return readFile(logPath, "utf8").then((value) => value.trim()).catch(() => result.stderr.trim());
 }
 
 async function startTmuxWorker(sessionName: string, environment: Readonly<Record<string, string>>): Promise<void> {
+  const logPath = resolve(stateDir, sessionName === sessions.tunnel ? "managed-tunnel.log" : "realm.log");
+  await writeFile(logPath, "", { mode: 0o600 });
+  await chmod(logPath, 0o600);
   const assignments = Object.entries(environment).map(([key, value]) => `${key}=${shellQuote(value)}`).join(" ");
-  const workerCommand = `${assignments} exec ${shellQuote(process.execPath)} ${shellQuote(workerPath)} ${shellQuote(configPath)}`;
+  const workerCommand = `${assignments} exec ${shellQuote(process.execPath)} ${shellQuote(workerPath)} ${shellQuote(configPath)} >>${shellQuote(logPath)} 2>&1`;
   const result = await tmux(["new-session", "-d", "-s", sessionName, "-c", dirname(configPath), workerCommand]);
   if (result.code !== 0) throw new Error(result.stderr.trim() || `failed to create tmux session ${sessionName}`);
 }
