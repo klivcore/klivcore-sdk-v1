@@ -36,9 +36,9 @@ Start from `examples/start-realm.config.json`. The command:
 5. loads the integrity-checked App V2 and starts the authenticated Realm on `127.0.0.1` with that exact origin;
 6. verifies local and public `/health` responses identify the configured Realm;
 7. writes a mode-`0600` active-runtime record containing the verified origins, process identity, and a random runtime-scoped registration-control capability;
-8. prints the safe Realm URL, registration command, and whether authenticated **Connect Desktop** pairing is enabled.
+8. prints the safe Realm URL, one five-minute single-use first-registration URL, the command for issuing later user registrations, and concrete **Connect Desktop** next steps.
 
-By default the foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and its managed tunnel together. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
+By default the foreground command owns both processes. Keep it running with your host's ordinary process supervisor; `Ctrl-C` stops the Realm and its managed tunnel together. After local health succeeds, a newly allocated Quick Tunnel may still need time for public DNS and edge propagation. The launcher reports that state as locally ready/publicly propagating and keeps both healthy components running while it retries only public health; it fails closed if the owned tunnel exits. Quick Tunnel is an ephemeral onboarding endpoint: a later run may produce a different origin and therefore require a new passkey registration. Use a named tunnel and stable DNS for durable deployments.
 
 To preserve an existing tunnel or use a named operator-managed tunnel, set `publicOrigin` to its exact HTTPS origin with no trailing slash, path, query, fragment, or credentials. In that mode `start-realm` does not install, start, signal, or stop `cloudflared`; it verifies the supplied public origin identifies the configured live Realm before becoming ready. Keep the external tunnel supervised separately and pointed only at the configured loopback `port`.
 
@@ -61,7 +61,7 @@ The command verifies the private active-runtime record, running process, exact l
 - has its grant and registration ceremony physically deleted in the same transaction that saves the credential;
 - does not invalidate other users' outstanding registration URLs.
 
-When the user explicitly asks for a registration URL, the agent runs this command and returns the exact output only in that private conversation. The agent must not place the URL in logs, issues, commits, summaries, memory, or public channels. Generate a new URL for every user; never reuse one. Expired grants are rejected and physically removed. Normal Realm startup never generates a registration URL.
+Once exact public health is verified, initial Realm startup prints one five-minute single-use registration URL with the next-step instructions. Treat launcher output as sensitive until that URL expires or is consumed; do not send it to shared logs, issues, commits, summaries, memory, or public channels. For every later user, run the command above and handle its exact output only in a private conversation. Generate a new URL for every user; never reuse one. Expired grants are rejected and physically removed.
 
 ### Connect Hermes Desktop through the Realm
 

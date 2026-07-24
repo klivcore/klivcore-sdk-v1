@@ -171,3 +171,37 @@ export function parseQuickTunnelUrl(text: string): string | undefined {
   const url = new URL(match[0]);
   return url.protocol === "https:" && url.hostname.endsWith(".trycloudflare.com") ? url.origin : undefined;
 }
+
+export type ManagedPublicHealthWait = Readonly<{
+  probe: () => Promise<void>;
+  tunnelExitCode: () => number | null;
+  sleep?: (milliseconds: number) => Promise<void>;
+  now?: () => number;
+  retryDelayMs?: number;
+  reportAfterMs?: number;
+  reportEveryMs?: number;
+  onWaiting?: (message: string) => void;
+}>;
+
+export async function waitForManagedPublicHealth(input: ManagedPublicHealthWait): Promise<void> {
+  const sleep = input.sleep ?? Bun.sleep;
+  const now = input.now ?? Date.now;
+  const retryDelayMs = input.retryDelayMs ?? 500;
+  const reportEveryMs = input.reportEveryMs ?? 30_000;
+  let nextReportAt = now() + (input.reportAfterMs ?? 45_000);
+  while (true) {
+    const exitCode = input.tunnelExitCode();
+    if (exitCode !== null) throw new Error(`cloudflared exited before public health was ready (${exitCode})`);
+    try {
+      await input.probe();
+      return;
+    } catch (error) {
+      const current = now();
+      if (current >= nextReportAt) {
+        input.onWaiting?.(error instanceof Error ? error.message : String(error));
+        nextReportAt = current + reportEveryMs;
+      }
+    }
+    await sleep(retryDelayMs);
+  }
+}

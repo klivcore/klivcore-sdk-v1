@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, resolveCloudflaredAsset } from "./start-realm-core";
+import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -109,7 +109,7 @@ async function waitForHealth(origin: string, realmId: string, timeoutMs: number)
   throw new Error(`Realm health check failed for ${origin}: ${last}`);
 }
 
-async function issueRegistrationUrl(): Promise<void> {
+async function issueRegistrationUrl(): Promise<string> {
   const info = await lstat(activeRealmPath).catch(() => undefined);
   const getuid = process.getuid?.();
   if (!info || !info.isFile() || info.isSymbolicLink() || (info.mode & 0o777) !== 0o600
@@ -150,11 +150,11 @@ async function issueRegistrationUrl(): Promise<void> {
     || !/^#token=[A-Za-z0-9_-]{32,128}$/.test(registrationUrl.hash)) {
     throw new Error("live Realm returned an invalid registration URL");
   }
-  console.log(registrationUrl.href);
+  return registrationUrl.href;
 }
 
 if (invocation.command === "registration-url") {
-  await issueRegistrationUrl();
+  console.log(await issueRegistrationUrl());
   process.exit(0);
 }
 
@@ -195,8 +195,10 @@ try {
   const tunnelPlan = planStartRealmTunnel(config);
   if (tunnelPlan.mode === "external") {
     publicOrigin = tunnelPlan.publicOrigin;
+    console.log(`Using externally managed tunnel: ${publicOrigin}`);
   } else {
     const executable = await cloudflaredPath();
+    console.log("Starting managed Quick Tunnel...");
     tunnel = Bun.spawn([
       executable,
       "tunnel",
@@ -205,11 +207,13 @@ try {
       "--url", `http://127.0.0.1:${config.port}`,
     ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
     publicOrigin = await captureTunnelOrigin(tunnel);
+    console.log(`Quick Tunnel allocated: ${publicOrigin}`);
   }
   const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
   const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const appRoot = await resolvePublishedAppV2Root(resolve(import.meta.dir, "../app-v2"));
   const appV2 = await loadPublishedAppV2(appRoot);
+  console.log(`Starting Realm on http://127.0.0.1:${config.port}...`);
   auth = createPasskeyAuth({
     branding,
     databasePath: resolve(stateDir, "auth.sqlite"),
@@ -248,7 +252,20 @@ try {
     },
   });
   await waitForHealth(gateway.endpoint, config.realm.id, 10_000);
-  await waitForHealth(publicOrigin, config.realm.id, 45_000);
+  console.log(`Local Realm health: ok (${gateway.endpoint})`);
+  if (tunnel) {
+    const managedTunnel = tunnel;
+    await waitForManagedPublicHealth({
+      probe: () => waitForHealth(publicOrigin, config.realm.id, 5_000),
+      tunnelExitCode: () => managedTunnel.exitCode,
+      onWaiting: (message) => {
+        console.error(`Realm is locally ready; waiting for Quick Tunnel public health: ${message}`);
+        console.error(`Realm URL (propagating): ${publicOrigin}`);
+      },
+    });
+  } else {
+    await waitForHealth(publicOrigin, config.realm.id, 45_000);
+  }
   await rm(resolve(stateDir, "first-registration.url"), { force: true });
   const activeStage = `${activeRealmPath}.stage-${crypto.randomUUID()}`;
   try {
@@ -265,10 +282,15 @@ try {
   } finally {
     await rm(activeStage, { force: true });
   }
+  const registrationUrl = await issueRegistrationUrl();
   console.log("\nRealm ready");
   console.log(`Realm URL: ${publicOrigin}`);
+  console.log(`Registration URL (one use, expires in five minutes): ${registrationUrl}`);
   console.log(`Registration URL command: start-realm registration-url ${configPath}`);
-  if (config.desktop) console.log("Connect Desktop: available from the authenticated Realm menu");
+  console.log("Next steps:");
+  console.log("  1. Open the registration URL now and create the first passkey.");
+  console.log("  2. Sign in to the Realm URL.");
+  if (config.desktop) console.log("  3. Choose Connect Desktop from the authenticated Realm menu.");
   console.log("Stop: Ctrl-C");
   if (tunnel) {
     void tunnel.exited.then(async (code) => {
