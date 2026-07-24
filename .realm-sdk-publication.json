@@ -47,8 +47,8 @@
     },
     {
       "path": "src/contracts.ts",
-      "bytes": 9571,
-      "sha256": "599b498e1cfe0bd52b6ffd60730a54189e473e82deebbd270a05c1a8d5a019ba"
+      "bytes": 9590,
+      "sha256": "18c41588c943f26552f52b6f4d07377ae4050f343054e0796fc2fbc23f1ddbdd"
     },
     {
       "path": "src/passkey-auth.ts",
