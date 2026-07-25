@@ -53,7 +53,7 @@ describe("reference Realm Gateway", () => {
     const candidate = await bindAndPrepareRealm(gateway.endpoint);
     expect(candidate.descriptor.realmId).toBe("test-realm");
     expect(candidate.descriptor.capabilities).toContain("test:inspect");
-    expect(candidate.route.component.hostApiRange).toBe("^1.2.0");
+    expect(candidate.route.component.hostApiRange).toBe("^1.4.0");
     expect(candidate.js).toContain("Test Realm");
   });
 

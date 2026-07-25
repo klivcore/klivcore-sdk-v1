@@ -81,17 +81,23 @@ async function loadMountedGateways(): Promise<Readonly<{
         path: route.path === "/" ? mount.baseRoute : `${mount.baseRoute}${route.path}`,
         title: route.title,
         requiredCapabilities: route.requiredCapabilities,
+        services: route.services.map((id) => {
+          if (mount.port === null || mount.manifest.server?.id !== id) throw new Error(`Gateway route service is unavailable: ${mount.key}/${id}`);
+          return Object.freeze({ id, endpoint: `/:${mount.port}` });
+        }),
         componentId: `${mount.key}:${route.component.id}`,
         js: await readGatewayAsset(mount.packageRoot, route.component.js),
         css: await readGatewayAsset(mount.packageRoot, route.component.css),
       }));
     }
-    httpRelays.push(Object.freeze({
-      port: mount.port,
-      basePath: `${mount.baseRoute}/_gateway`,
-      requiredCapabilities: mount.manifest.httpRelay.requiredCapabilities,
-      allowedRequests: mount.manifest.httpRelay.allowedRequests,
-    }));
+    if (mount.manifest.server !== null) {
+      if (mount.port === null) throw new Error(`Gateway server port is unavailable: ${mount.key}`);
+      httpRelays.push(Object.freeze({
+        port: mount.port,
+        requiredCapabilities: mount.manifest.server.requiredCapabilities,
+        allowedRequests: mount.manifest.server.allowedRequests,
+      }));
+    }
   }
   if (new Set(routes.map((route) => route.path)).size !== routes.length) throw new Error("mounted Gateway route conflict");
   return Object.freeze({ capabilities: Object.freeze([...capabilities]), routes: Object.freeze(routes), httpRelays: Object.freeze(httpRelays) });

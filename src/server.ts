@@ -65,6 +65,7 @@ export type RealmGatewayRouteConfig = Readonly<{
   path: string;
   title: string;
   requiredCapabilities: readonly string[];
+  services?: readonly Readonly<{ id: string; endpoint: string }>[];
   componentId: string;
   js: string;
   css: string;
@@ -78,7 +79,6 @@ export type RealmGatewayHttpRelayRequest = Readonly<{
 
 export type RealmGatewayHttpRelay = Readonly<{
   port: number;
-  basePath?: string;
   requiredCapabilities: readonly string[];
   allowedRequests: readonly RealmGatewayHttpRelayRequest[];
   maxMessageBytes?: number;
@@ -231,14 +231,16 @@ type RealmSocketData =
     tcp?: DesktopRelayTcp;
   }
   | {
-    authenticated: true;
+    authenticated: boolean;
+    authTimer?: ReturnType<typeof setTimeout>;
     kind: "http-relay";
     maxMessageBytes: number;
     pending: (string | Uint8Array)[];
     pendingBytes: number;
+    port: number;
     sessionId: string;
+    upstreamPath: string;
     upstream?: WebSocket;
-    upstreamUrl: string;
   };
 
 type BoundSocket = Readonly<{ close(code?: number, reason?: string): void }>;
@@ -319,6 +321,15 @@ type PublicBinding = Readonly<{
   expiresAt?: number;
 }>;
 
+type ServiceAccessGrant = Readonly<{
+  bindingId: string;
+  expiresAt: number;
+  port: number;
+  routeId: string;
+  serviceId: string;
+  sessionId?: string;
+}>;
+
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
   if (config.mode !== undefined && config.mode !== "realm" && config.mode !== "desktop-ssh") {
     throw new TypeError("Realm Gateway mode is invalid");
@@ -340,6 +351,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   const maxTrustedBindings = config.maxTrustedBindings ?? 256;
   const publicBindings = new Map<string, PublicBinding>();
   const trustedBindings = new Map<string, ReadonlySet<string>>();
+  const serviceAccessGrants = new Map<string, ServiceAccessGrant>();
   const activeBindingSockets = new Map<string, Set<BoundSocket>>();
   const activeSessionSockets = new Map<string, Set<BoundSocket>>();
   const activeDesktopSockets = new Set<BoundSocket>();
@@ -392,10 +404,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       || httpRelays.some((candidate, candidateIndex) => candidateIndex < index && candidate.port === relay.port)) {
       throw new TypeError(`Realm HTTP relay ${index} port is invalid or duplicated`);
     }
-    if (relay.basePath !== undefined && (!/^\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)*\/_gateway$/.test(relay.basePath)
-      || httpRelays.some((candidate, candidateIndex) => candidateIndex < index && candidate.basePath === relay.basePath))) {
-      throw new TypeError(`Realm HTTP relay ${index} base path is invalid or duplicated`);
-    }
+
     if (!Array.isArray(relay.requiredCapabilities)
       || relay.requiredCapabilities.some((capability) => typeof capability !== "string" || !configuredCapabilities.has(capability))) {
       throw new TypeError(`Realm HTTP relay ${index} capabilities are invalid`);
@@ -443,9 +452,14 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     count: badgeCount,
   });
 
-  function requestBinding(request: Request): ReadonlySet<string> | undefined {
+  function requestBindingId(request: Request): string | undefined {
     const header = request.headers.get("authorization");
-    return header?.startsWith("Bearer ") === true ? bindingForId(header.slice("Bearer ".length)) : undefined;
+    return header?.startsWith("Bearer ") === true ? header.slice("Bearer ".length) : undefined;
+  }
+
+  function requestBinding(request: Request): ReadonlySet<string> | undefined {
+    const bindingId = requestBindingId(request);
+    return bindingId ? bindingForId(bindingId) : undefined;
   }
 
   function bindingForId(bindingId: string): ReadonlySet<string> | undefined {
@@ -491,7 +505,21 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     const sockets = activeBindingSockets.get(bindingId);
     activeBindingSockets.delete(bindingId);
     for (const socket of sockets ?? []) socket.close(1008, "Realm binding revoked");
+    for (const [accessToken, grant] of serviceAccessGrants) {
+      if (grant.bindingId === bindingId) serviceAccessGrants.delete(accessToken);
+    }
     return true;
+  }
+
+  function serviceGrant(accessToken: string | null, port: number, sessionId?: string): ServiceAccessGrant | undefined {
+    if (!accessToken) return undefined;
+    const grant = serviceAccessGrants.get(accessToken);
+    if (!grant) return undefined;
+    if (grant.expiresAt <= Date.now() || grant.port !== port || grant.sessionId !== sessionId || !bindingForId(grant.bindingId)) {
+      serviceAccessGrants.delete(accessToken);
+      return undefined;
+    }
+    return grant;
   }
 
   const unsubscribeSessionInvalidation = config.auth?.onSessionInvalidated((sessionId) => {
@@ -525,6 +553,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         path: route.path,
         title: route.title,
         requiredCapabilities: [...route.requiredCapabilities],
+        services: [...(route.services ?? [])],
         component: {
           id: route.componentId,
           hostApiRange: `^${HOST_API_VERSION}`,
@@ -557,26 +586,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const sessionSockets = activeSessionSockets.get(socket.data.sessionId) ?? new Set<BoundSocket>();
         sessionSockets.add(socket);
         activeSessionSockets.set(socket.data.sessionId, sessionSockets);
-        const upstream = new WebSocket(socket.data.upstreamUrl);
-        socket.data.upstream = upstream;
-        upstream.binaryType = "arraybuffer";
-        upstream.addEventListener("open", () => {
-          for (const frame of socket.data.kind === "http-relay" ? socket.data.pending : []) upstream.send(relayWebSocketData(frame));
-          if (socket.data.kind === "http-relay") {
-            socket.data.pending = [];
-            socket.data.pendingBytes = 0;
-          }
-        }, { once: true });
-        upstream.addEventListener("message", (event) => {
-          if (typeof event.data === "string") socket.send(event.data);
-          else if (event.data instanceof ArrayBuffer) socket.send(new Uint8Array(event.data));
-          else socket.close(1008, "invalid upstream relay frame");
-        });
-        upstream.addEventListener("error", () => socket.close(1011, "Realm relay unavailable"));
-        upstream.addEventListener("close", (event) => {
-          const code = event.code >= 1000 && event.code !== 1005 && event.code !== 1006 ? event.code : 1011;
-          socket.close(code, event.reason.slice(0, 123));
-        });
+        socket.data.authTimer = setTimeout(() => socket.close(1008, "Realm service access timed out"), 5_000);
       },
       message(socket, message) {
         if (socket.data.kind === "desktop-ssh") {
@@ -674,6 +684,44 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         if (socket.data.kind === "http-relay") {
           if (!config.auth?.sessionById(socket.data.sessionId)) {
             socket.close(1008, "Realm session expired");
+            return;
+          }
+          if (!socket.data.authenticated) {
+            if (typeof message !== "string" || new TextEncoder().encode(message).byteLength > 1_024) {
+              socket.close(1008, "invalid Realm service access");
+              return;
+            }
+            let input: unknown;
+            try { input = JSON.parse(message); } catch { socket.close(1008, "invalid Realm service access"); return; }
+            const record = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+            const grant = record && Object.keys(record).sort().join(",") === "accessToken,type"
+              && record.type === "authorize-service" && typeof record.accessToken === "string"
+              ? serviceGrant(record.accessToken, socket.data.port, socket.data.sessionId)
+              : undefined;
+            if (!grant) { socket.close(1008, "invalid Realm service access"); return; }
+            socket.data.authenticated = true;
+            if (socket.data.authTimer) clearTimeout(socket.data.authTimer);
+            socket.data.authTimer = undefined;
+            const upstream = new WebSocket(`ws://127.0.0.1:${socket.data.port}${socket.data.upstreamPath}`);
+            socket.data.upstream = upstream;
+            upstream.binaryType = "arraybuffer";
+            upstream.addEventListener("open", () => {
+              for (const frame of socket.data.kind === "http-relay" ? socket.data.pending : []) upstream.send(relayWebSocketData(frame));
+              if (socket.data.kind === "http-relay") {
+                socket.data.pending = [];
+                socket.data.pendingBytes = 0;
+              }
+            }, { once: true });
+            upstream.addEventListener("message", (event) => {
+              if (typeof event.data === "string") socket.send(event.data);
+              else if (event.data instanceof ArrayBuffer) socket.send(new Uint8Array(event.data));
+              else socket.close(1008, "invalid upstream relay frame");
+            });
+            upstream.addEventListener("error", () => socket.close(1011, "Realm relay unavailable"));
+            upstream.addEventListener("close", (event) => {
+              const code = event.code >= 1000 && event.code !== 1005 && event.code !== 1006 ? event.code : 1011;
+              socket.close(code, event.reason.slice(0, 123));
+            });
             return;
           }
           const frame = typeof message === "string" ? message : new Uint8Array(message);
@@ -780,6 +828,8 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           return;
         }
         if (socket.data.kind === "http-relay") {
+          if (socket.data.authTimer) clearTimeout(socket.data.authTimer);
+          socket.data.authTimer = undefined;
           const sessionSockets = activeSessionSockets.get(socket.data.sessionId);
           sessionSockets?.delete(socket);
           if (sessionSockets?.size === 0) activeSessionSockets.delete(socket.data.sessionId);
@@ -898,13 +948,11 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         catch { return json({ error: "Desktop SSH authorization unavailable" }, 500); }
         return new Response(null, { status: 204, headers: responseHeaders });
       }
-      const mountedRelay = httpRelays.find((candidate) => candidate.basePath !== undefined
-        && (url.pathname === candidate.basePath || url.pathname.startsWith(`${candidate.basePath}/`)));
-      const relayMatch = mountedRelay ? undefined : /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
-      if (mountedRelay || relayMatch) {
-        const relay = mountedRelay ?? httpRelays.find((candidate) => candidate.port === Number(relayMatch![1]));
+      const relayMatch = /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
+      if (relayMatch) {
+        const relay = httpRelays.find((candidate) => candidate.port === Number(relayMatch[1]));
         if (!relay) return json({ error: "not found" }, 404);
-        const upstreamPath = mountedRelay ? url.pathname.slice(mountedRelay.basePath!.length) || "/" : relayMatch![2];
+        const upstreamPath = relayMatch[2];
         const pathRules = relay.allowedRequests.filter((rule) => relayPathMatches(upstreamPath, rule));
         if (pathRules.length === 0) return json({ error: "not found" }, 404);
         if (!pathRules.some((rule) => rule.method === request.method)) return json({ error: "method not allowed" }, 405);
@@ -912,19 +960,21 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         if (!session || session.realmId !== config.realmId) return json({ error: "unauthorized" }, 401);
         const sessionCapabilities = new Set(session.principal === "agent" ? session.capabilities ?? [] : publicBindingCapabilities);
         if (relay.requiredCapabilities.some((capability) => !sessionCapabilities.has(capability))) return json({ error: "forbidden" }, 403);
+        const websocketUpgrade = request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
+        if (!websocketUpgrade && !serviceGrant(request.headers.get("x-klivcore-service-access"), relay.port, session.id)) return json({ error: "forbidden" }, 403);
         if (request.method === "POST" && request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
-        if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+        if (websocketUpgrade) {
           if (request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
-          const upstreamUrl = `ws://127.0.0.1:${relay.port}${upstreamPath}${url.search}`;
           if (bunServer.upgrade(request, {
             data: {
-              authenticated: true,
+              authenticated: false,
               kind: "http-relay",
               maxMessageBytes: relay.maxMessageBytes ?? 512 * 1024,
               pending: [],
               pendingBytes: 0,
+              port: relay.port,
               sessionId: session.id,
-              upstreamUrl,
+              upstreamPath: `${upstreamPath}${url.search}`,
             },
           })) return;
           return json({ error: "websocket upgrade failed" }, 500);
@@ -994,6 +1044,49 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           capabilities: [...capabilities],
         });
         return json(descriptor);
+      }
+      if (request.method === "POST" && url.pathname === "/v1/service-access") {
+        if (config.auth && request.headers.get("origin") !== config.auth.publicOrigin) return json({ error: "forbidden" }, 403);
+        const bindingId = requestBindingId(request);
+        const binding = bindingId ? publicBindings.get(bindingId) : undefined;
+        const capabilities = bindingId ? bindingForId(bindingId) : undefined;
+        const session = config.auth?.sessionFor(request);
+        if (!bindingId || !binding || !capabilities
+          || (config.auth && (!session || session.realmId !== config.realmId || session.id !== binding.sessionId))) {
+          return json({ error: "unauthorized" }, 401);
+        }
+        const body = await boundedJsonObject(request);
+        if (!body || Object.keys(body).join(",") !== "routeId" || typeof body.routeId !== "string") {
+          return json({ error: "invalid request" }, 400);
+        }
+        const route = routeConfigs.find((candidate) => candidate.id === body.routeId);
+        if (!route || route.requiredCapabilities.some((capability) => !capabilities.has(capability))) {
+          return json({ error: "forbidden" }, 403);
+        }
+        const routeServices = (route.services ?? []).map((service) => {
+          const match = /^\/:([1-9]\d{0,4})$/.exec(service.endpoint);
+          const relay = match ? httpRelays.find((candidate) => candidate.port === Number(match[1])) : undefined;
+          if (!relay || relay.requiredCapabilities.some((capability) => !capabilities.has(capability))) {
+            return undefined;
+          }
+          return Object.freeze({ service, relay });
+        });
+        if (routeServices.some((entry) => entry === undefined)) return json({ error: "Realm service unavailable" }, 503);
+        const granted = routeServices.map((entry) => {
+          const { service, relay } = entry!;
+          if (serviceAccessGrants.size >= maxPublicBindings * 8) serviceAccessGrants.delete(serviceAccessGrants.keys().next().value!);
+          const accessToken = crypto.randomUUID();
+          serviceAccessGrants.set(accessToken, Object.freeze({
+            bindingId,
+            expiresAt: Math.min(binding.expiresAt ?? Date.now() + 5 * 60_000, Date.now() + 5 * 60_000),
+            port: relay.port,
+            routeId: route.id,
+            serviceId: service.id,
+            sessionId: binding.sessionId,
+          }));
+          return Object.freeze({ id: service.id, endpoint: service.endpoint, accessToken });
+        });
+        return json({ services: granted });
       }
       if (config.appV2
         && url.pathname !== "/health"

@@ -367,7 +367,7 @@ const AGENT_PAIRING_BROWSER_JS = String.raw`(() => {
     if (stopped) return;
     try {
       const response = await fetch('/v1/auth/agent/status', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
-      if (response.status === 204) { stopped = true; status.textContent = 'Approved. Opening Realm…'; location.replace('/debug/resource-monitor'); return; }
+      if (response.status === 204) { stopped = true; status.textContent = 'Approved. Opening Realm…'; location.replace('/'); return; }
       if (response.status !== 202) { stopped = true; status.textContent = 'Pairing expired or unavailable.'; return; }
     } catch { status.textContent = 'Realm unavailable. Retrying…'; }
     setTimeout(poll, 1000);

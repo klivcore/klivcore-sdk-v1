@@ -71,6 +71,44 @@ The equivalent expanded form is:
 
 Gateway processes run in independent managed sessions and survive Realm worker replacement. Gateway source or configuration changes replace only that Gateway and then refresh the Realm route catalog; they do not replace Desktop SSH sessions. On Linux, `start-realm` uses passwordless `sudo` to create a deterministic non-login service user for each mount, installs a root-owned content-addressed package under `/var/lib/klivcore/gateways`, and stores that mount's mode-`0700` durable state under the same isolated root. The process receives an empty environment containing only its Gateway contract variables and cannot read Realm, SSH, or sibling-Gateway private state.
 
+The exact contract-version-1 manifest is implementation-neutral:
+
+```json
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "id": "example",
+  "capabilities": ["example:read"],
+  "routes": [{
+    "id": "main",
+    "path": "/",
+    "title": "Example",
+    "requiredCapabilities": ["example:read"],
+    "services": ["api"],
+    "component": { "id": "example-main", "js": "ui/main.js", "css": "ui/main.css" }
+  }],
+  "server": {
+    "id": "api",
+    "process": "server",
+    "requiredCapabilities": ["example:read"],
+    "allowedRequests": [{ "method": "GET", "pathPrefix": "/v1/data" }],
+    "healthPath": "/health"
+  },
+  "processes": [
+    { "role": "server", "entrypoint": "bin/server.js" },
+    { "role": "utility", "entrypoint": "bin/utility.js" }
+  ]
+}
+```
+
+`server` is either that one server declaration or `null`; `processes` may be empty for a route-only extension. Every route service name must resolve to the declared server ID. The server listens on the assigned loopback `KLIVCORE_GATEWAY_PORT`, and its `healthPath` must return successful JSON containing `{ "status": "ok" }`. After health succeeds, Realm starts every other declared process. External HTTPS/WSS requests reach the server only through the authenticated, capability-checked `/:port/` transport and its exact request allowlist; no product route alias is created.
+
+Each process starts from the immutable package root with an empty environment containing only `HOME`, a bounded `PATH`, `KLIVCORE_GATEWAY_MOUNT`, `KLIVCORE_GATEWAY_HOME`, `KLIVCORE_GATEWAY_CONFIG`, and—only when a server exists—`KLIVCORE_GATEWAY_PORT`. `KLIVCORE_GATEWAY_CONFIG` is the mode-`0600` JSON value from that mount's operator configuration. Gateway code owns every file, database, migration, and credential beneath its private home; Realm does not interpret them. Do not place plaintext credentials in the Realm config.
+
+A route component exports `mount(host)`. `host.root` is its isolated ShadowRoot and `host.services` contains only its declared named services, each as `{ endpoint }`. The endpoint is the verified same-Realm `/:port` path resolved by App V2 to the active Realm origin. Components must consume that handle instead of deriving a URL from the current route. Existing routes without services receive an empty map.
+
+Mount keys are stable instance identities. Replacing an immutable package revision or mount configuration preserves the instance's service identity, private home, and assigned port, restarts only that extension, and republishes the Realm catalog. If the replacement cannot become healthy, the coordinator stops it and restarts the prior revision. This lifecycle is the basis for future development HMR and production live replacement; contract version 1 does not define a source-watcher transport.
+
 Gateway mounts are trusted operator configuration, not a third-party plugin-discovery boundary. A mounted package's browser component executes as same-origin Realm product UI and therefore carries the signed-in user's granted route authority. Do not mount untrusted publications; hostile UI would require a separate opaque-origin iframe and message-broker contract that is intentionally outside this Gateway slice.
 
 Owner publishers operate only in a quiescent generated-SDK checkout. That working tree is not a runtime serving boundary: consumers install an exact committed SDK revision after all owner publishers and SDK gates finish. The Git commit is the atomic generation-visibility boundary; do not run a Realm or another SDK reader from the checkout while publication is in progress.

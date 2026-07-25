@@ -1,6 +1,6 @@
 export const PROTOCOL_VERSION = "1.0.0" as const;
 export const SCHEMA_VERSION = "1.0.0" as const;
-export const HOST_API_VERSION = "1.2.0" as const;
+export const HOST_API_VERSION = "1.4.0" as const;
 
 export type ArtifactReference = Readonly<{ url: string; sha256: string; mediaType: "text/javascript" | "text/css" }>;
 export type ComponentPublication = Readonly<{
@@ -14,6 +14,7 @@ export type RealmRoute = Readonly<{
   path: string;
   title: string;
   requiredCapabilities: readonly string[];
+  services: readonly Readonly<{ id: string; endpoint: string }>[];
   component: ComponentPublication;
 }>;
 export type RealmCatalog = Readonly<{
@@ -157,16 +158,26 @@ export function parseRealmCatalog(value: unknown): RealmCatalog {
   if (object.schemaVersion !== SCHEMA_VERSION) throw new Error("incompatible catalog schema version");
   const routes = denseArray(object.routes, "catalog.routes", 128).map((entry, index): RealmRoute => {
     const route = plain(entry, `catalog.routes[${index}]`);
-    exact(route, ["id", "path", "title", "requiredCapabilities", "component"], `catalog.routes[${index}]`);
+    const hasServices = own.call(route, "services");
+    exact(route, ["id", "path", "title", "requiredCapabilities", ...(hasServices ? ["services"] : []), "component"], `catalog.routes[${index}]`);
     const path = text(route.path, `catalog.routes[${index}].path`, 512);
     if (!/^\/(?:[a-z0-9-]+(?:\/[a-z0-9-]+)*)?$/.test(path)) throw new Error("route path is invalid");
     const component = plain(route.component, `catalog.routes[${index}].component`);
     exact(component, ["id", "hostApiRange", "js", "css"], `catalog.routes[${index}].component`);
     const hostApiRange = text(component.hostApiRange, "component.hostApiRange", 32);
     if (!supportsHostApi(hostApiRange)) throw new Error("component has incompatible host API range");
+    const services = hasServices ? denseArray(route.services, `catalog.routes[${index}].services`, 8).map((entry, serviceIndex) => {
+      const service = plain(entry, `catalog.routes[${index}].services[${serviceIndex}]`);
+      exact(service, ["id", "endpoint"], `catalog.routes[${index}].services[${serviceIndex}]`);
+      const endpoint = text(service.endpoint, `catalog.routes[${index}].services[${serviceIndex}].endpoint`, 32);
+      if (!/^\/:([1-9]\d{0,4})$/.test(endpoint) || Number(endpoint.slice(2)) > 65_535) throw new Error("route service endpoint is invalid");
+      return Object.freeze({ id: id(service.id, `catalog.routes[${index}].services[${serviceIndex}].id`), endpoint });
+    }) : [];
+    if (new Set(services.map((service) => service.id)).size !== services.length) throw new Error("duplicate route service id");
     return Object.freeze({
       id: id(route.id, "route.id"), path, title: text(route.title, "route.title"),
       requiredCapabilities: capabilityList(route.requiredCapabilities, "route.requiredCapabilities"),
+      services: Object.freeze(services),
       component: Object.freeze({ id: id(component.id, "component.id"), hostApiRange,
         js: parseArtifact(component.js, "text/javascript", "component.js"),
         css: parseArtifact(component.css, "text/css", "component.css") }),

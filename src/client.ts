@@ -3,8 +3,33 @@ import { HOST_API_VERSION, parseRealmCatalog, parseRealmDescriptor, type RealmCa
 const MAX_JSON_BYTES = 512 * 1024;
 const MAX_ARTIFACT_BYTES = 1024 * 1024;
 const MAX_BADGE_BYTES = 1024;
+const MAX_SERVICE_ACCESS_BYTES = 16 * 1024;
 
-export type PreparedRealm = Readonly<{ descriptor: RealmDescriptor; catalog: RealmCatalog; route: RealmRoute; js: string; css: string }>;
+export type RealmChannelHandlers = Readonly<{
+  onOpen?(): void;
+  onMessage(data: string | ArrayBuffer): void;
+  onClose?(code: number, reason: string): void;
+  onError?(error: unknown): void;
+}>;
+export type RealmChannel = Readonly<{
+  readonly readyState: number;
+  readonly url: string;
+  send(data: string | ArrayBuffer | Uint8Array): void;
+  close(): void;
+}>;
+export type PreparedRealmService = Readonly<{
+  endpoint: string;
+  request(path: string, init?: RequestInit): Promise<Response>;
+  openChannel(path: string, handlers: RealmChannelHandlers): RealmChannel;
+}>;
+export type PreparedRealm = Readonly<{
+  descriptor: RealmDescriptor;
+  catalog: RealmCatalog;
+  route: RealmRoute;
+  services: Readonly<Record<string, PreparedRealmService>>;
+  js: string;
+  css: string;
+}>;
 export type RealmFetcher = (this: typeof globalThis, input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal; routePath?: string }>;
 export type RealmBadgeState = Readonly<{ revision: number; count: number }>;
@@ -56,6 +81,99 @@ async function boundedBytes(response: Response, maxBytes: number, label: string)
 
 function decodeUtf8(bytes: Uint8Array): string {
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+}
+
+function servicePath(path: string): string {
+  if (!/^\/v1\/[A-Za-z0-9._~!$&'()*+,;=:@/?=-]+$/.test(path) || path.includes("//") || path.includes("#")) {
+    throw new Error("Invalid Realm service path");
+  }
+  return path;
+}
+
+function serviceAccessUrl(endpoint: string): string {
+  const url = new URL(endpoint);
+  url.pathname = "/v1/service-access";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+function createPreparedService(
+  endpoint: string,
+  accessToken: string,
+  fetcher: RealmFetcher,
+  signal?: AbortSignal,
+): PreparedRealmService {
+  const publicEndpoint = endpoint.replace(/\/$/u, "");
+  return Object.freeze({
+    endpoint: publicEndpoint,
+    request(path, init = {}) {
+      const target = new URL(`${publicEndpoint}${servicePath(path)}`);
+      const headers = new Headers(init.headers);
+      headers.set("x-klivcore-service-access", accessToken);
+      return fetcher.call(globalThis, target, {
+        ...init,
+        credentials: "same-origin",
+        headers,
+        redirect: "error",
+        signal: init.signal ?? signal,
+      });
+    },
+    openChannel(path, handlers) {
+      if (!handlers || typeof handlers !== "object" || typeof handlers.onMessage !== "function") throw new Error("Invalid Realm channel handlers");
+      const target = new URL(`${publicEndpoint}${servicePath(path)}`);
+      target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
+      const socket = new WebSocket(target);
+      const queued: (string | ArrayBuffer)[] = [];
+      let queuedBytes = 0;
+      let closed = false;
+      const normalize = (data: string | ArrayBuffer | Uint8Array): string | ArrayBuffer => {
+        if (!(data instanceof Uint8Array)) return data;
+        const copy = new Uint8Array(data.byteLength);
+        copy.set(data);
+        return copy.buffer;
+      };
+      const sizeOf = (data: string | ArrayBuffer) => typeof data === "string" ? new TextEncoder().encode(data).byteLength : data.byteLength;
+      const channel: RealmChannel = Object.freeze({
+        get readyState() { return socket.readyState; },
+        get url() { return target.toString(); },
+        send(data) {
+          const normalized = normalize(data);
+          const size = sizeOf(normalized);
+          if (size > 512 * 1024) throw new RangeError("Realm channel message exceeds byte limit");
+          if (socket.readyState === WebSocket.OPEN) { socket.send(normalized); return; }
+          if (socket.readyState !== WebSocket.CONNECTING || closed) throw new Error("Realm channel is not open");
+          if (queued.length >= 64 || queuedBytes + size > 512 * 1024) throw new RangeError("Realm channel queue limit reached");
+          queued.push(normalized);
+          queuedBytes += size;
+        },
+        close() {
+          if (closed) return;
+          closed = true;
+          queued.length = 0;
+          queuedBytes = 0;
+          if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) socket.close(1000, "Realm publication disposed");
+        },
+      });
+      socket.addEventListener("open", () => {
+        if (closed) return;
+        socket.send(JSON.stringify({ type: "authorize-service", accessToken }));
+        for (const data of queued.splice(0)) socket.send(data);
+        queuedBytes = 0;
+        try { handlers.onOpen?.(); } catch (error) { handlers.onError?.(error); }
+      });
+      socket.addEventListener("message", (event) => {
+        if (closed) return;
+        const data = typeof event.data === "string" || event.data instanceof ArrayBuffer ? event.data : String(event.data);
+        try { handlers.onMessage(data); } catch (error) { handlers.onError?.(error); }
+      });
+      socket.addEventListener("error", (event) => { if (!closed) handlers.onError?.(event); });
+      socket.addEventListener("close", (event) => {
+        try { handlers.onClose?.(event.code, event.reason); } catch (error) { handlers.onError?.(error); }
+      });
+      return channel;
+    },
+  });
 }
 
 async function request(fetcher: RealmFetcher, url: string, init: RequestInit, maxBytes: number, label: string): Promise<Uint8Array> {
@@ -135,11 +253,38 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
     : catalog.routes.find((candidate) => candidate.path === options.routePath);
   if (!route) throw new Error(`Realm route not found: ${options.routePath}`);
   for (const capability of route.requiredCapabilities) if (!descriptor.capabilities.includes(capability)) throw new Error("Realm route is not authorized");
+  let services: Readonly<Record<string, PreparedRealmService>> = Object.freeze({});
+  if (route.services.length > 0) {
+    const accessBytes = await request(fetcher, serviceAccessUrl(endpoint), {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ routeId: route.id }),
+      signal: options.signal,
+    }, MAX_SERVICE_ACCESS_BYTES, "Realm service access");
+    let accessInput: unknown;
+    try { accessInput = JSON.parse(decodeUtf8(accessBytes)); } catch { throw new Error("Realm service access is invalid JSON"); }
+    const access = accessInput && typeof accessInput === "object" && !Array.isArray(accessInput)
+      ? accessInput as Record<string, unknown> : undefined;
+    if (!access || Object.keys(access).join(",") !== "services" || !Array.isArray(access.services)
+      || access.services.length !== route.services.length) throw new Error("Realm service access is invalid");
+    const entries = access.services.map((entry, index): readonly [string, PreparedRealmService] => {
+      const service = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : undefined;
+      const expected = route.services[index];
+      if (!service || Object.keys(service).sort().join(",") !== "accessToken,endpoint,id"
+        || service.id !== expected?.id || service.endpoint !== expected.endpoint
+        || typeof service.accessToken !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(service.accessToken)) {
+        throw new Error("Realm service access is invalid");
+      }
+      const absoluteEndpoint = new URL(service.endpoint, new URL(endpoint).origin).toString().replace(/\/$/u, "");
+      return [service.id as string, createPreparedService(absoluteEndpoint, service.accessToken, fetcher, options.signal)] as const;
+    });
+    services = Object.freeze(Object.fromEntries(entries));
+  }
   const jsBytes = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm JavaScript artifact");
   if (await sha256Hex(jsBytes) !== route.component.js.sha256) throw new Error("Realm JavaScript artifact integrity check failed");
   const js = decodeUtf8(jsBytes);
   const cssBytes = await request(fetcher, route.component.css.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm CSS artifact");
   if (await sha256Hex(cssBytes) !== route.component.css.sha256) throw new Error("Realm CSS artifact integrity check failed");
   const css = decodeUtf8(cssBytes);
-  return Object.freeze({ descriptor, catalog, route, js, css });
+  return Object.freeze({ descriptor, catalog, route, services, js, css });
 }

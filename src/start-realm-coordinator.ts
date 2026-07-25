@@ -223,13 +223,17 @@ async function ensureImmutableGatewayPackage(key: string, revision: string, sour
   return Object.freeze({ packageRoot, packageDigest });
 }
 
-async function installGatewayConfig(home: string, user: string, configPath: string, value: Readonly<Record<string, unknown>>): Promise<void> {
+async function installGatewayConfigText(home: string, user: string, configPath: string, content: string): Promise<void> {
   await sudo(["install", "-d", "-m", "0700", "-o", user, "-g", user, home], "failed to prepare private Gateway state");
   const stage = resolve(stateDir, `.gateway-config-${crypto.randomUUID()}`);
   try {
-    await writeFile(stage, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await writeFile(stage, content, { flag: "wx", mode: 0o600 });
     await sudo(["install", "-m", "0600", "-o", user, "-g", user, stage, configPath], "failed to install private Gateway configuration");
   } finally { await rm(stage, { force: true }); }
+}
+
+async function installGatewayConfig(home: string, user: string, configPath: string, value: Readonly<Record<string, unknown>>): Promise<void> {
+  await installGatewayConfigText(home, user, configPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 async function validateGatewayTree(root: string): Promise<void> {
@@ -303,8 +307,9 @@ async function allocateGatewayPort(): Promise<number> {
 }
 
 async function gatewayHealthy(mount: ActiveGatewayMount): Promise<boolean> {
+  if (mount.manifest.server === null || mount.port === null) return true;
   try {
-    const response = await fetch(`http://127.0.0.1:${mount.port}${mount.manifest.httpRelay.healthPath}`, { signal: AbortSignal.timeout(2_000) });
+    const response = await fetch(`http://127.0.0.1:${mount.port}${mount.manifest.server.healthPath}`, { signal: AbortSignal.timeout(2_000) });
     if (!response.ok) return false;
     const body = await response.json() as { status?: unknown };
     return body.status === "ok";
@@ -312,9 +317,11 @@ async function gatewayHealthy(mount: ActiveGatewayMount): Promise<boolean> {
 }
 
 async function waitForGateway(mount: ActiveGatewayMount): Promise<void> {
+  const serverRole = mount.manifest.server?.process;
+  if (!serverRole) return;
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (!await tmuxExists(mount.sessions.server!)) throw new Error(`Gateway server exited during startup: ${mount.key}`);
+    if (!await tmuxExists(mount.sessions[serverRole]!)) throw new Error(`Gateway server exited during startup: ${mount.key}`);
     if (await gatewayHealthy(mount)) return;
     await Bun.sleep(250);
   }
@@ -341,12 +348,33 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
     KLIVCORE_GATEWAY_MOUNT: mount.key,
     KLIVCORE_GATEWAY_HOME: mount.home,
     KLIVCORE_GATEWAY_CONFIG: mount.configPath,
-    KLIVCORE_GATEWAY_PORT: String(mount.port),
+    ...(mount.port === null ? {} : { KLIVCORE_GATEWAY_PORT: String(mount.port) }),
   };
   const assignments = Object.entries(env).map(([name, value]) => shellQuote(`${name}=${value}`)).join(" ");
   const command = `exec sudo -n -- /usr/bin/setpriv --reuid=${mount.serviceUid} --regid=${mount.serviceGid} --clear-groups env -i ${assignments} ${shellQuote(bunPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))}`;
   const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
   if (started.code !== 0) throw new Error(started.stderr.trim() || `failed to start Gateway process ${mount.key}/${role}`);
+}
+
+async function startGatewayMount(mount: ActiveGatewayMount): Promise<void> {
+  const server = mount.manifest.server === null
+    ? undefined
+    : mount.manifest.processes.find((process) => process.role === mount.manifest.server!.process);
+  if (server) {
+    await startGatewayProcess(mount, server.role, server.entrypoint);
+    await waitForGateway(mount);
+  }
+  for (const process of mount.manifest.processes) {
+    if (process.role !== server?.role) await startGatewayProcess(mount, process.role, process.entrypoint);
+  }
+  if (mount.manifest.processes.some((process) => process.role !== server?.role)) {
+    await Bun.sleep(250);
+    const dead = (await Promise.all(mount.manifest.processes
+      .filter((process) => process.role !== server?.role)
+      .map(async (process) => await tmuxExists(mount.sessions[process.role]!) ? undefined : process.role)))
+      .find((role) => role !== undefined);
+    if (dead) throw new Error(`Gateway utility process exited during startup: ${mount.key}/${dead}`);
+  }
 }
 
 async function ensureGateways(): Promise<boolean> {
@@ -369,8 +397,9 @@ async function ensureGateways(): Promise<boolean> {
     const manifest = await loadGatewayManifest(packageRoot);
     const home = gatewayDurableHome(config.realm.id, stateDir, key, mountConfig.storageSubdir);
     const configPath = resolve(home, "config.json");
-    await installGatewayConfig(home, isolation.user, configPath, mountConfig.config);
     const prior = previous.find((candidate) => candidate.key === key);
+    const priorConfig = prior?.configPath === configPath ? await readFile(configPath, "utf8") : undefined;
+    await installGatewayConfig(home, isolation.user, configPath, mountConfig.config);
     const sessions = Object.freeze(Object.fromEntries(manifest.processes.map((process) => [
       process.role,
       gatewayProcessSessionName(config.realm.id, stateDir, key, process.role),
@@ -389,7 +418,7 @@ async function ensureGateways(): Promise<boolean> {
       packageRoot,
       home,
       configPath,
-      port: prior?.port ?? await allocateGatewayPort(),
+      port: manifest.server === null ? null : prior?.port ?? await allocateGatewayPort(),
       sessions,
       manifest,
     });
@@ -407,15 +436,36 @@ async function ensureGateways(): Promise<boolean> {
       active.push(candidate);
       continue;
     }
-    if (prior) await stopGatewaySessions(prior);
-    for (const session of Object.values(candidate.sessions)) {
-      if (await tmuxExists(session)) await tmux(["kill-session", "-t", `=${session}`]);
-    }
     console.log(`${prior ? "Updating" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
-    const server = manifest.processes.find((process) => process.role === "server")!;
-    await startGatewayProcess(candidate, server.role, server.entrypoint);
-    await waitForGateway(candidate);
-    for (const process of manifest.processes) if (process.role !== "server") await startGatewayProcess(candidate, process.role, process.entrypoint);
+    try {
+      if (prior) await stopGatewaySessions(prior);
+      for (const session of Object.values(candidate.sessions)) {
+        if (await tmuxExists(session)) await tmux(["kill-session", "-t", `=${session}`]);
+      }
+      await startGatewayMount(candidate);
+    } catch (replacementError) {
+      let cleanupError: unknown;
+      try {
+        await stopGatewaySessions(candidate);
+        if (prior) await stopGatewaySessions(prior);
+      }
+      catch (error) { cleanupError = error; }
+      let configRestoreError: unknown;
+      if (priorConfig !== undefined) {
+        try { await installGatewayConfigText(prior!.home, prior!.serviceUser, prior!.configPath, priorConfig); }
+        catch (error) { configRestoreError = error; }
+      }
+      let rollbackError: unknown;
+      if (prior && cleanupError === undefined && configRestoreError === undefined) {
+        try { await startGatewayMount(prior); }
+        catch (error) { rollbackError = error; }
+      }
+      const failures = [replacementError, cleanupError, configRestoreError, rollbackError].filter((error) => error !== undefined);
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `Gateway replacement rollback was incomplete: ${key}`);
+      }
+      throw replacementError;
+    }
     active.push(candidate);
     changed = true;
   }

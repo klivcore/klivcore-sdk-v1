@@ -2,13 +2,20 @@
   "schemaVersion": 1,
   "contractVersion": 1,
   "id": "resource-monitor",
-  "capabilities": ["resource-monitor:read"],
+  "capabilities": [
+    "resource-monitor:read"
+  ],
   "routes": [
     {
       "id": "resource-monitor",
       "path": "/",
       "title": "Resource Monitor",
-      "requiredCapabilities": ["resource-monitor:read"],
+      "requiredCapabilities": [
+        "resource-monitor:read"
+      ],
+      "services": [
+        "api"
+      ],
       "component": {
         "id": "resource-monitor-main",
         "js": "ui/main.js",
@@ -16,15 +23,36 @@
       }
     }
   ],
-  "httpRelay": {
-    "requiredCapabilities": ["resource-monitor:read"],
+  "server": {
+    "id": "api",
+    "process": "server",
+    "requiredCapabilities": [
+      "resource-monitor:read"
+    ],
     "allowedRequests": [
-      { "method": "GET", "path": "/v1/samples" }
+      {
+        "method": "GET",
+        "path": "/v1/observations"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/observations/aggregates"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/observations/listeners"
+      }
     ],
     "healthPath": "/health"
   },
   "processes": [
-    { "role": "server", "entrypoint": "bin/server.js" },
-    { "role": "collector", "entrypoint": "bin/collector.js" }
+    {
+      "role": "server",
+      "entrypoint": "bin/server.js"
+    },
+    {
+      "role": "collector",
+      "entrypoint": "bin/collector.js"
+    }
   ]
 }
