@@ -86,6 +86,7 @@ export type RealmGatewayHttpRelay = Readonly<{
 }>;
 
 export type RealmGatewayConfig = Readonly<{
+  mode?: "realm" | "desktop-ssh";
   branding: RealmBranding;
   hostname?: string;
   port: number;
@@ -103,6 +104,7 @@ export type RealmGatewayConfig = Readonly<{
   httpRelays?: readonly RealmGatewayHttpRelay[];
   services?: readonly RealmGatewayService[];
   desktop?: Readonly<{
+    relayUrl?: string;
     ssh: Readonly<{ authorizedKeysFile: string; host: string; port: number; user: string; startingDirectory: string }>;
   }>;
   defaultRoute: RealmGatewayRouteConfig;
@@ -224,6 +226,7 @@ type RealmSocketData =
     flow?: DesktopRelayFlow;
     kind: "desktop-ssh";
     relayId?: string;
+    relayToken?: string;
     tcp?: DesktopRelayTcp;
   }
   | {
@@ -316,6 +319,13 @@ type PublicBinding = Readonly<{
 }>;
 
 export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGateway {
+  if (config.mode !== undefined && config.mode !== "realm" && config.mode !== "desktop-ssh") {
+    throw new TypeError("Realm Gateway mode is invalid");
+  }
+  const mode = config.mode ?? "realm";
+  if (mode === "desktop-ssh" && (!config.desktop || !config.auth)) {
+    throw new TypeError("SSH-only Gateway requires Desktop SSH configuration and revocable authentication");
+  }
   const branding = parseRealmBranding(config.branding);
   if (config.runtimeVersion !== undefined && !/^[a-f0-9]{12}$/.test(config.runtimeVersion)) {
     throw new TypeError("Realm runtime version is invalid");
@@ -333,6 +343,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
   const activeSessionSockets = new Map<string, Set<BoundSocket>>();
   const activeDesktopSockets = new Set<BoundSocket>();
   const activeDesktopRelaySockets = new Map<string, Set<BoundSocket>>();
+  const activeDesktopCredentials = new Map<BoundSocket, Readonly<{ relayId: string; relayToken: string }>>();
   let desktopAdmissions = 0;
   const releaseDesktopAdmission = (data: RealmSocketData) => {
     if (data.kind !== "desktop-ssh" || !data.closed || data.dialPending || !data.admitted) return;
@@ -364,7 +375,13 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     if (!config.auth || typeof config.auth.onDesktopRelayInvalidated !== "function") {
       throw new TypeError("Realm Desktop SSH relay requires revocable session authentication");
     }
-    projectDesktopSshPublicKeys(ssh.authorizedKeysFile, config.auth);
+    if (config.desktop.relayUrl !== undefined) {
+      let relayUrl: URL;
+      try { relayUrl = new URL(config.desktop.relayUrl); } catch { throw new TypeError("Realm Desktop relay URL is invalid"); }
+      if (relayUrl.protocol !== "wss:" || relayUrl.pathname !== "/v1/desktop/ssh" || relayUrl.search || relayUrl.hash
+        || relayUrl.username || relayUrl.password) throw new TypeError("Realm Desktop relay URL is invalid");
+    }
+    if (mode === "realm") projectDesktopSshPublicKeys(ssh.authorizedKeysFile, config.auth);
   }
   for (const [index, relay] of httpRelays.entries()) {
     if (!Number.isSafeInteger(relay.port) || relay.port < 1 || relay.port > 65_535
@@ -482,6 +499,12 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     activeDesktopRelaySockets.delete(relayId);
     for (const socket of sockets ?? []) socket.close(1008, "Desktop relay credential revoked");
   });
+  const desktopRelayRevalidation = config.desktop ? setInterval(() => {
+    for (const [socket, credential] of activeDesktopCredentials) {
+      const relay = config.auth?.desktopRelayForToken(credential.relayToken);
+      if (!relay || relay.relayId !== credential.relayId) socket.close(1008, "Desktop relay credential revoked");
+    }
+  }, 1_000) : undefined;
 
   async function publication(origin: string) {
     const catalog = parseRealmCatalog({
@@ -570,6 +593,8 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
             }
             socket.data.authenticated = true;
             socket.data.relayId = relay.relayId;
+            socket.data.relayToken = record!.relayToken as string;
+            activeDesktopCredentials.set(socket, Object.freeze({ relayId: relay.relayId, relayToken: record!.relayToken as string }));
             const relaySockets = activeDesktopRelaySockets.get(relay.relayId) ?? new Set<BoundSocket>();
             relaySockets.add(socket);
             activeDesktopRelaySockets.set(relay.relayId, relaySockets);
@@ -726,6 +751,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       close(socket) {
         if (socket.data.kind === "desktop-ssh") {
           activeDesktopSockets.delete(socket);
+          activeDesktopCredentials.delete(socket);
           socket.data.closed = true;
           socket.data.connecting = false;
           if (socket.data.authTimer) clearTimeout(socket.data.authTimer);
@@ -740,6 +766,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
             relaySockets?.delete(socket);
             if (relaySockets?.size === 0) activeDesktopRelaySockets.delete(socket.data.relayId);
             socket.data.relayId = undefined;
+            socket.data.relayToken = undefined;
           }
           releaseDesktopAdmission(socket.data);
           return;
@@ -773,14 +800,8 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       if (request.method === "GET" && url.pathname === "/version") {
         return json({ schemaVersion: 1, realmId: config.realmId, runtimeVersion: config.runtimeVersion ?? null });
       }
-      if (request.method === "GET" && url.pathname === "/.well-known/klivcore-realm") {
-        return new Response(JSON.stringify({ schemaVersion: 1, realmId: config.realmId, name: config.name }), {
-          headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" },
-        });
-      }
-      const authResponse = await config.auth?.handle(request);
-      if (authResponse) return authResponse;
       if (config.desktop && request.method === "GET" && url.pathname === "/v1/desktop/ssh") {
+        if (mode === "realm") return json({ error: "not found" }, 404);
         if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return json({ error: "websocket upgrade required" }, 426);
         const requestOrigin = request.headers.get("origin");
         if (requestOrigin !== null && requestOrigin !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
@@ -792,6 +813,14 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         desktopAdmissions -= 1;
         return json({ error: "websocket upgrade failed" }, 500);
       }
+      if (mode === "desktop-ssh") return json({ error: "not found" }, 404);
+      if (request.method === "GET" && url.pathname === "/.well-known/klivcore-realm") {
+        return new Response(JSON.stringify({ schemaVersion: 1, realmId: config.realmId, name: config.name }), {
+          headers: { "cache-control": "no-store", "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" },
+        });
+      }
+      const authResponse = await config.auth?.handle(request);
+      if (authResponse) return authResponse;
       if (config.desktop && request.method === "POST" && url.pathname === "/v1/desktop/pairing") {
         if (request.headers.get("origin") !== config.auth!.publicOrigin) return json({ error: "forbidden" }, 403);
         const session = config.auth!.sessionFor(request);
@@ -810,9 +839,11 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           || typeof body.relayToken !== "string" || typeof body.sshPublicKey !== "string") return json({ error: "invalid request" }, 400);
         const paired = config.auth!.consumeDesktopPairing(body.pairingToken, body.clientId, body.relayToken, body.sshPublicKey);
         if (!paired) return json({ error: "unauthorized" }, 401);
-        const relayUrl = new URL(config.auth!.publicOrigin);
-        relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
-        relayUrl.pathname = "/v1/desktop/ssh";
+        const relayUrl = new URL(config.desktop.relayUrl ?? config.auth!.publicOrigin);
+        if (!config.desktop.relayUrl) {
+          relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
+          relayUrl.pathname = "/v1/desktop/ssh";
+        }
         return json({
           schemaVersion: 1,
           realmId: config.realmId,
@@ -1019,6 +1050,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     stop() {
       unsubscribeSessionInvalidation?.();
       unsubscribeDesktopRelayInvalidation?.();
+      if (desktopRelayRevalidation) clearInterval(desktopRelayRevalidation);
       server.stop(true);
       config.auth?.close();
     },

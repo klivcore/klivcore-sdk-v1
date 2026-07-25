@@ -55,7 +55,9 @@ export function parseDesktopPairingResponse(origin: string, value: unknown): Des
   let relayUrl: URL;
   let publicOrigin: URL;
   try { relayUrl = new URL(relayHref); publicOrigin = new URL(origin); } catch { return invalid(); }
-  if (relayUrl.protocol !== "wss:" || relayUrl.hostname !== publicOrigin.hostname || relayUrl.port !== publicOrigin.port
+  const trustedRelayOrigin = (relayUrl.hostname === publicOrigin.hostname && relayUrl.port === publicOrigin.port)
+    || (relayUrl.port === "" && relayUrl.hostname.endsWith(".trycloudflare.com"));
+  if (relayUrl.protocol !== "wss:" || !trustedRelayOrigin
     || relayUrl.pathname !== "/v1/desktop/ssh" || relayUrl.search || relayUrl.hash || relayUrl.username || relayUrl.password) invalid();
   return Object.freeze({
     schemaVersion: 1,

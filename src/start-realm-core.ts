@@ -18,13 +18,14 @@ export type StartRealmTunnelPlan = Readonly<{ mode: "managed" }>
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
 export type StartRealmArgs = Readonly<{ command: "run" | "registration-url"; configPath: string }>;
 export type ActiveRealmRecord = Readonly<{
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   pid: number;
   realmId: string;
   localOrigin: string;
   publicOrigin: string;
   registrationControlToken: string;
   runtimeRevision?: string;
+  sshPublicOrigin?: string;
 }>;
 export type ManagedTunnelRecord = Readonly<{
   schemaVersion: 1;
@@ -33,6 +34,15 @@ export type ManagedTunnelRecord = Readonly<{
   localOrigin: string;
   publicOrigin: string;
   sessionName: string;
+}>;
+export type ActiveSshRelayRecord = Readonly<{
+  schemaVersion: 1 | 2;
+  pid: number;
+  realmId: string;
+  localOrigin: string;
+  sessionName: string;
+  configRevision?: string;
+  realmPublicOrigin?: string;
 }>;
 
 export function formatRegistrationUrlBlock(value: string): string {
@@ -99,20 +109,29 @@ export function parseStartRealmArgs(args: readonly string[]): StartRealmArgs {
   throw new TypeError(usage);
 }
 
-export function parseActiveRealmRecord(value: unknown, realmId: string, port: number, expectedPublicOrigin?: string): ActiveRealmRecord {
+export function parseActiveRealmRecord(
+  value: unknown,
+  realmId: string,
+  port: number,
+  expectedPublicOrigin?: string,
+  expectedSshPublicOrigin?: string | null,
+): ActiveRealmRecord {
   const invalid = (): never => { throw new TypeError("active Realm record is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
-  const expectedKeys = input.schemaVersion === 2
-    ? ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "runtimeRevision", "schemaVersion"]
-    : ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "schemaVersion"];
+  const expectedKeys = input.schemaVersion === 3
+    ? ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "runtimeRevision", "schemaVersion", "sshPublicOrigin"]
+    : input.schemaVersion === 2
+      ? ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "runtimeRevision", "schemaVersion"]
+      : ["localOrigin", "pid", "publicOrigin", "realmId", "registrationControlToken", "schemaVersion"];
   if (!exactKeys(input, expectedKeys)
-    || (input.schemaVersion !== 1 && input.schemaVersion !== 2) || input.realmId !== realmId
+    || (input.schemaVersion !== 1 && input.schemaVersion !== 2 && input.schemaVersion !== 3) || input.realmId !== realmId
     || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
     || input.localOrigin !== `http://127.0.0.1:${port}`
     || typeof input.publicOrigin !== "string"
     || typeof input.registrationControlToken !== "string"
-    || (input.schemaVersion === 2 && (typeof input.runtimeRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.runtimeRevision)))
+    || (input.schemaVersion !== 1 && (typeof input.runtimeRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.runtimeRevision)))
+    || (input.schemaVersion === 3 && typeof input.sshPublicOrigin !== "string")
     || !/^[A-Za-z0-9_-]{43}$/.test(input.registrationControlToken)) invalid();
   const publicOrigin = input.publicOrigin as string;
   if (typeof publicOrigin !== "string") invalid();
@@ -121,21 +140,81 @@ export function parseActiveRealmRecord(value: unknown, realmId: string, port: nu
   })();
   if (publicUrl.origin !== publicOrigin || publicUrl.protocol !== "https:" || publicUrl.username || publicUrl.password
     || (expectedPublicOrigin !== undefined && publicOrigin !== expectedPublicOrigin)) invalid();
+  let sshPublicOrigin: string | undefined;
+  if (input.schemaVersion === 3) {
+    sshPublicOrigin = input.sshPublicOrigin as string;
+    let sshPublicUrl: URL;
+    try { sshPublicUrl = new URL(sshPublicOrigin); } catch { return invalid(); }
+    if (sshPublicUrl.origin !== sshPublicOrigin || sshPublicUrl.protocol !== "https:" || sshPublicUrl.username || sshPublicUrl.password) invalid();
+  }
+  if (expectedSshPublicOrigin === null ? sshPublicOrigin !== undefined
+    : expectedSshPublicOrigin !== undefined && sshPublicOrigin !== expectedSshPublicOrigin) invalid();
   return Object.freeze({
-    schemaVersion: input.schemaVersion as 1 | 2,
+    schemaVersion: input.schemaVersion as 1 | 2 | 3,
     pid: input.pid as number,
     realmId,
     localOrigin: input.localOrigin as string,
     publicOrigin,
     registrationControlToken: input.registrationControlToken as string,
-    ...(input.schemaVersion === 2 ? { runtimeRevision: input.runtimeRevision as string } : {}),
+    ...(input.schemaVersion !== 1 ? { runtimeRevision: input.runtimeRevision as string } : {}),
+    ...(input.schemaVersion === 3 ? { sshPublicOrigin } : {}),
   });
 }
 
-export function startRealmSessionNames(realmId: string, stateDir: string): Readonly<{ tunnel: string; realm: string }> {
+export function desktopSshRelayPort(realmPort: number): number {
+  if (!Number.isSafeInteger(realmPort) || realmPort < 1 || realmPort > 65_535) throw new TypeError("Realm port is invalid");
+  return realmPort === 65_535 ? 65_534 : realmPort + 1;
+}
+
+export function startRealmSessionNames(realmId: string, stateDir: string): Readonly<{
+  tunnel: string;
+  realm: string;
+  sshTunnel: string;
+  sshRelay: string;
+}> {
   const identity = createHash("sha256").update(stateDir).digest("hex").slice(0, 12);
   const prefix = `klivcore-${realmId}-${identity}`;
-  return Object.freeze({ tunnel: `${prefix}-tunnel`, realm: `${prefix}-realm` });
+  return Object.freeze({
+    tunnel: `${prefix}-tunnel`,
+    realm: `${prefix}-realm`,
+    sshTunnel: `${prefix}-ssh-tunnel`,
+    sshRelay: `${prefix}-ssh-relay`,
+  });
+}
+
+export function parseActiveSshRelayRecord(
+  value: unknown,
+  realmId: string,
+  port: number,
+  sessionName: string,
+  expectedConfigRevision?: string,
+  expectedRealmPublicOrigin?: string,
+): ActiveSshRelayRecord {
+  const invalid = (): never => { throw new TypeError("active SSH relay record is invalid"); };
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
+  const input = value as Record<string, unknown>;
+  const expectedKeys = input.schemaVersion === 2
+    ? ["configRevision", "localOrigin", "pid", "realmId", "realmPublicOrigin", "schemaVersion", "sessionName"]
+    : ["localOrigin", "pid", "realmId", "schemaVersion", "sessionName"];
+  if (!exactKeys(input, expectedKeys)
+    || (input.schemaVersion !== 1 && input.schemaVersion !== 2) || input.realmId !== realmId || input.sessionName !== sessionName
+    || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
+    || input.localOrigin !== `http://127.0.0.1:${port}`
+    || (input.schemaVersion === 2 && (typeof input.configRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.configRevision)
+      || typeof input.realmPublicOrigin !== "string"))) invalid();
+  if (expectedConfigRevision !== undefined && input.configRevision !== expectedConfigRevision) invalid();
+  if (expectedRealmPublicOrigin !== undefined && input.realmPublicOrigin !== expectedRealmPublicOrigin) invalid();
+  return Object.freeze({
+    schemaVersion: input.schemaVersion as 1 | 2,
+    pid: input.pid as number,
+    realmId,
+    localOrigin: input.localOrigin as string,
+    sessionName,
+    ...(input.schemaVersion === 2 ? {
+      configRevision: input.configRevision as string,
+      realmPublicOrigin: input.realmPublicOrigin as string,
+    } : {}),
+  });
 }
 
 export function parseManagedTunnelRecord(

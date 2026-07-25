@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/pr
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { createPasskeyAuth, createRealmGateway } from "./server";
-import { parseActiveRealmRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
+import { desktopSshRelayPort, parseActiveRealmRecord, parseActiveSshRelayRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -19,16 +19,19 @@ const stateDir = resolve(dirname(configPath), config.stateDir);
 await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await chmod(stateDir, 0o700);
 const activeRealmPath = resolve(stateDir, "active-realm.json");
-const managedTunnelPath = resolve(stateDir, "managed-tunnel.json");
+const activeSshRelayPath = resolve(stateDir, "active-ssh-relay.json");
 const workerMode = process.env.KLIVCORE_START_REALM_MODE;
-if (workerMode !== undefined && workerMode !== "tunnel" && workerMode !== "realm") {
+if (workerMode !== undefined && !["tunnel", "realm", "ssh-relay", "ssh-tunnel"].includes(workerMode)) {
   throw new Error("invalid internal start-realm worker mode");
 }
+const managedTunnelPath = resolve(stateDir, workerMode === "ssh-tunnel" ? "managed-ssh-tunnel.json" : "managed-tunnel.json");
+const sshRelayPort = desktopSshRelayPort(config.port);
 const runtimeRevision = process.env.KLIVCORE_START_REALM_RUNTIME_REVISION;
 if (workerMode === "realm" && (!runtimeRevision || !/^[a-f0-9]{64}$/.test(runtimeRevision))) {
   throw new Error("managed Realm worker runtime revision is missing or invalid");
 }
 const forcedPublicOrigin = process.env.KLIVCORE_START_REALM_PUBLIC_ORIGIN;
+const forcedSshPublicOrigin = process.env.KLIVCORE_START_REALM_SSH_PUBLIC_ORIGIN;
 const managedTunnelPid = (() => {
   const value = process.env.KLIVCORE_START_REALM_TUNNEL_PID;
   if (value === undefined) return undefined;
@@ -182,6 +185,20 @@ async function removeOwnedActiveRecord(): Promise<void> {
   } catch { /* absent, stale, or foreign runtime records are not ours to remove */ }
 }
 
+async function removeOwnedSshRelayRecord(): Promise<void> {
+  try {
+    const sessionName = process.env.KLIVCORE_START_REALM_SSH_RELAY_SESSION;
+    if (!sessionName) return;
+    const record = parseActiveSshRelayRecord(
+      JSON.parse(await readFile(activeSshRelayPath, "utf8")),
+      config.realm.id,
+      sshRelayPort,
+      sessionName,
+    );
+    if (record.pid === process.pid) await rm(activeSshRelayPath, { force: true });
+  } catch { /* absent, stale, or foreign runtime records are not ours to remove */ }
+}
+
 async function removeOwnedTunnelRecord(): Promise<void> {
   try {
     const value = JSON.parse(await readFile(managedTunnelPath, "utf8")) as Record<string, unknown>;
@@ -198,6 +215,7 @@ async function stop(): Promise<void> {
   stopping = (async () => {
     gateway?.stop();
     await removeOwnedActiveRecord();
+    await removeOwnedSshRelayRecord();
     await removeOwnedTunnelRecord();
     auth?.close();
     if (tunnel && tunnel.exitCode === null) {
@@ -215,11 +233,83 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
   process.once(signal, () => { void stop().finally(() => process.exit(0)); });
 }
 
+async function runSshRelay(): Promise<never> {
+  if (!config.desktop) throw new Error("managed SSH relay requires desktop.ssh configuration");
+  const publicOrigin = forcedPublicOrigin;
+  const sessionName = process.env.KLIVCORE_START_REALM_SSH_RELAY_SESSION;
+  const configRevision = process.env.KLIVCORE_START_REALM_SSH_CONFIG_REVISION;
+  if (!publicOrigin || !sessionName || !configRevision || !/^[a-f0-9]{64}$/.test(configRevision)) {
+    throw new Error("managed SSH relay identity is missing");
+  }
+  const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
+  const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
+  auth = createPasskeyAuth({
+    branding,
+    databasePath: resolve(stateDir, "auth.sqlite"),
+    realmId: config.realm.id,
+    realmName: config.realm.name,
+    publicOrigin,
+    rpId: new URL(publicOrigin).hostname,
+    registrationControlToken,
+  });
+  gateway = createRealmGateway({
+    mode: "desktop-ssh",
+    branding,
+    hostname: "127.0.0.1",
+    port: sshRelayPort,
+    realmId: config.realm.id,
+    name: config.realm.name,
+    authorityEpoch: `${config.realm.id}-ssh-1`,
+    generation: `${config.realm.id}-ssh-1`,
+    capabilities: [],
+    auth,
+    desktop: Object.freeze({
+      ssh: Object.freeze({
+        ...config.desktop.ssh,
+        authorizedKeysFile: resolve(stateDir, "desktop-authorized-keys"),
+      }),
+    }),
+    defaultRoute: {
+      id: "ssh-core",
+      path: "/",
+      title: "SSH Core",
+      requiredCapabilities: [],
+      componentId: "ssh-core",
+      js: "",
+      css: "",
+    },
+  });
+  await waitForHealth(gateway.endpoint, config.realm.id, 10_000);
+  const stage = `${activeSshRelayPath}.stage-${crypto.randomUUID()}`;
+  try {
+    await writeFile(stage, `${JSON.stringify({
+      schemaVersion: 2,
+      pid: process.pid,
+      realmId: config.realm.id,
+      localOrigin: gateway.endpoint,
+      sessionName,
+      configRevision,
+      realmPublicOrigin: publicOrigin,
+    })}\n`, { flag: "wx", mode: 0o600 });
+    await rename(stage, activeSshRelayPath);
+    await chmod(activeSshRelayPath, 0o600);
+  } finally {
+    await rm(stage, { force: true });
+  }
+  console.log(`SSH Core relay ready: ${gateway.endpoint}`);
+  return await new Promise<never>(() => {});
+}
+
+if (workerMode === "ssh-relay") await runSshRelay();
+
 try {
   let publicOrigin: string;
-  const tunnelPlan = forcedPublicOrigin
-    ? planStartRealmTunnel(parseStartRealmConfig({ ...config, publicOrigin: forcedPublicOrigin }))
-    : planStartRealmTunnel(config);
+  const tunnelPort = workerMode === "ssh-tunnel" ? sshRelayPort : config.port;
+  const tunnelPlan = workerMode === "ssh-tunnel"
+    ? ({ mode: "managed" } as const)
+    : forcedPublicOrigin
+      ? planStartRealmTunnel(parseStartRealmConfig({ ...config, publicOrigin: forcedPublicOrigin }))
+      : planStartRealmTunnel(config);
   if (tunnelPlan.mode === "external") {
     publicOrigin = tunnelPlan.publicOrigin;
     console.log(`Using externally managed tunnel: ${publicOrigin}`);
@@ -231,12 +321,12 @@ try {
       "tunnel",
       "--config", "/dev/null",
       "--no-autoupdate",
-      "--url", `http://127.0.0.1:${config.port}`,
+      "--url", `http://127.0.0.1:${tunnelPort}`,
     ], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
     publicOrigin = await captureTunnelOrigin(tunnel);
     console.log(`Quick Tunnel allocated: ${publicOrigin}`);
   }
-  if (workerMode === "tunnel") {
+  if (workerMode === "tunnel" || workerMode === "ssh-tunnel") {
     if (!tunnel) throw new Error("managed tunnel worker requires a managed Quick Tunnel");
     const sessionName = process.env.KLIVCORE_START_REALM_TUNNEL_SESSION;
     if (!sessionName) throw new Error("managed tunnel worker session identity is missing");
@@ -246,7 +336,7 @@ try {
         schemaVersion: 1,
         pid: process.pid,
         realmId: config.realm.id,
-        localOrigin: `http://127.0.0.1:${config.port}`,
+        localOrigin: `http://127.0.0.1:${tunnelPort}`,
         publicOrigin,
         sessionName,
       })}\n`, { flag: "wx", mode: 0o600 });
@@ -288,6 +378,7 @@ try {
     appV2,
     auth,
     desktop: config.desktop ? Object.freeze({
+      ...(forcedSshPublicOrigin ? { relayUrl: `${forcedSshPublicOrigin.replace(/^https:/u, "wss:")}/v1/desktop/ssh` } : {}),
       ssh: Object.freeze({
         ...config.desktop.ssh,
         authorizedKeysFile: resolve(stateDir, "desktop-authorized-keys"),
@@ -325,13 +416,14 @@ try {
   const activeStage = `${activeRealmPath}.stage-${crypto.randomUUID()}`;
   try {
     await writeFile(activeStage, `${JSON.stringify({
-      schemaVersion: runtimeRevision ? 2 : 1,
+      schemaVersion: runtimeRevision ? (forcedSshPublicOrigin ? 3 : 2) : 1,
       pid: process.pid,
       realmId: config.realm.id,
       localOrigin: gateway.endpoint,
       publicOrigin,
       registrationControlToken,
       ...(runtimeRevision ? { runtimeRevision } : {}),
+      ...(runtimeRevision && forcedSshPublicOrigin ? { sshPublicOrigin: forcedSshPublicOrigin } : {}),
     })}\n`, { flag: "wx", mode: 0o600 });
     await rename(activeStage, activeRealmPath);
     await chmod(activeRealmPath, 0o600);
