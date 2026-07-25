@@ -14,6 +14,7 @@ import {
   probePublicHealth,
   renderLoopbackSshdDropIn,
   startRealmSessionNames,
+  waitForManagedPublicHealth,
   type ManagedTunnelRecord,
 } from "./start-realm-core";
 
@@ -395,7 +396,11 @@ if (config.desktop) {
     workerMode: "ssh-tunnel",
     label: "managed SSH Quick Tunnel",
   });
-  await probePublicHealth(sshTunnel.publicOrigin, config.realm.id);
+  await waitForManagedPublicHealth({
+    probe: () => probePublicHealth(sshTunnel!.publicOrigin, config.realm.id),
+    tunnelExitCode: () => processIsAlive(sshTunnel!.pid) ? null : -1,
+    onWaiting: (message) => console.log(`Waiting for managed SSH Quick Tunnel public health: ${message}`),
+  });
 } else {
   await disableManagedSsh();
 }
