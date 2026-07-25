@@ -6,9 +6,9 @@
   },
   "files": [
     {
-      "path": "assets/index-CiITWemF.js",
+      "path": "assets/index-CZyuzio_.js",
       "bytes": 47452,
-      "sha256": "4c80b217cd1b586f10fc3bca5ebadb135077d753397b06bf1129a8dd71a07dcd"
+      "sha256": "b68ceb0eac3e7603957b0c22d080e1754161f0a0e76d3be63601caf4898ce0f9"
     },
     {
       "path": "assets/index-zveYJh29.css",
@@ -18,7 +18,7 @@
     {
       "path": "index.html",
       "bytes": 592,
-      "sha256": "4341bd63049267fc8b3aeacad10032d4b7d6c4e22215319d507c56e58604272a"
+      "sha256": "93797452db2baaeea4cd9fba8ff301d202a615d1511107988294474a9a05cb65"
     }
   ]
 }
