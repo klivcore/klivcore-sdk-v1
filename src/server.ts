@@ -381,6 +381,9 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       if (relayUrl.protocol !== "wss:" || relayUrl.pathname !== "/v1/desktop/ssh" || relayUrl.search || relayUrl.hash
         || relayUrl.username || relayUrl.password) throw new TypeError("Realm Desktop relay URL is invalid");
     }
+    if (mode === "realm" && config.desktop.relayUrl === undefined) {
+      throw new TypeError("Realm mode Desktop SSH requires an independent relay URL");
+    }
     if (mode === "realm") projectDesktopSshPublicKeys(ssh.authorizedKeysFile, config.auth);
   }
   for (const [index, relay] of httpRelays.entries()) {
