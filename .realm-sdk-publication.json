@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "README.md",
-      "bytes": 20423,
-      "sha256": "eb3fb3b5a2a292a2d02458a7ee1282a0bddd6dc1775d025bd1339ca526b96d70"
+      "bytes": 20641,
+      "sha256": "7a083edba9223e55723732b23e021cdaccffe5db15b4f89271dce07bae984a5d"
     },
     {
       "path": "bin/connect-desktop.ts",
@@ -72,13 +72,13 @@
     },
     {
       "path": "src/start-realm-coordinator.ts",
-      "bytes": 38106,
-      "sha256": "8bb2cc4be9aa1a9f329089475d4bf623e8178c670678045ec16d0533e5d59c5b"
+      "bytes": 40019,
+      "sha256": "7fb24f02280872bd8f00b7da947374cc3dca965706ef1366ccd2ca4a1f237966"
     },
     {
       "path": "src/start-realm-core.ts",
-      "bytes": 27715,
-      "sha256": "7ce395fef1accb7b859c65441cc7af2e7f08c6006d9e1ee649455f9a8be0625a"
+      "bytes": 27988,
+      "sha256": "930b376f792ed021ea188599decb4380f44e891a8339754a72795d3b6f3e2634"
     },
     {
       "path": "src/start-realm.ts",

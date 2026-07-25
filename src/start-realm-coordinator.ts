@@ -6,6 +6,7 @@ import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
   formatRegistrationUrlBlock,
+  isOwnedRealmWorkerCommand,
   parseActiveRealmRecord,
   parseActiveSshRelayRecord,
   parseManagedTunnelRecord,
@@ -641,6 +642,37 @@ async function readActiveRealm(
   return record;
 }
 
+async function readOwnedRealmForReplacement(): Promise<ReturnType<typeof parseActiveRealmRecord> | undefined> {
+  try {
+    await assertPrivateRecord(activeRealmPath);
+    const record = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
+    return processIsAlive(record.pid) ? record : undefined;
+  } catch { return undefined; }
+}
+
+async function stopOwnedRealmWorker(record: ReturnType<typeof parseActiveRealmRecord>): Promise<void> {
+  let commandLine: string[];
+  try { commandLine = (await readFile(`/proc/${record.pid}/cmdline`)).toString("utf8").split("\0").filter(Boolean); }
+  catch (error) { if (!processIsAlive(record.pid)) return; throw error; }
+  if (!isOwnedRealmWorkerCommand(commandLine, workerPath, configPath)) {
+    throw new Error("refusing to signal a Realm PID that is not the configured worker");
+  }
+  process.kill(record.pid, "SIGTERM");
+  const gracefulDeadline = Date.now() + 5_000;
+  while (processIsAlive(record.pid) && Date.now() < gracefulDeadline) await Bun.sleep(100);
+  if (!processIsAlive(record.pid)) return;
+  let currentCommandLine: string[];
+  try { currentCommandLine = (await readFile(`/proc/${record.pid}/cmdline`)).toString("utf8").split("\0").filter(Boolean); }
+  catch (error) { if (!processIsAlive(record.pid)) return; throw error; }
+  if (!isOwnedRealmWorkerCommand(currentCommandLine, workerPath, configPath)) {
+    throw new Error("refusing to force-stop a reused Realm PID");
+  }
+  process.kill(record.pid, "SIGKILL");
+  const forceDeadline = Date.now() + 2_000;
+  while (processIsAlive(record.pid) && Date.now() < forceDeadline) await Bun.sleep(50);
+  if (processIsAlive(record.pid)) throw new Error("owned Realm worker did not exit");
+}
+
 async function waitForRealm(expectedPublicOrigin: string, expectedSshPublicOrigin?: string | null): Promise<void> {
   const deadline = Date.now() + 10 * 60_000;
   let nextReport = Date.now();
@@ -676,9 +708,11 @@ async function ensureRealm(
     let active: Awaited<ReturnType<typeof readActiveRealm>> | undefined;
     try { active = await readActiveRealm(publicOrigin, sshPublicOrigin ?? null); } catch { /* incompatible workers are replaced below */ }
     if (!active || active.runtimeRevision !== runtimeRevision || forceRestart) {
+      const ownedWorker = active ?? await readOwnedRealmForReplacement();
       console.log(active
         ? `Updating Realm runtime: ${active.runtimeRevision?.slice(0, 12) ?? "legacy"} -> ${runtimeRevision.slice(0, 12)}`
         : "Replacing Realm session with changed runtime endpoint configuration");
+      if (ownedWorker) await stopOwnedRealmWorker(ownedWorker);
       const stopped = await tmux(["kill-session", "-t", `=${sessions.realm}`]);
       if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || "failed to stop outdated Realm session");
       await rm(activeRealmPath, { force: true });

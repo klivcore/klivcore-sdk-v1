@@ -196,6 +196,15 @@ export function startRealmSessionNames(realmId: string, stateDir: string): Reado
   });
 }
 
+export function isOwnedRealmWorkerCommand(
+  argv: readonly string[],
+  workerPath: string,
+  configPath: string,
+): boolean {
+  return argv.includes(configPath)
+    && argv.some((argument) => argument === workerPath || /(?:^|\/)start-realm(?:\.ts)?$/u.test(argument));
+}
+
 export function parseActiveSshRelayRecord(
   value: unknown,
   realmId: string,
