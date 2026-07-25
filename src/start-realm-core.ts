@@ -6,10 +6,24 @@ export type StartRealmConfig = Readonly<{
   realm: Readonly<{ id: string; name: string; canvasColor: string }>;
   port: number;
   stateDir: string;
+  gateways?: Readonly<Record<string, GatewayMountConfig>>;
   publicOrigin?: string;
   desktop?: Readonly<{
     ssh: Readonly<{ host: string; port: number; user: string; startingDirectory: string }>;
   }>;
+}>;
+
+export type GatewayPackageLocator = Readonly<{
+  repository: string;
+  commit: string;
+  packagePath: string;
+}>;
+
+export type GatewayMountConfig = Readonly<{
+  source: string;
+  baseRoute: string;
+  storageSubdir: string;
+  config: Readonly<Record<string, unknown>>;
 }>;
 
 export type StartRealmTunnelPlan = Readonly<{ mode: "managed" }>
@@ -264,12 +278,55 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
   return Object.keys(value).sort().join(",") === [...expected].sort().join(",");
 }
 
+const gatewayMountKeyPattern = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
+const gatewayRoutePattern = /^\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)*$/;
+const gatewayStoragePattern = /^[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?)*$/;
+
+export function parseGatewayPackageLocator(value: unknown): GatewayPackageLocator {
+  if (typeof value !== "string" || value.length < 1 || value.length > 4_096 || /[\u0000-\u0020\u007f]/u.test(value)) throw new TypeError("Gateway package locator is invalid");
+  const match = /^git\+(https:\/\/[^#]+\.git)#([a-f0-9]{40})::(.+)$/.exec(value);
+  if (!match) throw new TypeError("Gateway package locator is invalid");
+  let repository: URL;
+  try { repository = new URL(match[1]!); } catch { throw new TypeError("Gateway package locator is invalid"); }
+  if (repository.protocol !== "https:" || repository.username || repository.password || repository.search || repository.hash
+    || repository.pathname === "/" || !repository.pathname.endsWith(".git")) throw new TypeError("Gateway package locator is invalid");
+  const packagePath = match[3]!;
+  if (packagePath.length > 1_024 || packagePath.startsWith("/") || packagePath.includes("\\")
+    || packagePath.split("/").some((part) => !part || part === "." || part === ".." || !/^[A-Za-z0-9._~-]+$/.test(part))) throw new TypeError("Gateway package locator is invalid");
+  return Object.freeze({ repository: repository.toString(), commit: match[2]!, packagePath });
+}
+
+function cloneGatewayConfig(value: unknown): Readonly<Record<string, unknown>> {
+  const invalid = (): never => { throw new TypeError("start-realm config is invalid"); };
+  let nodes = 0;
+  const clone = (candidate: unknown, depth: number): unknown => {
+    nodes += 1;
+    if (nodes > 2_048 || depth > 16) invalid();
+    if (candidate === null || typeof candidate === "string" || typeof candidate === "boolean") return candidate;
+    if (typeof candidate === "number") return Number.isFinite(candidate) ? candidate : invalid();
+    if (Array.isArray(candidate)) return Object.freeze(candidate.map((entry) => clone(entry, depth + 1)));
+    if (!candidate || typeof candidate !== "object") invalid();
+    const record = candidate as Record<string, unknown>;
+    const output: Record<string, unknown> = Object.create(null);
+    for (const key of Object.keys(record)) {
+      if (!key || key.length > 128 || key === "__proto__" || key === "constructor" || key === "prototype") invalid();
+      output[key] = clone(record[key], depth + 1);
+    }
+    return Object.freeze(output);
+  };
+  const cloned = clone(value, 0);
+  if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)
+    || Buffer.byteLength(JSON.stringify(cloned), "utf8") > 64 * 1024) invalid();
+  return cloned as Readonly<Record<string, unknown>>;
+}
+
 export function parseStartRealmConfig(value: unknown): StartRealmConfig {
   const invalid = (): never => { throw new TypeError("start-realm config is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
   const allowed = [
     ...(input.desktop === undefined ? [] : ["desktop"]),
+    ...(input.gateways === undefined ? [] : ["gateways"]),
     "port",
     ...(input.publicOrigin === undefined ? [] : ["publicOrigin"]),
     "realm",
@@ -319,11 +376,51 @@ export function parseStartRealmConfig(value: unknown): StartRealmConfig {
       }),
     });
   }
+  let gateways: StartRealmConfig["gateways"];
+  if (input.gateways !== undefined) {
+    if (!input.gateways || typeof input.gateways !== "object" || Array.isArray(input.gateways)) invalid();
+    const entries = Object.entries(input.gateways as Record<string, unknown>);
+    if (entries.length < 1 || entries.length > 32) invalid();
+    const parsed: Record<string, GatewayMountConfig> = Object.create(null);
+    for (const [key, raw] of entries) {
+      if (!gatewayMountKeyPattern.test(key)) invalid();
+      const candidate = typeof raw === "string" ? { source: raw } : raw;
+      if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) invalid();
+      const mount = candidate as Record<string, unknown>;
+      const expected = [
+        "source",
+        ...(mount.baseRoute === undefined ? [] : ["baseRoute"]),
+        ...(mount.storageSubdir === undefined ? [] : ["storageSubdir"]),
+        ...(mount.config === undefined ? [] : ["config"]),
+      ];
+      if (!exactKeys(mount, expected)) invalid();
+      parseGatewayPackageLocator(mount.source);
+      const rawBaseRoute = mount.baseRoute ?? `/${key}`;
+      const rawStorageSubdir = mount.storageSubdir ?? key;
+      if (typeof rawBaseRoute !== "string" || !gatewayRoutePattern.test(rawBaseRoute)
+        || typeof rawStorageSubdir !== "string" || !gatewayStoragePattern.test(rawStorageSubdir)) invalid();
+      const baseRoute = rawBaseRoute as string;
+      const storageSubdir = rawStorageSubdir as string;
+      parsed[key] = Object.freeze({
+        source: mount.source as string,
+        baseRoute,
+        storageSubdir,
+        config: cloneGatewayConfig(mount.config ?? {}),
+      });
+    }
+    const mounts = Object.values(parsed);
+    if (mounts.some((mount, index) => mounts.some((candidate, candidateIndex) => candidateIndex < index
+      && (mount.baseRoute === candidate.baseRoute || mount.baseRoute.startsWith(`${candidate.baseRoute}/`)
+        || candidate.baseRoute.startsWith(`${mount.baseRoute}/`))))) invalid();
+    if (new Set(mounts.map((mount) => mount.storageSubdir)).size !== mounts.length) invalid();
+    gateways = Object.freeze(parsed);
+  }
   return Object.freeze({
     schemaVersion: 1,
     realm: Object.freeze({ id: realm.id as string, name: realm.name as string, canvasColor: realm.canvasColor as string }),
     port: input.port as number,
     stateDir: input.stateDir as string,
+    ...(gateways ? { gateways } : {}),
     ...(publicOrigin ? { publicOrigin } : {}),
     ...(desktop ? { desktop } : {}),
   });

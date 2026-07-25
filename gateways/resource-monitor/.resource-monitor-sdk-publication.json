@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "package": "@klivcore/resource-monitor",
+    "version": "0.1.0"
+  },
+  "files": [
+    {
+      "path": "bin/collector.js",
+      "bytes": 12130,
+      "sha256": "fbbf137d7c7e9d274411d8972672cddbd3ba4719de12cd9233c822da69361865"
+    },
+    {
+      "path": "bin/server.js",
+      "bytes": 12482,
+      "sha256": "4294b88363ef26151630f8019468309687f3b72f4f8db96663c937f808860750"
+    },
+    {
+      "path": "klivcore.gateway.json",
+      "bytes": 748,
+      "sha256": "192745910d1d3aa7c0f1e7770a1df7bd499aa81225bd9608355c669a2320a9fc"
+    },
+    {
+      "path": "package.json",
+      "bytes": 112,
+      "sha256": "548e74867aa53ec94ea32e79b2628cd0bb32425d24ce08940c354f73c901b998"
+    },
+    {
+      "path": "ui/main.css",
+      "bytes": 1259,
+      "sha256": "d29fee7d52996b025759dede0c7679c3f6a5d71aef741a8a971f46e106824f09"
+    },
+    {
+      "path": "ui/main.js",
+      "bytes": 3102,
+      "sha256": "8c5a58e4084cf3b110484df51681956aef1b7a2ff7a71ea8346a0ecb33f7c1d7"
+    }
+  ]
+}

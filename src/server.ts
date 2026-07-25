@@ -78,6 +78,7 @@ export type RealmGatewayHttpRelayRequest = Readonly<{
 
 export type RealmGatewayHttpRelay = Readonly<{
   port: number;
+  basePath?: string;
   requiredCapabilities: readonly string[];
   allowedRequests: readonly RealmGatewayHttpRelayRequest[];
   maxMessageBytes?: number;
@@ -390,6 +391,10 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     if (!Number.isSafeInteger(relay.port) || relay.port < 1 || relay.port > 65_535
       || httpRelays.some((candidate, candidateIndex) => candidateIndex < index && candidate.port === relay.port)) {
       throw new TypeError(`Realm HTTP relay ${index} port is invalid or duplicated`);
+    }
+    if (relay.basePath !== undefined && (!/^\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?(?:\/[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?)*\/_gateway$/.test(relay.basePath)
+      || httpRelays.some((candidate, candidateIndex) => candidateIndex < index && candidate.basePath === relay.basePath))) {
+      throw new TypeError(`Realm HTTP relay ${index} base path is invalid or duplicated`);
     }
     if (!Array.isArray(relay.requiredCapabilities)
       || relay.requiredCapabilities.some((capability) => typeof capability !== "string" || !configuredCapabilities.has(capability))) {
@@ -893,11 +898,13 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         catch { return json({ error: "Desktop SSH authorization unavailable" }, 500); }
         return new Response(null, { status: 204, headers: responseHeaders });
       }
-      const relayMatch = /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
-      if (relayMatch) {
-        const relay = httpRelays.find((candidate) => candidate.port === Number(relayMatch[1]));
+      const mountedRelay = httpRelays.find((candidate) => candidate.basePath !== undefined
+        && (url.pathname === candidate.basePath || url.pathname.startsWith(`${candidate.basePath}/`)));
+      const relayMatch = mountedRelay ? undefined : /^\/:([1-9]\d{0,4})(\/.*)$/.exec(url.pathname);
+      if (mountedRelay || relayMatch) {
+        const relay = mountedRelay ?? httpRelays.find((candidate) => candidate.port === Number(relayMatch![1]));
         if (!relay) return json({ error: "not found" }, 404);
-        const upstreamPath = relayMatch[2];
+        const upstreamPath = mountedRelay ? url.pathname.slice(mountedRelay.basePath!.length) || "/" : relayMatch![2];
         const pathRules = relay.allowedRequests.filter((rule) => relayPathMatches(upstreamPath, rule));
         if (pathRules.length === 0) return json({ error: "not found" }, 404);
         if (!pathRules.some((rule) => rule.method === request.method)) return json({ error: "method not allowed" }, 405);

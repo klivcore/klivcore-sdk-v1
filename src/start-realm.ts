@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
-import { createPasskeyAuth, createRealmGateway } from "./server";
+import { gatewayMountRevision, parseActiveGatewayMount, readGatewayAsset } from "./gateway-runtime";
+import { createPasskeyAuth, createRealmGateway, type RealmGatewayHttpRelay, type RealmGatewayRouteConfig } from "./server";
 import { desktopSshRelayPort, parseActiveRealmRecord, parseActiveSshRelayRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
@@ -20,6 +21,7 @@ await mkdir(stateDir, { recursive: true, mode: 0o700 });
 await chmod(stateDir, 0o700);
 const activeRealmPath = resolve(stateDir, "active-realm.json");
 const activeSshRelayPath = resolve(stateDir, "active-ssh-relay.json");
+const activeGatewaysPath = resolve(stateDir, "active-gateways.json");
 const workerMode = process.env.KLIVCORE_START_REALM_MODE;
 if (workerMode !== undefined && !["tunnel", "realm", "ssh-relay", "ssh-tunnel"].includes(workerMode)) {
   throw new Error("invalid internal start-realm worker mode");
@@ -42,6 +44,55 @@ const managedTunnelPid = (() => {
 
 async function digest(path: string): Promise<string> {
   return createHash("sha256").update(await readFile(path)).digest("hex");
+}
+
+async function loadMountedGateways(): Promise<Readonly<{
+  capabilities: readonly string[];
+  routes: readonly RealmGatewayRouteConfig[];
+  httpRelays: readonly RealmGatewayHttpRelay[];
+}>> {
+  const configured = config.gateways ?? {};
+  if (Object.keys(configured).length === 0) return Object.freeze({ capabilities: Object.freeze([]), routes: Object.freeze([]), httpRelays: Object.freeze([]) });
+  const info = await lstat(activeGatewaysPath);
+  const uid = process.getuid?.();
+  if (!info.isFile() || info.isSymbolicLink() || info.size < 2 || info.size > 1024 * 1024
+    || (process.platform !== "win32" && (info.mode & 0o777) !== 0o600) || (uid !== undefined && info.uid !== uid)) throw new Error("active Gateway registry is unsafe");
+  const value = JSON.parse(await readFile(activeGatewaysPath, "utf8"));
+  if (!Array.isArray(value) || value.length !== Object.keys(configured).length) throw new Error("active Gateway registry does not match Realm configuration");
+  const mounts = value.map(parseActiveGatewayMount);
+  const routes: RealmGatewayRouteConfig[] = [];
+  const httpRelays: RealmGatewayHttpRelay[] = [];
+  const capabilities = new Set<string>();
+  for (const mount of mounts) {
+    const expected = configured[mount.key];
+    if (!expected || mount.source !== expected.source || mount.revision !== gatewayMountRevision(mount.key, expected)
+      || mount.baseRoute !== expected.baseRoute || mount.storageSubdir !== expected.storageSubdir
+      || resolve(mount.home) !== resolve(stateDir, "gateways", expected.storageSubdir)
+      || resolve(mount.configPath) !== resolve(mount.home, "config.json")
+      || resolve(mount.packageRoot) !== resolve(stateDir, "gateway-packages", mount.key, mount.revision)) {
+      throw new Error(`active Gateway mount does not match configuration: ${mount.key}`);
+    }
+    for (const capability of mount.manifest.capabilities) capabilities.add(capability);
+    for (const route of mount.manifest.routes) {
+      routes.push(Object.freeze({
+        id: `${mount.key}:${route.id}`,
+        path: route.path === "/" ? mount.baseRoute : `${mount.baseRoute}${route.path}`,
+        title: route.title,
+        requiredCapabilities: route.requiredCapabilities,
+        componentId: `${mount.key}:${route.component.id}`,
+        js: await readGatewayAsset(mount.packageRoot, route.component.js),
+        css: await readGatewayAsset(mount.packageRoot, route.component.css),
+      }));
+    }
+    httpRelays.push(Object.freeze({
+      port: mount.port,
+      basePath: `${mount.baseRoute}/_gateway`,
+      requiredCapabilities: mount.manifest.httpRelay.requiredCapabilities,
+      allowedRequests: mount.manifest.httpRelay.allowedRequests,
+    }));
+  }
+  if (new Set(routes.map((route) => route.path)).size !== routes.length) throw new Error("mounted Gateway route conflict");
+  return Object.freeze({ capabilities: Object.freeze([...capabilities]), routes: Object.freeze(routes), httpRelays: Object.freeze(httpRelays) });
 }
 
 async function cloudflaredPath(): Promise<string> {
@@ -354,6 +405,8 @@ try {
   const registrationControlToken = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64url");
   const appRoot = await resolvePublishedAppV2Root(resolve(import.meta.dir, "../app-v2"));
   const appV2 = await loadPublishedAppV2(appRoot);
+  const mountedGateways = await loadMountedGateways();
+  const publishedCapabilities = Object.freeze(["realm:view", ...mountedGateways.capabilities]);
   console.log(`Starting Realm on http://127.0.0.1:${config.port}...`);
   auth = createPasskeyAuth({
     branding,
@@ -373,10 +426,12 @@ try {
     authorityEpoch: `${config.realm.id}-1`,
     generation: `${config.realm.id}-1`,
     runtimeVersion: runtimeRevision?.slice(0, 12),
-    capabilities: ["realm:view"],
-    publicBindingCapabilities: ["realm:view"],
+    capabilities: publishedCapabilities,
+    publicBindingCapabilities: publishedCapabilities,
     appV2,
     auth,
+    httpRelays: mountedGateways.httpRelays,
+    routes: mountedGateways.routes,
     desktop: config.desktop ? Object.freeze({
       ...(forcedSshPublicOrigin ? { relayUrl: `${forcedSshPublicOrigin.replace(/^https:/u, "wss:")}/v1/desktop/ssh` } : {}),
       ssh: Object.freeze({

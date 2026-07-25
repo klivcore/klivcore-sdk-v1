@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "id": "resource-monitor",
+  "capabilities": ["resource-monitor:read"],
+  "routes": [
+    {
+      "id": "resource-monitor",
+      "path": "/",
+      "title": "Resource Monitor",
+      "requiredCapabilities": ["resource-monitor:read"],
+      "component": {
+        "id": "resource-monitor-main",
+        "js": "ui/main.js",
+        "css": "ui/main.css"
+      }
+    }
+  ],
+  "httpRelay": {
+    "requiredCapabilities": ["resource-monitor:read"],
+    "allowedRequests": [
+      { "method": "GET", "path": "/v1/samples" }
+    ],
+    "healthPath": "/health"
+  },
+  "processes": [
+    { "role": "server", "entrypoint": "bin/server.js" },
+    { "role": "collector", "entrypoint": "bin/collector.js" }
+  ]
+}

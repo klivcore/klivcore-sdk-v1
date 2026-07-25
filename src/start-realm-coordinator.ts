@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { dirname, join, relative, resolve } from "node:path";
+import { gatewayMountRevision, gatewayProcessSessionName, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -10,6 +11,7 @@ import {
   parseManagedTunnelRecord,
   parseStartRealmArgs,
   parseStartRealmConfig,
+  parseGatewayPackageLocator,
   probeHealthInFreshBun,
   probePublicHealth,
   renderLoopbackSshdDropIn,
@@ -26,6 +28,7 @@ const stateDir = resolve(dirname(configPath), config.stateDir);
 const activeRealmPath = resolve(stateDir, "active-realm.json");
 const managedTunnelPath = resolve(stateDir, "managed-tunnel.json");
 const activeSshRelayPath = resolve(stateDir, "active-ssh-relay.json");
+const activeGatewaysPath = resolve(stateDir, "active-gateways.json");
 const managedSshTunnelPath = resolve(stateDir, "managed-ssh-tunnel.json");
 const sshRelayPort = desktopSshRelayPort(config.port);
 const workerPath = resolve(import.meta.dir, "start-realm.ts");
@@ -131,6 +134,212 @@ async function tmuxOutput(sessionName: string): Promise<string> {
   if (result.code === 0) return result.stdout.trim();
   const logPath = managedLogPath(sessionName);
   return readFile(logPath, "utf8").then((value) => value.trim()).catch(() => result.stderr.trim());
+}
+
+async function readActiveGateways(): Promise<readonly ActiveGatewayMount[]> {
+  let info;
+  try { info = await lstat(activeGatewaysPath); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return Object.freeze([]); throw error; }
+  const uid = process.getuid?.();
+  if (!info.isFile() || info.isSymbolicLink() || info.size < 2 || info.size > 1024 * 1024
+    || (info.mode & 0o777) !== 0o600 || (uid !== undefined && info.uid !== uid)) throw new Error("unsafe active Gateway registry");
+  const value = JSON.parse(await readFile(activeGatewaysPath, "utf8"));
+  if (!Array.isArray(value) || value.length > 32) throw new Error("active Gateway registry is invalid");
+  return Object.freeze(value.map(parseActiveGatewayMount));
+}
+
+async function privateWrite(path: string, content: string): Promise<void> {
+  const stage = `${path}.stage-${crypto.randomUUID()}`;
+  try {
+    await writeFile(stage, content, { flag: "wx", mode: 0o600 });
+    await rename(stage, path);
+    await chmod(path, 0o600);
+  } finally { await rm(stage, { force: true }); }
+}
+
+async function validateGatewayTree(root: string): Promise<void> {
+  let files = 0;
+  let bytes = 0;
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Gateway package contains a symlink: ${relative(root, path)}`);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) {
+        const info = await lstat(path);
+        files += 1; bytes += info.size;
+        if (files > 512 || bytes > 64 * 1024 * 1024) throw new Error("Gateway package exceeds safety limits");
+      } else throw new Error("Gateway package contains an unsupported filesystem entry");
+    }
+  };
+  const info = await lstat(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Gateway package root is invalid");
+  await visit(root);
+}
+
+async function materializeGatewayPackage(key: string, source: string, revision: string): Promise<string> {
+  const locator = parseGatewayPackageLocator(source);
+  const target = resolve(stateDir, "gateway-packages", key, revision);
+  try {
+    await validateGatewayTree(target);
+    await loadGatewayManifest(target);
+    return target;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") await rm(target, { recursive: true, force: true });
+  }
+  const parent = dirname(target);
+  const workspace = resolve(stateDir, `.gateway-fetch-${crypto.randomUUID()}`);
+  const checkout = resolve(workspace, "checkout");
+  const stage = resolve(parent, `.stage-${crypto.randomUUID()}`);
+  await mkdir(parent, { recursive: true, mode: 0o700 });
+  await mkdir(workspace, { mode: 0o700 });
+  try {
+    for (const command of [
+      ["git", "init", "--quiet", checkout],
+      ["git", "-C", checkout, "remote", "add", "origin", locator.repository],
+      ["git", "-C", checkout, "fetch", "--quiet", "--depth", "1", "--filter=blob:none", "origin", locator.commit],
+      ["git", "-C", checkout, "checkout", "--quiet", "--detach", "FETCH_HEAD"],
+    ] as const) {
+      const result = await run(command);
+      if (result.code !== 0) throw new Error(result.stderr.trim() || `Gateway source resolution failed: ${command[1]}`);
+    }
+    const resolved = await run(["git", "-C", checkout, "rev-parse", "HEAD"]);
+    if (resolved.code !== 0 || resolved.stdout.trim() !== locator.commit) throw new Error("Gateway source did not resolve to its pinned commit");
+    const sourceRoot = resolve(checkout, locator.packagePath);
+    if (!sourceRoot.startsWith(`${checkout}/`)) throw new Error("Gateway package path escaped checkout");
+    await validateGatewayTree(sourceRoot);
+    await cp(sourceRoot, stage, { recursive: true, errorOnExist: true, dereference: false });
+    await validateGatewayTree(stage);
+    await loadGatewayManifest(stage);
+    await rename(stage, target);
+    return target;
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+    await rm(stage, { recursive: true, force: true });
+  }
+}
+
+async function allocateGatewayPort(): Promise<number> {
+  const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+  const port = probe.port;
+  probe.stop(true);
+  if (port === undefined) throw new Error("failed to allocate a Gateway loopback port");
+  return port;
+}
+
+async function gatewayHealthy(mount: ActiveGatewayMount): Promise<boolean> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${mount.port}${mount.manifest.httpRelay.healthPath}`, { signal: AbortSignal.timeout(2_000) });
+    if (!response.ok) return false;
+    const body = await response.json() as { status?: unknown };
+    return body.status === "ok";
+  } catch { return false; }
+}
+
+async function waitForGateway(mount: ActiveGatewayMount): Promise<void> {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    if (!await tmuxExists(mount.sessions.server!)) throw new Error(`Gateway server exited during startup: ${mount.key}`);
+    if (await gatewayHealthy(mount)) return;
+    await Bun.sleep(250);
+  }
+  throw new Error(`Gateway did not become healthy: ${mount.key}`);
+}
+
+async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
+  for (const session of Object.values(mount.sessions)) {
+    if (!await tmuxExists(session)) continue;
+    const stopped = await tmux(["kill-session", "-t", `=${session}`]);
+    if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || `failed to stop Gateway session ${session}`);
+  }
+}
+
+async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entrypoint: string): Promise<void> {
+  const session = mount.sessions[role];
+  if (!session) throw new Error(`Gateway process session is missing: ${mount.key}/${role}`);
+  await readGatewayAsset(mount.packageRoot, entrypoint, 16 * 1024 * 1024);
+  const logs = resolve(mount.home, "logs");
+  await mkdir(logs, { recursive: true, mode: 0o700 });
+  const logPath = resolve(logs, `${role}.log`);
+  await writeFile(logPath, "", { mode: 0o600 });
+  const env = {
+    KLIVCORE_GATEWAY_MOUNT: mount.key,
+    KLIVCORE_GATEWAY_HOME: mount.home,
+    KLIVCORE_GATEWAY_CONFIG: mount.configPath,
+    KLIVCORE_GATEWAY_PORT: String(mount.port),
+  };
+  const assignments = Object.entries(env).map(([name, value]) => `${name}=${shellQuote(value)}`).join(" ");
+  const command = `${assignments} exec ${shellQuote(process.execPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))} >>${shellQuote(logPath)} 2>&1`;
+  const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
+  if (started.code !== 0) throw new Error(started.stderr.trim() || `failed to start Gateway process ${mount.key}/${role}`);
+}
+
+async function ensureGateways(): Promise<boolean> {
+  const previous = await readActiveGateways();
+  const configured = Object.entries(config.gateways ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  const configuredKeys = new Set(configured.map(([key]) => key));
+  let changed = false;
+  for (const stale of previous.filter((mount) => !configuredKeys.has(mount.key))) {
+    console.log(`Stopping disabled Gateway: ${stale.key}`);
+    await stopGatewaySessions(stale);
+    changed = true;
+  }
+  const active: ActiveGatewayMount[] = [];
+  for (const [key, mountConfig] of configured) {
+    const revision = gatewayMountRevision(key, mountConfig);
+    const packageRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
+    const manifest = await loadGatewayManifest(packageRoot);
+    const home = resolve(stateDir, "gateways", mountConfig.storageSubdir);
+    const configPath = resolve(home, "config.json");
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    await chmod(home, 0o700);
+    await privateWrite(configPath, `${JSON.stringify(mountConfig.config, null, 2)}\n`);
+    const prior = previous.find((candidate) => candidate.key === key);
+    const sessions = Object.freeze(Object.fromEntries(manifest.processes.map((process) => [
+      process.role,
+      gatewayProcessSessionName(config.realm.id, stateDir, key, process.role),
+    ])));
+    const candidate = Object.freeze({
+      schemaVersion: 1 as const,
+      key,
+      source: mountConfig.source,
+      revision,
+      baseRoute: mountConfig.baseRoute,
+      storageSubdir: mountConfig.storageSubdir,
+      packageRoot,
+      home,
+      configPath,
+      port: prior?.port ?? await allocateGatewayPort(),
+      sessions,
+      manifest,
+    });
+    const reusable = prior?.revision === candidate.revision && prior.source === candidate.source
+      && prior.baseRoute === candidate.baseRoute && prior.storageSubdir === candidate.storageSubdir
+      && JSON.stringify(prior.sessions) === JSON.stringify(candidate.sessions)
+      && (await Promise.all(Object.values(candidate.sessions).map(tmuxExists))).every(Boolean)
+      && await gatewayHealthy(candidate);
+    if (reusable) {
+      console.log(`Reusing Gateway: ${key} (${revision.slice(0, 12)})`);
+      active.push(candidate);
+      continue;
+    }
+    if (prior) await stopGatewaySessions(prior);
+    for (const session of Object.values(candidate.sessions)) {
+      if (await tmuxExists(session)) await tmux(["kill-session", "-t", `=${session}`]);
+    }
+    console.log(`${prior ? "Updating" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
+    const server = manifest.processes.find((process) => process.role === "server")!;
+    await startGatewayProcess(candidate, server.role, server.entrypoint);
+    await waitForGateway(candidate);
+    for (const process of manifest.processes) if (process.role !== "server") await startGatewayProcess(candidate, process.role, process.entrypoint);
+    active.push(candidate);
+    changed = true;
+  }
+  if (active.length === 0) await rm(activeGatewaysPath, { force: true });
+  else await privateWrite(activeGatewaysPath, `${JSON.stringify(active, null, 2)}\n`);
+  if (JSON.stringify(previous.map((mount) => ({ key: mount.key, revision: mount.revision, baseRoute: mount.baseRoute, port: mount.port })))
+    !== JSON.stringify(active.map((mount) => ({ key: mount.key, revision: mount.revision, baseRoute: mount.baseRoute, port: mount.port })))) changed = true;
+  return changed;
 }
 
 async function startTmuxWorker(sessionName: string, environment: Readonly<Record<string, string>>): Promise<void> {
@@ -404,7 +613,8 @@ if (config.desktop) {
 } else {
   await disableManagedSsh();
 }
-await ensureRealm(publicOrigin, sshTunnel?.publicOrigin, tunnel?.pid, sshConfigurationChanged);
+const gatewaysChanged = await ensureGateways();
+await ensureRealm(publicOrigin, sshTunnel?.publicOrigin, tunnel?.pid, sshConfigurationChanged || gatewaysChanged);
 const firstRegistrationUrl = await registrationUrl();
 
 console.log("\nRealm ready");
@@ -421,6 +631,11 @@ console.log(`  Realm:  tmux attach-session -t ${sessions.realm}`);
 if (sshTunnel) {
   console.log(`  SSH relay:  tmux attach-session -t ${sessions.sshRelay}`);
   console.log(`  SSH tunnel: tmux attach-session -t ${sessions.sshTunnel}`);
+}
+for (const mount of await readActiveGateways()) {
+  for (const [role, session] of Object.entries(mount.sessions)) {
+    console.log(`  Gateway ${mount.key}/${role}: tmux attach-session -t ${session}`);
+  }
 }
 console.log("Restart only a broken component:");
 console.log(`  Realm:  tmux kill-session -t ${sessions.realm}; rerun this start-realm command`);

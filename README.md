@@ -42,6 +42,35 @@ For managed Quick Tunnels, `start-realm` is an idempotent coordinator over deter
 
 To preserve an existing tunnel or use a named operator-managed tunnel, set `publicOrigin` to its exact HTTPS origin with no trailing slash, path, query, fragment, or credentials. In that mode `start-realm` does not install, start, signal, or stop `cloudflared`; it verifies the supplied public origin identifies the configured live Realm before becoming ready. Keep the external tunnel supervised separately and pointed only at the configured loopback `port`.
 
+### Mount Gateway packages
+
+Realm mounts Gateway implementations generically by immutable Git repository revision and package path. The package directory must contain `klivcore.gateway.json` and fulfill Gateway contract version 1. The shorthand form derives `baseRoute` and `storageSubdir` from the stable mount key:
+
+```json
+{
+  "gateways": {
+    "resource-monitor": "git+https://github.com/klivcore/klivcore-sdk-v1.git#0123456789abcdef0123456789abcdef01234567::gateways/resource-monitor"
+  }
+}
+```
+
+The equivalent expanded form is:
+
+```json
+{
+  "gateways": {
+    "resource-monitor": {
+      "source": "git+https://github.com/klivcore/klivcore-sdk-v1.git#0123456789abcdef0123456789abcdef01234567::gateways/resource-monitor",
+      "baseRoute": "/resource-monitor",
+      "storageSubdir": "resource-monitor",
+      "config": { "collectionIntervalMs": 5000 }
+    }
+  }
+}
+```
+
+Gateway processes run in independent managed sessions and survive Realm worker replacement. Gateway source or configuration changes replace only that Gateway and then refresh the Realm route catalog; they do not replace Desktop SSH sessions. State is confined to `<stateDir>/gateways/<storageSubdir>`.
+
 ### Give a user a registration URL
 
 While the Realm is running, an operating agent generates a fresh registration URL with:
