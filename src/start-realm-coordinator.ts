@@ -237,6 +237,21 @@ async function installGatewayConfig(home: string, user: string, configPath: stri
   await installGatewayConfigText(home, user, configPath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+async function readGatewayConfigText(configPath: string, ownerUid: number): Promise<string> {
+  const script = [
+    "import os, stat, sys",
+    "fd = os.open(sys.argv[1], os.O_RDONLY | os.O_NOFOLLOW)",
+    "info = os.fstat(fd)",
+    "valid = stat.S_ISREG(info.st_mode) and info.st_uid == int(sys.argv[2]) and stat.S_IMODE(info.st_mode) == 0o600 and 1 < info.st_size <= 65536",
+    "data = os.read(fd, 65537) if valid else b''",
+    "os.close(fd)",
+    "sys.exit(1) if (not valid or len(data) != info.st_size) else sys.stdout.buffer.write(data)",
+  ].join("\n");
+  const result = await run(["sudo", "-n", "python3", "-c", script, configPath, String(ownerUid)]);
+  if (result.code !== 0) throw new Error("private Gateway configuration is unsafe or unreadable");
+  return result.stdout;
+}
+
 async function validateGatewayTree(root: string): Promise<void> {
   let files = 0;
   let bytes = 0;
@@ -399,7 +414,7 @@ async function ensureGateways(): Promise<boolean> {
     const home = gatewayDurableHome(config.realm.id, stateDir, key, mountConfig.storageSubdir);
     const configPath = resolve(home, "config.json");
     const prior = previous.find((candidate) => candidate.key === key);
-    const priorConfig = prior?.configPath === configPath ? await readFile(configPath, "utf8") : undefined;
+    const priorConfig = prior?.configPath === configPath ? await readGatewayConfigText(configPath, isolation.uid) : undefined;
     await installGatewayConfig(home, isolation.user, configPath, mountConfig.config);
     const sessions = Object.freeze(Object.fromEntries(manifest.processes.map((process) => [
       process.role,
