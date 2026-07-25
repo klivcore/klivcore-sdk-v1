@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { lstat, readFile, readdir } from "node:fs/promises";
+import { basename, relative, resolve } from "node:path";
 import { parseGatewayPackageLocator, type GatewayMountConfig } from "./start-realm-core";
 
 export type GatewayProcess = Readonly<{ role: string; entrypoint: string }>;
@@ -29,6 +29,10 @@ export type ActiveGatewayMount = Readonly<{
   key: string;
   source: string;
   revision: string;
+  packageDigest: string;
+  serviceUser: string;
+  serviceUid: number;
+  serviceGid: number;
   baseRoute: string;
   storageSubdir: string;
   packageRoot: string;
@@ -38,6 +42,51 @@ export type ActiveGatewayMount = Readonly<{
   sessions: Readonly<Record<string, string>>;
   manifest: GatewayManifest;
 }>;
+
+export function gatewaySandboxIdentity(realmId: string, stateDir: string, key: string): string {
+  return createHash("sha256").update(`${realmId}\0${resolve(stateDir)}\0${key}`).digest("hex").slice(0, 20);
+}
+
+export function gatewayServiceUser(realmId: string, stateDir: string, key: string): string {
+  return `klivgw-${gatewaySandboxIdentity(realmId, stateDir, key)}`;
+}
+
+export function gatewaySandboxRoot(realmId: string, stateDir: string, key: string): string {
+  return `/var/lib/klivcore/gateways/${gatewaySandboxIdentity(realmId, stateDir, key)}`;
+}
+
+export function gatewayImmutablePackageRoot(realmId: string, stateDir: string, key: string, revision: string, packageDigest: string): string {
+  return `${gatewaySandboxRoot(realmId, stateDir, key)}/runtime/${revision}-${packageDigest.slice(0, 16)}`;
+}
+
+export function gatewayDurableHome(realmId: string, stateDir: string, key: string, storageSubdir: string): string {
+  return `${gatewaySandboxRoot(realmId, stateDir, key)}/state/${storageSubdir}`;
+}
+
+export async function gatewayPackageDigest(root: string): Promise<string> {
+  const hash = createHash("sha256");
+  let count = 0;
+  let bytes = 0;
+  const visit = async (directory: string): Promise<void> => {
+    for (const entry of (await readdir(directory, { withFileTypes: true })).sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = resolve(directory, entry.name);
+      if (entry.isSymbolicLink()) throw new Error(`Gateway package contains a symlink: ${relative(root, path)}`);
+      if (entry.isDirectory()) await visit(path);
+      else if (entry.isFile()) {
+        const info = await lstat(path);
+        count += 1;
+        bytes += info.size;
+        if (count > 512 || bytes > 64 * 1024 * 1024) throw new Error("Gateway package exceeds safety limits");
+        const name = relative(root, path).replaceAll("\\", "/");
+        hash.update(name).update("\0").update(String(info.size)).update("\0").update(await readFile(path)).update("\0");
+      } else throw new Error("Gateway package contains an unsupported filesystem entry");
+    }
+  };
+  const info = await lstat(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Gateway package root is invalid");
+  await visit(root);
+  return hash.digest("hex");
+}
 
 const idPattern = /^[a-z][a-z0-9]*(?:[-:][a-z0-9]+)*$/;
 const capabilityPattern = /^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*$/;
@@ -123,12 +172,16 @@ export async function loadGatewayManifest(packageRoot: string): Promise<GatewayM
 
 export function parseActiveGatewayMount(value: unknown): ActiveGatewayMount {
   const mount = record(value);
-  if (!exact(mount, ["schemaVersion", "key", "source", "revision", "baseRoute", "storageSubdir", "packageRoot", "home", "configPath", "port", "sessions", "manifest"])
+  if (!exact(mount, ["schemaVersion", "key", "source", "revision", "packageDigest", "serviceUser", "serviceUid", "serviceGid", "baseRoute", "storageSubdir", "packageRoot", "home", "configPath", "port", "sessions", "manifest"])
     || mount.schemaVersion !== 1 || typeof mount.key !== "string" || typeof mount.source !== "string" || typeof mount.revision !== "string" || !/^[a-f0-9]{64}$/.test(mount.revision)
+    || typeof mount.packageDigest !== "string" || !/^[a-f0-9]{64}$/.test(mount.packageDigest)
+    || typeof mount.serviceUser !== "string" || !/^klivgw-[a-f0-9]{20}$/.test(mount.serviceUser)
+    || !Number.isSafeInteger(mount.serviceUid) || (mount.serviceUid as number) < 1
+    || !Number.isSafeInteger(mount.serviceGid) || (mount.serviceGid as number) < 1
     || typeof mount.baseRoute !== "string" || typeof mount.storageSubdir !== "string" || typeof mount.packageRoot !== "string" || !resolve(mount.packageRoot).startsWith("/")
     || typeof mount.home !== "string" || typeof mount.configPath !== "string" || !Number.isSafeInteger(mount.port) || (mount.port as number) < 1 || (mount.port as number) > 65535) throw new TypeError("active Gateway record is invalid");
   parseGatewayPackageLocator(mount.source);
   const sessions = record(mount.sessions);
   if (Object.values(sessions).some((session) => typeof session !== "string" || session.length < 1 || session.length > 100)) throw new TypeError("active Gateway record is invalid");
-  return Object.freeze({ schemaVersion: 1, key: mount.key, source: mount.source, revision: mount.revision, baseRoute: mount.baseRoute, storageSubdir: mount.storageSubdir, packageRoot: mount.packageRoot, home: mount.home, configPath: mount.configPath, port: mount.port as number, sessions: Object.freeze({ ...sessions } as Record<string, string>), manifest: parseGatewayManifest(mount.manifest) });
+  return Object.freeze({ schemaVersion: 1, key: mount.key, source: mount.source, revision: mount.revision, packageDigest: mount.packageDigest, serviceUser: mount.serviceUser, serviceUid: mount.serviceUid as number, serviceGid: mount.serviceGid as number, baseRoute: mount.baseRoute, storageSubdir: mount.storageSubdir, packageRoot: mount.packageRoot, home: mount.home, configPath: mount.configPath, port: mount.port as number, sessions: Object.freeze({ ...sessions } as Record<string, string>), manifest: parseGatewayManifest(mount.manifest) });
 }

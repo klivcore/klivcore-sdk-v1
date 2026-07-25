@@ -69,7 +69,11 @@ The equivalent expanded form is:
 }
 ```
 
-Gateway processes run in independent managed sessions and survive Realm worker replacement. Gateway source or configuration changes replace only that Gateway and then refresh the Realm route catalog; they do not replace Desktop SSH sessions. State is confined to `<stateDir>/gateways/<storageSubdir>`.
+Gateway processes run in independent managed sessions and survive Realm worker replacement. Gateway source or configuration changes replace only that Gateway and then refresh the Realm route catalog; they do not replace Desktop SSH sessions. On Linux, `start-realm` uses passwordless `sudo` to create a deterministic non-login service user for each mount, installs a root-owned content-addressed package under `/var/lib/klivcore/gateways`, and stores that mount's mode-`0700` durable state under the same isolated root. The process receives an empty environment containing only its Gateway contract variables and cannot read Realm, SSH, or sibling-Gateway private state.
+
+Gateway mounts are trusted operator configuration, not a third-party plugin-discovery boundary. A mounted package's browser component executes as same-origin Realm product UI and therefore carries the signed-in user's granted route authority. Do not mount untrusted publications; hostile UI would require a separate opaque-origin iframe and message-broker contract that is intentionally outside this Gateway slice.
+
+Owner publishers operate only in a quiescent generated-SDK checkout. That working tree is not a runtime serving boundary: consumers install an exact committed SDK revision after all owner publishers and SDK gates finish. The Git commit is the atomic generation-visibility boundary; do not run a Realm or another SDK reader from the checkout while publication is in progress.
 
 ### Give a user a registration URL
 

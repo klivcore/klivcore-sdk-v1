@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
-import { gatewayMountRevision, parseActiveGatewayMount, readGatewayAsset } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayServiceUser, parseActiveGatewayMount, readGatewayAsset } from "./gateway-runtime";
 import { createPasskeyAuth, createRealmGateway, type RealmGatewayHttpRelay, type RealmGatewayRouteConfig } from "./server";
 import { desktopSshRelayPort, parseActiveRealmRecord, parseActiveSshRelayRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
@@ -67,9 +67,11 @@ async function loadMountedGateways(): Promise<Readonly<{
     const expected = configured[mount.key];
     if (!expected || mount.source !== expected.source || mount.revision !== gatewayMountRevision(mount.key, expected)
       || mount.baseRoute !== expected.baseRoute || mount.storageSubdir !== expected.storageSubdir
-      || resolve(mount.home) !== resolve(stateDir, "gateways", expected.storageSubdir)
+      || mount.serviceUser !== gatewayServiceUser(config.realm.id, stateDir, mount.key)
+      || resolve(mount.home) !== gatewayDurableHome(config.realm.id, stateDir, mount.key, expected.storageSubdir)
       || resolve(mount.configPath) !== resolve(mount.home, "config.json")
-      || resolve(mount.packageRoot) !== resolve(stateDir, "gateway-packages", mount.key, mount.revision)) {
+      || resolve(mount.packageRoot) !== gatewayImmutablePackageRoot(config.realm.id, stateDir, mount.key, mount.revision, mount.packageDigest)
+      || await gatewayPackageDigest(mount.packageRoot) !== mount.packageDigest) {
       throw new Error(`active Gateway mount does not match configuration: ${mount.key}`);
     }
     for (const capability of mount.manifest.capabilities) capabilities.add(capability);

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { gatewayMountRevision, gatewayProcessSessionName, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -157,6 +157,81 @@ async function privateWrite(path: string, content: string): Promise<void> {
   } finally { await rm(stage, { force: true }); }
 }
 
+async function sudo(command: readonly string[], failure: string): Promise<void> {
+  const result = await run(["sudo", "-n", ...command]);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || failure);
+}
+
+async function ensureGatewayServiceUser(key: string): Promise<Readonly<{ user: string; uid: number; gid: number; root: string }>> {
+  if (process.platform !== "linux") throw new Error("Gateway process isolation currently requires Linux");
+  const user = gatewayServiceUser(config.realm.id, stateDir, key);
+  const root = gatewaySandboxRoot(config.realm.id, stateDir, key);
+  const existing = await run(["getent", "passwd", user]);
+  if (existing.code !== 0) {
+    await sudo(["useradd", "--system", "--user-group", "--home-dir", root, "--shell", "/usr/sbin/nologin", user], "passwordless sudo is required to create an isolated Gateway service user");
+  }
+  const verified = await run(["getent", "passwd", user]);
+  const fields = verified.stdout.trim().split(":");
+  const uid = Number(fields[2]);
+  const gid = Number(fields[3]);
+  if (verified.code !== 0 || fields.length !== 7 || fields[0] !== user || !Number.isSafeInteger(uid) || uid < 1
+    || !Number.isSafeInteger(gid) || gid < 1 || fields[5] !== root || fields[6] !== "/usr/sbin/nologin") {
+    throw new Error(`Gateway service user is unsafe: ${user}`);
+  }
+  await sudo(["install", "-d", "-m", "0711", "-o", "root", "-g", "root", "/var/lib/klivcore", "/var/lib/klivcore/gateways", root, `${root}/runtime`, `${root}/state`], "failed to prepare isolated Gateway directories");
+  return Object.freeze({ user, uid, gid, root });
+}
+
+let sandboxBunPath: string | undefined;
+async function ensureSandboxBun(): Promise<string> {
+  if (sandboxBunPath) return sandboxBunPath;
+  const data = await readFile(process.execPath);
+  const digest = createHash("sha256").update(data).digest("hex");
+  const target = `/var/lib/klivcore/bin/bun-${digest.slice(0, 16)}`;
+  await sudo(["install", "-d", "-m", "0755", "-o", "root", "-g", "root", "/var/lib/klivcore/bin"], "failed to prepare the isolated Gateway Bun runtime");
+  const current = await readFile(target).catch(() => undefined);
+  if (!current || createHash("sha256").update(current).digest("hex") !== digest) {
+    await sudo(["install", "-m", "0555", "-o", "root", "-g", "root", process.execPath, target], "failed to install the isolated Gateway Bun runtime");
+  }
+  const verified = await readFile(target);
+  if (createHash("sha256").update(verified).digest("hex") !== digest) throw new Error("isolated Gateway Bun runtime verification failed");
+  sandboxBunPath = target;
+  return target;
+}
+
+async function ensureImmutableGatewayPackage(key: string, revision: string, sourceRoot: string): Promise<Readonly<{ packageRoot: string; packageDigest: string }>> {
+  const packageDigest = await gatewayPackageDigest(sourceRoot);
+  const packageRoot = gatewayImmutablePackageRoot(config.realm.id, stateDir, key, revision, packageDigest);
+  const prefix = `${gatewaySandboxRoot(config.realm.id, stateDir, key)}/runtime/`;
+  if (!packageRoot.startsWith(prefix)) throw new Error("Gateway package isolation path is invalid");
+  let valid = false;
+  try {
+    const info = await lstat(packageRoot);
+    valid = info.isDirectory() && !info.isSymbolicLink() && info.uid === 0 && (info.mode & 0o022) === 0
+      && await gatewayPackageDigest(packageRoot) === packageDigest;
+  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  if (!valid) {
+    await sudo(["rm", "-rf", "--", packageRoot], "failed to replace an invalid Gateway package");
+    await sudo(["install", "-d", "-m", "0755", "-o", "root", "-g", "root", packageRoot], "failed to create immutable Gateway package root");
+    await sudo(["cp", "-a", "--", `${sourceRoot}/.`, packageRoot], "failed to install Gateway package");
+    await sudo(["chown", "-R", "root:root", packageRoot], "failed to secure Gateway package ownership");
+    await sudo(["chmod", "-R", "u=rwX,go=rX", packageRoot], "failed to make Gateway package immutable");
+  }
+  const info = await lstat(packageRoot);
+  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== 0 || (info.mode & 0o022) !== 0
+    || await gatewayPackageDigest(packageRoot) !== packageDigest) throw new Error("immutable Gateway package verification failed");
+  return Object.freeze({ packageRoot, packageDigest });
+}
+
+async function installGatewayConfig(home: string, user: string, configPath: string, value: Readonly<Record<string, unknown>>): Promise<void> {
+  await sudo(["install", "-d", "-m", "0700", "-o", user, "-g", user, home], "failed to prepare private Gateway state");
+  const stage = resolve(stateDir, `.gateway-config-${crypto.randomUUID()}`);
+  try {
+    await writeFile(stage, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+    await sudo(["install", "-m", "0600", "-o", user, "-g", user, stage, configPath], "failed to install private Gateway configuration");
+  } finally { await rm(stage, { force: true }); }
+}
+
 async function validateGatewayTree(root: string): Promise<void> {
   let files = 0;
   let bytes = 0;
@@ -258,18 +333,18 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
   const session = mount.sessions[role];
   if (!session) throw new Error(`Gateway process session is missing: ${mount.key}/${role}`);
   await readGatewayAsset(mount.packageRoot, entrypoint, 16 * 1024 * 1024);
-  const logs = resolve(mount.home, "logs");
-  await mkdir(logs, { recursive: true, mode: 0o700 });
-  const logPath = resolve(logs, `${role}.log`);
-  await writeFile(logPath, "", { mode: 0o600 });
+  if (await gatewayPackageDigest(mount.packageRoot) !== mount.packageDigest) throw new Error(`Gateway package changed before process start: ${mount.key}`);
+  const bunPath = await ensureSandboxBun();
   const env = {
+    HOME: mount.home,
+    PATH: "/var/lib/klivcore/bin:/usr/local/bin:/usr/bin:/bin",
     KLIVCORE_GATEWAY_MOUNT: mount.key,
     KLIVCORE_GATEWAY_HOME: mount.home,
     KLIVCORE_GATEWAY_CONFIG: mount.configPath,
     KLIVCORE_GATEWAY_PORT: String(mount.port),
   };
-  const assignments = Object.entries(env).map(([name, value]) => `${name}=${shellQuote(value)}`).join(" ");
-  const command = `${assignments} exec ${shellQuote(process.execPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))} >>${shellQuote(logPath)} 2>&1`;
+  const assignments = Object.entries(env).map(([name, value]) => shellQuote(`${name}=${value}`)).join(" ");
+  const command = `exec sudo -n -- /usr/bin/setpriv --reuid=${mount.serviceUid} --regid=${mount.serviceGid} --clear-groups env -i ${assignments} ${shellQuote(bunPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))}`;
   const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
   if (started.code !== 0) throw new Error(started.stderr.trim() || `failed to start Gateway process ${mount.key}/${role}`);
 }
@@ -287,13 +362,14 @@ async function ensureGateways(): Promise<boolean> {
   const active: ActiveGatewayMount[] = [];
   for (const [key, mountConfig] of configured) {
     const revision = gatewayMountRevision(key, mountConfig);
-    const packageRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
+    const sourceRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
+    const isolation = await ensureGatewayServiceUser(key);
+    const immutable = await ensureImmutableGatewayPackage(key, revision, sourceRoot);
+    const packageRoot = immutable.packageRoot;
     const manifest = await loadGatewayManifest(packageRoot);
-    const home = resolve(stateDir, "gateways", mountConfig.storageSubdir);
+    const home = gatewayDurableHome(config.realm.id, stateDir, key, mountConfig.storageSubdir);
     const configPath = resolve(home, "config.json");
-    await mkdir(home, { recursive: true, mode: 0o700 });
-    await chmod(home, 0o700);
-    await privateWrite(configPath, `${JSON.stringify(mountConfig.config, null, 2)}\n`);
+    await installGatewayConfig(home, isolation.user, configPath, mountConfig.config);
     const prior = previous.find((candidate) => candidate.key === key);
     const sessions = Object.freeze(Object.fromEntries(manifest.processes.map((process) => [
       process.role,
@@ -304,6 +380,10 @@ async function ensureGateways(): Promise<boolean> {
       key,
       source: mountConfig.source,
       revision,
+      packageDigest: immutable.packageDigest,
+      serviceUser: isolation.user,
+      serviceUid: isolation.uid,
+      serviceGid: isolation.gid,
       baseRoute: mountConfig.baseRoute,
       storageSubdir: mountConfig.storageSubdir,
       packageRoot,
@@ -314,7 +394,11 @@ async function ensureGateways(): Promise<boolean> {
       manifest,
     });
     const reusable = prior?.revision === candidate.revision && prior.source === candidate.source
+      && prior.packageDigest === candidate.packageDigest && prior.serviceUser === candidate.serviceUser
+      && prior.serviceUid === candidate.serviceUid && prior.serviceGid === candidate.serviceGid
       && prior.baseRoute === candidate.baseRoute && prior.storageSubdir === candidate.storageSubdir
+      && prior.packageRoot === candidate.packageRoot && prior.home === candidate.home && prior.configPath === candidate.configPath
+      && await gatewayPackageDigest(candidate.packageRoot) === candidate.packageDigest
       && JSON.stringify(prior.sessions) === JSON.stringify(candidate.sessions)
       && (await Promise.all(Object.values(candidate.sessions).map(tmuxExists))).every(Boolean)
       && await gatewayHealthy(candidate);
@@ -337,8 +421,8 @@ async function ensureGateways(): Promise<boolean> {
   }
   if (active.length === 0) await rm(activeGatewaysPath, { force: true });
   else await privateWrite(activeGatewaysPath, `${JSON.stringify(active, null, 2)}\n`);
-  if (JSON.stringify(previous.map((mount) => ({ key: mount.key, revision: mount.revision, baseRoute: mount.baseRoute, port: mount.port })))
-    !== JSON.stringify(active.map((mount) => ({ key: mount.key, revision: mount.revision, baseRoute: mount.baseRoute, port: mount.port })))) changed = true;
+  if (JSON.stringify(previous.map((mount) => ({ key: mount.key, revision: mount.revision, packageDigest: mount.packageDigest, baseRoute: mount.baseRoute, port: mount.port })))
+    !== JSON.stringify(active.map((mount) => ({ key: mount.key, revision: mount.revision, packageDigest: mount.packageDigest, baseRoute: mount.baseRoute, port: mount.port })))) changed = true;
   return changed;
 }
 
