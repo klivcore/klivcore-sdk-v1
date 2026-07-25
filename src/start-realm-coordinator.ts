@@ -736,10 +736,12 @@ async function ensureRealm(
     }
   }
   if (!await tmuxExists(sessions.realm)) {
-    try {
-      const stale = parseActiveRealmRecord(JSON.parse(await readFile(activeRealmPath, "utf8")), config.realm.id, config.port);
-      if (!processIsAlive(stale.pid)) await rm(activeRealmPath, { force: true });
-    } catch { await rm(activeRealmPath, { force: true }); }
+    const legacyWorker = await readOwnedRealmForReplacement();
+    if (legacyWorker) {
+      console.log("Migrating legacy Realm worker into its deterministic session");
+      await stopOwnedRealmWorker(legacyWorker);
+    }
+    await rm(activeRealmPath, { force: true });
     console.log(`Starting Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
     await startTmuxWorker(sessions.realm, {
       KLIVCORE_START_REALM_MODE: "realm",
