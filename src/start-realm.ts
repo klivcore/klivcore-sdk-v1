@@ -59,7 +59,7 @@ async function loadMountedGateways(): Promise<Readonly<{
     || (process.platform !== "win32" && (info.mode & 0o777) !== 0o600) || (uid !== undefined && info.uid !== uid)) throw new Error("active Gateway registry is unsafe");
   const value = JSON.parse(await readFile(activeGatewaysPath, "utf8"));
   if (!Array.isArray(value) || value.length !== Object.keys(configured).length) throw new Error("active Gateway registry does not match Realm configuration");
-  const mounts = value.map(parseActiveGatewayMount);
+  const mounts = value.map((mount) => parseActiveGatewayMount(mount, { realmId: config.realm.id, stateDir }));
   const routes: RealmGatewayRouteConfig[] = [];
   const httpRelays: RealmGatewayHttpRelay[] = [];
   const capabilities = new Set<string>();
@@ -86,8 +86,8 @@ async function loadMountedGateways(): Promise<Readonly<{
           return Object.freeze({ id, endpoint: `/:${mount.port}` });
         }),
         componentId: `${mount.key}:${route.component.id}`,
-        js: await readGatewayAsset(mount.packageRoot, route.component.js),
-        css: await readGatewayAsset(mount.packageRoot, route.component.css),
+        js: await readGatewayAsset(mount.packageRoot, route.component.js, 4 * 1024 * 1024),
+        css: await readGatewayAsset(mount.packageRoot, route.component.css, 1024 * 1024),
       }));
     }
     if (mount.manifest.server !== null) {

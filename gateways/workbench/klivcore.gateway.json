@@ -39,11 +39,23 @@
       },
       {
         "method": "GET",
-        "path": "/v1/bench"
+        "pathPrefix": "/v1/vaults"
       },
       {
-        "method": "POST",
-        "path": "/v1/bench"
+        "method": "HEAD",
+        "pathPrefix": "/v1/vaults"
+      },
+      {
+        "method": "PUT",
+        "pathPrefix": "/v1/vaults"
+      },
+      {
+        "method": "PATCH",
+        "pathPrefix": "/v1/vaults"
+      },
+      {
+        "method": "DELETE",
+        "pathPrefix": "/v1/vaults"
       }
     ],
     "healthPath": "/health"

@@ -72,7 +72,7 @@ export type RealmGatewayRouteConfig = Readonly<{
 }>;
 
 export type RealmGatewayHttpRelayRequest = Readonly<{
-  method: "GET" | "HEAD" | "POST";
+  method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE";
   path?: string;
   pathPrefix?: string;
 }>;
@@ -962,7 +962,8 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         if (relay.requiredCapabilities.some((capability) => !sessionCapabilities.has(capability))) return json({ error: "forbidden" }, 403);
         const websocketUpgrade = request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
         if (!websocketUpgrade && !serviceGrant(request.headers.get("x-klivcore-service-access"), relay.port, session.id)) return json({ error: "forbidden" }, 403);
-        if (request.method === "POST" && request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
+        const mutation = request.method === "POST" || request.method === "PUT" || request.method === "PATCH" || request.method === "DELETE";
+        if (mutation && request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
         if (websocketUpgrade) {
           if (request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
           if (bunServer.upgrade(request, {
@@ -985,7 +986,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           return json({ error: "request too large" }, 413);
         }
         let body: ArrayBuffer | undefined;
-        if (request.method === "POST") {
+        if (request.method === "POST" || request.method === "PUT" || request.method === "PATCH") {
           body = await request.arrayBuffer();
           if (body.byteLength > maxRequestBytes) return json({ error: "request too large" }, 413);
         }

@@ -8,7 +8,7 @@ export type GatewayServer = Readonly<{
   id: string;
   process: string;
   requiredCapabilities: readonly string[];
-  allowedRequests: readonly Readonly<{ method: "GET" | "HEAD" | "POST"; path?: string; pathPrefix?: string }>[];
+  allowedRequests: readonly Readonly<{ method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"; path?: string; pathPrefix?: string }>[];
   healthPath: string;
 }>;
 export type GatewayManifest = Readonly<{
@@ -46,6 +46,8 @@ export type ActiveGatewayMount = Readonly<{
   sessions: Readonly<Record<string, string>>;
   manifest: GatewayManifest;
 }>;
+
+export type ActiveGatewayMountAuthority = Readonly<{ realmId: string; stateDir: string }>;
 
 export function gatewaySandboxIdentity(realmId: string, stateDir: string, key: string): string {
   return createHash("sha256").update(`${realmId}\0${resolve(stateDir)}\0${key}`).digest("hex").slice(0, 20);
@@ -149,9 +151,9 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
     const allowedRequests = rawServer.allowedRequests.map((raw) => {
       const rule = record(raw);
       const hasPath = rule.path !== undefined;
-      if (!exact(rule, ["method", hasPath ? "path" : "pathPrefix"]) || !["GET", "HEAD", "POST"].includes(rule.method as string)
+      if (!exact(rule, ["method", hasPath ? "path" : "pathPrefix"]) || !["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(rule.method as string)
         || hasPath === (rule.pathPrefix !== undefined) || !apiPathPattern.test((rule.path ?? rule.pathPrefix) as string)) throw new TypeError("Gateway package contract is invalid");
-      return Object.freeze({ method: rule.method as "GET" | "HEAD" | "POST", ...(hasPath ? { path: rule.path as string } : { pathPrefix: rule.pathPrefix as string }) });
+      return Object.freeze({ method: rule.method as "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE", ...(hasPath ? { path: rule.path as string } : { pathPrefix: rule.pathPrefix as string }) });
     });
     server = Object.freeze({ id: rawServer.id, process: rawServer.process, requiredCapabilities: serverCapabilities, allowedRequests: Object.freeze(allowedRequests), healthPath: rawServer.healthPath as string });
   }
@@ -183,7 +185,7 @@ export async function loadGatewayManifest(packageRoot: string): Promise<GatewayM
   return parseGatewayManifest(JSON.parse(await readGatewayAsset(packageRoot, "klivcore.gateway.json", 128 * 1024)));
 }
 
-export function parseActiveGatewayMount(value: unknown): ActiveGatewayMount {
+export function parseActiveGatewayMount(value: unknown, authority: ActiveGatewayMountAuthority): ActiveGatewayMount {
   const mount = record(value);
   if (!exact(mount, ["schemaVersion", "key", "source", "revision", "packageDigest", "serviceUser", "serviceUid", "serviceGid", "baseRoute", "storageSubdir", "packageRoot", "home", "configPath", "port", "sessions", "manifest"])
     || mount.schemaVersion !== 1 || typeof mount.key !== "string" || typeof mount.source !== "string" || typeof mount.revision !== "string" || !/^[a-f0-9]{64}$/.test(mount.revision)
@@ -198,6 +200,10 @@ export function parseActiveGatewayMount(value: unknown): ActiveGatewayMount {
   const sessions = record(mount.sessions);
   if (Object.values(sessions).some((session) => typeof session !== "string" || session.length < 1 || session.length > 100)) throw new TypeError("active Gateway record is invalid");
   const manifest = parseGatewayManifest(mount.manifest);
+  const roles = manifest.processes.map((process) => process.role).sort();
+  const sessionRoles = Object.keys(sessions).sort();
+  if (sessionRoles.length !== roles.length || sessionRoles.some((role, index) => role !== roles[index])) throw new TypeError("active Gateway record is invalid");
+  if (roles.some((role) => sessions[role] !== gatewayProcessSessionName(authority.realmId, authority.stateDir, mount.key as string, role))) throw new TypeError("active Gateway record is invalid");
   if ((manifest.server === null) !== (mount.port === null)) throw new TypeError("active Gateway record is invalid");
   return Object.freeze({ schemaVersion: 1, key: mount.key, source: mount.source, revision: mount.revision, packageDigest: mount.packageDigest, serviceUser: mount.serviceUser, serviceUid: mount.serviceUid as number, serviceGid: mount.serviceGid as number, baseRoute: mount.baseRoute, storageSubdir: mount.storageSubdir, packageRoot: mount.packageRoot, home: mount.home, configPath: mount.configPath, port: mount.port as number | null, sessions: Object.freeze({ ...sessions } as Record<string, string>), manifest });
 }

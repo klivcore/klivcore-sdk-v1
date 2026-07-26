@@ -147,7 +147,7 @@ async function readActiveGateways(): Promise<readonly ActiveGatewayMount[]> {
     || (info.mode & 0o777) !== 0o600 || (uid !== undefined && info.uid !== uid)) throw new Error("unsafe active Gateway registry");
   const value = JSON.parse(await readFile(activeGatewaysPath, "utf8"));
   if (!Array.isArray(value) || value.length > 32) throw new Error("active Gateway registry is invalid");
-  return Object.freeze(value.map(parseActiveGatewayMount));
+  return Object.freeze(value.map((mount) => parseActiveGatewayMount(mount, { realmId: config.realm.id, stateDir })));
 }
 
 async function privateWrite(path: string, content: string): Promise<void> {
