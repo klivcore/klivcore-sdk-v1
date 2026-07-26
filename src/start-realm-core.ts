@@ -202,11 +202,88 @@ export function tmuxStopResultIsSafe(exitCode: number, sessionStillExists: boole
 
 export function isOwnedRealmWorkerCommand(
   argv: readonly string[],
+  executablePath: string,
   workerPath: string,
   configPath: string,
 ): boolean {
-  return argv.includes(configPath)
-    && argv.some((argument) => argument === workerPath || /(?:^|\/)start-realm(?:\.ts)?$/u.test(argument));
+  return argv.length === 3 && argv[0] === executablePath && argv[1] === workerPath && argv[2] === configPath;
+}
+
+export type ManagedProcessSnapshot = Readonly<{
+  pid: number;
+  startTimeTicks: string;
+  uid: number;
+  gid: number;
+  argv: readonly string[];
+}>;
+
+export type ManagedProcessExpectation = Readonly<{
+  pid?: number;
+  uid: number;
+  gid: number;
+  argv: readonly string[];
+}>;
+
+export function isExactManagedProcess(
+  snapshot: ManagedProcessSnapshot,
+  expected: ManagedProcessExpectation,
+  expectedStartTimeTicks?: string,
+): boolean {
+  return Number.isSafeInteger(snapshot.pid) && snapshot.pid > 0
+    && /^(?:0|[1-9][0-9]*)$/u.test(snapshot.startTimeTicks)
+    && (expected.pid === undefined || snapshot.pid === expected.pid)
+    && (expectedStartTimeTicks === undefined || snapshot.startTimeTicks === expectedStartTimeTicks)
+    && snapshot.uid === expected.uid && snapshot.gid === expected.gid
+    && snapshot.argv.length === expected.argv.length
+    && snapshot.argv.every((argument, index) => argument === expected.argv[index]);
+}
+
+export type ManagedProcessTerminationOperations = Readonly<{
+  read: (pid: number) => Promise<ManagedProcessSnapshot | undefined>;
+  signal: (pid: number, signal: "TERM" | "KILL") => Promise<void>;
+  sleep: (milliseconds: number) => Promise<void>;
+  now: () => number;
+}>;
+
+export async function terminateExactManagedProcess(
+  initial: ManagedProcessSnapshot,
+  expected: ManagedProcessExpectation,
+  operations: ManagedProcessTerminationOperations,
+  timings: Readonly<{ gracefulMs: number; forceMs: number; pollMs: number }> = Object.freeze({ gracefulMs: 5_000, forceMs: 2_000, pollMs: 100 }),
+): Promise<void> {
+  const bound = Object.freeze({ ...expected, pid: initial.pid });
+  if (!isExactManagedProcess(initial, bound)) throw new Error("refusing to signal an unverified managed process");
+  await operations.signal(initial.pid, "TERM");
+  const gracefulDeadline = operations.now() + timings.gracefulMs;
+  let current = await operations.read(initial.pid);
+  while (current && current.startTimeTicks === initial.startTimeTicks && operations.now() < gracefulDeadline) {
+    await operations.sleep(timings.pollMs);
+    current = await operations.read(initial.pid);
+  }
+  if (current && current.startTimeTicks !== initial.startTimeTicks) throw new Error("refusing to signal a reused managed PID");
+  if (!current) return;
+  if (!isExactManagedProcess(current, bound, initial.startTimeTicks)) throw new Error("refusing to force-stop changed managed process identity");
+  await operations.signal(initial.pid, "KILL");
+  const forceDeadline = operations.now() + timings.forceMs;
+  do {
+    await operations.sleep(Math.min(timings.pollMs, 50));
+    current = await operations.read(initial.pid);
+    if (current && current.startTimeTicks !== initial.startTimeTicks) throw new Error("managed PID was reused during termination");
+  } while (current && operations.now() < forceDeadline);
+  if (current) throw new Error("owned managed process did not exit");
+}
+
+export async function failAfterRollbackOperations(
+  primaryError: unknown,
+  label: string,
+  operations: readonly (() => Promise<void>)[],
+): Promise<never> {
+  const failures: unknown[] = [primaryError];
+  for (const operation of operations) {
+    try { await operation(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length > 1) throw new AggregateError(failures, label);
+  throw primaryError;
 }
 
 export function parseActiveSshRelayRecord(

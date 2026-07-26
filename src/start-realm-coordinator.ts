@@ -5,7 +5,9 @@ import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, 
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
+  failAfterRollbackOperations,
   formatRegistrationUrlBlock,
+  isExactManagedProcess,
   isOwnedRealmWorkerCommand,
   parseActiveRealmRecord,
   parseActiveSshRelayRecord,
@@ -17,8 +19,11 @@ import {
   probePublicHealth,
   renderLoopbackSshdDropIn,
   startRealmSessionNames,
+  terminateExactManagedProcess,
   tmuxStopResultIsSafe,
   waitForManagedPublicHealth,
+  type ManagedProcessExpectation,
+  type ManagedProcessSnapshot,
   type ManagedTunnelRecord,
 } from "./start-realm-core";
 
@@ -122,6 +127,124 @@ async function tmuxExists(sessionName: string): Promise<boolean> {
   if (result.code === 0) return true;
   if (result.code === 1) return false;
   throw new Error(result.stderr.trim() || `tmux has-session failed (${result.code})`);
+}
+
+async function tmuxPanePid(sessionName: string): Promise<number> {
+  const result = await tmux(["display-message", "-p", "-t", `=${sessionName}:0.0`, "#{pane_pid}"]);
+  const value = result.stdout.trim();
+  if (result.code !== 0 || !/^[1-9][0-9]*$/u.test(value)) {
+    throw new Error(result.stderr.trim() || `managed tmux session has no exact pane PID: ${sessionName}`);
+  }
+  const pid = Number(value);
+  if (!Number.isSafeInteger(pid)) throw new Error(`managed tmux session pane PID is invalid: ${sessionName}`);
+  return pid;
+}
+
+async function readManagedProcessSnapshot(pid: number): Promise<ManagedProcessSnapshot | undefined> {
+  const script = [
+    "import json, sys",
+    "pid = int(sys.argv[1]); root = f'/proc/{pid}'",
+    "try:",
+    "  argv = [part.decode('utf-8', 'strict') for part in open(root + '/cmdline', 'rb').read().split(b'\\0') if part]",
+    "  status = open(root + '/status', encoding='utf-8').read().splitlines()",
+    "  stat = open(root + '/stat', encoding='utf-8').read()",
+    "except (FileNotFoundError, ProcessLookupError): sys.exit(3)",
+    "uid = int(next(line for line in status if line.startswith('Uid:')).split()[1])",
+    "gid = int(next(line for line in status if line.startswith('Gid:')).split()[1])",
+    "tail = stat[stat.rfind(')') + 2:].split(); start = tail[19]",
+    "print(json.dumps({'pid': pid, 'startTimeTicks': start, 'uid': uid, 'gid': gid, 'argv': argv}, separators=(',', ':')))",
+  ].join("\n");
+  const result = await run(["python3", "-c", script, String(pid)]);
+  if (result.code === 3) return undefined;
+  if (result.code !== 0) throw new Error(result.stderr.trim() || `failed to inspect managed process ${pid}`);
+  const value = JSON.parse(result.stdout) as ManagedProcessSnapshot;
+  if (!value || typeof value !== "object" || value.pid !== pid || !Array.isArray(value.argv)
+    || typeof value.startTimeTicks !== "string" || !Number.isSafeInteger(value.uid) || !Number.isSafeInteger(value.gid)) {
+    throw new Error(`managed process snapshot is invalid: ${pid}`);
+  }
+  return Object.freeze({ ...value, argv: Object.freeze([...value.argv]) });
+}
+
+async function inspectOwnedTmuxSession(sessionName: string, expected: ManagedProcessExpectation): Promise<ManagedProcessSnapshot> {
+  const pid = await tmuxPanePid(sessionName);
+  const snapshot = await readManagedProcessSnapshot(pid);
+  if (!snapshot || !isExactManagedProcess(snapshot, { ...expected, pid: expected.pid ?? pid })) {
+    throw new Error(`refusing to manage tmux session with unverified process identity: ${sessionName}`);
+  }
+  return snapshot;
+}
+
+async function stopRevalidatedProcess(initial: ManagedProcessSnapshot, expected: ManagedProcessExpectation, label: string): Promise<void> {
+  await terminateExactManagedProcess(initial, expected, {
+    read: readManagedProcessSnapshot,
+    signal: async (pid, signal) => {
+      const result = await run(["sudo", "-n", "kill", `-${signal}`, "--", String(pid)]);
+      if (result.code !== 0 && await readManagedProcessSnapshot(pid)) {
+        throw new Error(result.stderr.trim() || `failed to send SIG${signal} to ${label}`);
+      }
+    },
+    sleep: Bun.sleep,
+    now: Date.now,
+  });
+}
+
+async function removeDeadTmuxSession(sessionName: string, label: string): Promise<void> {
+  if (await tmuxExists(sessionName)) {
+    const dead = await tmux(["display-message", "-p", "-t", `=${sessionName}:0.0`, "#{pane_dead}"]);
+    if (dead.code !== 0 || dead.stdout.trim() !== "1") throw new Error(`refusing to remove a live tmux session after stopping ${label}`);
+    const stopped = await tmux(["kill-session", "-t", `=${sessionName}`]);
+    if (!tmuxStopResultIsSafe(stopped.code, await tmuxExists(sessionName))) {
+      throw new Error(stopped.stderr.trim() || `failed to remove stopped tmux session for ${label}`);
+    }
+  }
+}
+
+async function stopOwnedTmuxSession(sessionName: string, expected: ManagedProcessExpectation, label: string): Promise<void> {
+  if (!await tmuxExists(sessionName)) return;
+  const initial = await inspectOwnedTmuxSession(sessionName, expected);
+  await stopRevalidatedProcess(initial, { ...expected, pid: initial.pid }, label);
+  await removeDeadTmuxSession(sessionName, label);
+}
+
+async function processChildren(pid: number): Promise<readonly number[]> {
+  let text: string;
+  try { text = await readFile(`/proc/${pid}/task/${pid}/children`, "utf8"); }
+  catch (error) { if (!await readManagedProcessSnapshot(pid)) return Object.freeze([]); throw error; }
+  const values = text.trim() ? text.trim().split(/\s+/u) : [];
+  if (!values.every((value) => /^[1-9][0-9]*$/u.test(value))) throw new Error(`managed process children are invalid: ${pid}`);
+  return Object.freeze(values.map(Number));
+}
+
+async function findExactManagedDescendant(rootPid: number, expected: ManagedProcessExpectation): Promise<ManagedProcessSnapshot> {
+  const queue = [...await processChildren(rootPid)];
+  const matches: ManagedProcessSnapshot[] = [];
+  let inspected = 0;
+  while (queue.length > 0) {
+    const pid = queue.shift()!;
+    if (++inspected > 16) throw new Error("managed process tree exceeds safety limits");
+    const snapshot = await readManagedProcessSnapshot(pid);
+    if (!snapshot) continue;
+    if (isExactManagedProcess(snapshot, { ...expected, pid })) matches.push(snapshot);
+    queue.push(...await processChildren(pid));
+  }
+  if (matches.length !== 1) throw new Error("managed process tree does not contain one exact service worker");
+  return matches[0]!;
+}
+
+function coordinatorIdentity(): Readonly<{ uid: number; gid: number }> {
+  const uid = process.getuid?.();
+  const gid = process.getgid?.();
+  if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid)) throw new Error("managed process ownership requires POSIX identity");
+  return Object.freeze({ uid: uid!, gid: gid! });
+}
+
+function realmWorkerExpectation(mode: "realm" | "tunnel" | "ssh-tunnel" | "ssh-relay", pid?: number): ManagedProcessExpectation {
+  void mode;
+  return Object.freeze({
+    ...coordinatorIdentity(),
+    ...(pid === undefined ? {} : { pid }),
+    argv: Object.freeze([process.execPath, workerPath, configPath]),
+  });
 }
 
 function managedLogPath(sessionName: string): string {
@@ -345,12 +468,77 @@ async function waitForGateway(mount: ActiveGatewayMount): Promise<void> {
   throw new Error(`Gateway did not become healthy: ${mount.key}`);
 }
 
+function gatewayProcessEnvironment(mount: ActiveGatewayMount): Readonly<Record<string, string>> {
+  return Object.freeze({
+    HOME: mount.home,
+    PATH: "/var/lib/klivcore/bin:/usr/local/bin:/usr/bin:/bin",
+    KLIVCORE_GATEWAY_MOUNT: mount.key,
+    KLIVCORE_GATEWAY_HOME: mount.home,
+    KLIVCORE_GATEWAY_CONFIG: mount.configPath,
+    ...(mount.port === null ? {} : { KLIVCORE_GATEWAY_PORT: String(mount.port) }),
+  });
+}
+
+async function gatewayProcessExpectations(mount: ActiveGatewayMount, entrypoint: string): Promise<Readonly<{
+  pane: ManagedProcessExpectation;
+  worker: ManagedProcessExpectation;
+}>> {
+  const bunPath = await ensureSandboxBun();
+  const workerArgv = Object.freeze([bunPath, resolve(mount.packageRoot, entrypoint)]);
+  const paneArgv = Object.freeze([
+    "sudo", "-n", "--", "/usr/bin/setpriv",
+    `--reuid=${mount.serviceUid}`, `--regid=${mount.serviceGid}`, "--clear-groups", "env", "-i",
+    ...Object.entries(gatewayProcessEnvironment(mount)).map(([name, value]) => `${name}=${value}`),
+    ...workerArgv,
+  ]);
+  return Object.freeze({
+    pane: Object.freeze({ ...coordinatorIdentity(), gid: 0, argv: paneArgv }),
+    worker: Object.freeze({ uid: mount.serviceUid, gid: mount.serviceGid, argv: workerArgv }),
+  });
+}
+
+async function inspectOwnedGatewaySession(
+  session: string,
+  mount: ActiveGatewayMount,
+  entrypoint: string,
+): Promise<Readonly<{ pane: ManagedProcessSnapshot; worker: ManagedProcessSnapshot; expectations: Awaited<ReturnType<typeof gatewayProcessExpectations>> }>> {
+  const expectations = await gatewayProcessExpectations(mount, entrypoint);
+  const pane = await inspectOwnedTmuxSession(session, expectations.pane);
+  const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
+  return Object.freeze({ pane, worker, expectations });
+}
+
+async function gatewaySessionsOwned(mount: ActiveGatewayMount): Promise<boolean> {
+  try {
+    for (const process of mount.manifest.processes) {
+      const session = mount.sessions[process.role];
+      if (!session || !await tmuxExists(session)) return false;
+      await inspectOwnedGatewaySession(session, mount, process.entrypoint);
+    }
+    return true;
+  } catch { return false; }
+}
+
 async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
-  for (const session of Object.values(mount.sessions)) {
-    if (!await tmuxExists(session)) continue;
-    const stopped = await tmux(["kill-session", "-t", `=${session}`]);
-    if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || `failed to stop Gateway session ${session}`);
+  const failures: unknown[] = [];
+  for (const process of mount.manifest.processes) {
+    const session = mount.sessions[process.role];
+    if (!session) { failures.push(new Error(`Gateway process session is missing: ${mount.key}/${process.role}`)); continue; }
+    try {
+      if (!await tmuxExists(session)) continue;
+      const owned = await inspectOwnedGatewaySession(session, mount, process.entrypoint);
+      const label = `Gateway ${mount.key}/${process.role}`;
+      await stopRevalidatedProcess(owned.worker, { ...owned.expectations.worker, pid: owned.worker.pid }, label);
+      const deadline = Date.now() + 2_000;
+      while (await tmuxExists(session) && Date.now() < deadline) await Bun.sleep(50);
+      if (await tmuxExists(session)) {
+        const pane = await inspectOwnedTmuxSession(session, { ...owned.expectations.pane, pid: owned.pane.pid });
+        await stopRevalidatedProcess(pane, { ...owned.expectations.pane, pid: pane.pid }, `${label} supervisor`);
+      }
+      await removeDeadTmuxSession(session, label);
+    } catch (error) { failures.push(error); }
   }
+  if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, `Gateway session cleanup was incomplete: ${mount.key}`);
 }
 
 async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entrypoint: string): Promise<void> {
@@ -359,14 +547,7 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
   await readGatewayAsset(mount.packageRoot, entrypoint, 16 * 1024 * 1024);
   if (await gatewayPackageDigest(mount.packageRoot) !== mount.packageDigest) throw new Error(`Gateway package changed before process start: ${mount.key}`);
   const bunPath = await ensureSandboxBun();
-  const env = {
-    HOME: mount.home,
-    PATH: "/var/lib/klivcore/bin:/usr/local/bin:/usr/bin:/bin",
-    KLIVCORE_GATEWAY_MOUNT: mount.key,
-    KLIVCORE_GATEWAY_HOME: mount.home,
-    KLIVCORE_GATEWAY_CONFIG: mount.configPath,
-    ...(mount.port === null ? {} : { KLIVCORE_GATEWAY_PORT: String(mount.port) }),
-  };
+  const env = gatewayProcessEnvironment(mount);
   const assignments = Object.entries(env).map(([name, value]) => shellQuote(`${name}=${value}`)).join(" ");
   const command = `exec sudo -n -- /usr/bin/setpriv --reuid=${mount.serviceUid} --regid=${mount.serviceGid} --clear-groups env -i ${assignments} ${shellQuote(bunPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))}`;
   const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
@@ -446,7 +627,7 @@ async function ensureGateways(): Promise<boolean> {
       && prior.packageRoot === candidate.packageRoot && prior.home === candidate.home && prior.configPath === candidate.configPath
       && await gatewayPackageDigest(candidate.packageRoot) === candidate.packageDigest
       && JSON.stringify(prior.sessions) === JSON.stringify(candidate.sessions)
-      && (await Promise.all(Object.values(candidate.sessions).map(tmuxExists))).every(Boolean)
+      && await gatewaySessionsOwned(candidate)
       && await gatewayHealthy(candidate);
     if (reusable) {
       console.log(`Reusing Gateway: ${key} (${revision.slice(0, 12)})`);
@@ -456,32 +637,15 @@ async function ensureGateways(): Promise<boolean> {
     console.log(`${prior ? "Updating" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
     try {
       if (prior) await stopGatewaySessions(prior);
-      for (const session of Object.values(candidate.sessions)) {
-        if (await tmuxExists(session)) await tmux(["kill-session", "-t", `=${session}`]);
-      }
+      await stopGatewaySessions(candidate);
       await startGatewayMount(candidate);
     } catch (replacementError) {
-      let cleanupError: unknown;
-      try {
-        await stopGatewaySessions(candidate);
-        if (prior) await stopGatewaySessions(prior);
-      }
-      catch (error) { cleanupError = error; }
-      let configRestoreError: unknown;
-      if (priorConfig !== undefined) {
-        try { await installGatewayConfigText(prior!.home, prior!.serviceUser, prior!.configPath, priorConfig); }
-        catch (error) { configRestoreError = error; }
-      }
-      let rollbackError: unknown;
-      if (prior && cleanupError === undefined && configRestoreError === undefined) {
-        try { await startGatewayMount(prior); }
-        catch (error) { rollbackError = error; }
-      }
-      const failures = [replacementError, cleanupError, configRestoreError, rollbackError].filter((error) => error !== undefined);
-      if (failures.length > 1) {
-        throw new AggregateError(failures, `Gateway replacement rollback was incomplete: ${key}`);
-      }
-      throw replacementError;
+      await failAfterRollbackOperations(replacementError, `Gateway replacement rollback was incomplete: ${key}`, [
+        async () => stopGatewaySessions(candidate),
+        ...(prior ? [async () => stopGatewaySessions(prior)] : []),
+        ...(priorConfig !== undefined ? [async () => installGatewayConfigText(prior!.home, prior!.serviceUser, prior!.configPath, priorConfig)] : []),
+        ...(prior ? [async () => startGatewayMount(prior)] : []),
+      ]);
     }
     active.push(candidate);
     changed = true;
@@ -549,6 +713,7 @@ async function waitForManagedTunnel(options: ManagedTunnelOptions): Promise<Mana
 
 async function ensureManagedTunnel(options: ManagedTunnelOptions): Promise<ManagedTunnelRecord> {
   if (await tmuxExists(options.sessionName)) {
+    await inspectOwnedTmuxSession(options.sessionName, realmWorkerExpectation(options.workerMode));
     console.log(`Reusing ${options.label} session: ${options.sessionName}`);
     return waitForManagedTunnel(options);
   }
@@ -573,6 +738,18 @@ async function readActiveSshRelay(
     sessions.sshRelay,
     expectedConfigRevision,
     expectedRealmPublicOrigin,
+  );
+  if (!processIsAlive(record.pid)) throw new Error("SSH Core relay worker is not running");
+  return record;
+}
+
+async function readAnyActiveSshRelay(): Promise<ReturnType<typeof parseActiveSshRelayRecord>> {
+  await assertPrivateRecord(activeSshRelayPath);
+  const record = parseActiveSshRelayRecord(
+    JSON.parse(await readFile(activeSshRelayPath, "utf8")),
+    config.realm.id,
+    sshRelayPort,
+    sessions.sshRelay,
   );
   if (!processIsAlive(record.pid)) throw new Error("SSH Core relay worker is not running");
   return record;
@@ -610,8 +787,8 @@ async function ensureSshRelay(realmPublicOrigin: string): Promise<ReturnType<typ
     } catch {
       sshConfigurationChanged = true;
       console.log(`Replacing SSH Core relay session after SSH configuration changed: ${sessions.sshRelay}`);
-      const stopped = await tmux(["kill-session", "-t", `=${sessions.sshRelay}`]);
-      if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || "failed to stop outdated SSH Core relay session");
+      const owned = await readAnyActiveSshRelay();
+      await stopOwnedTmuxSession(sessions.sshRelay, realmWorkerExpectation("ssh-relay", owned.pid), "SSH Core relay");
     }
   }
   sshConfigurationChanged = true;
@@ -627,14 +804,21 @@ async function ensureSshRelay(realmPublicOrigin: string): Promise<ReturnType<typ
 }
 
 async function disableManagedSsh(): Promise<void> {
-  for (const [sessionName, label] of [
-    [sessions.sshTunnel, "SSH Quick Tunnel"],
-    [sessions.sshRelay, "SSH Core relay"],
-  ] as const) {
-    if (!await tmuxExists(sessionName)) continue;
-    console.log(`Stopping disabled ${label} session: ${sessionName}`);
-    const stopped = await tmux(["kill-session", "-t", `=${sessionName}`]);
-    if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || `failed to stop disabled ${label}`);
+  if (await tmuxExists(sessions.sshTunnel)) {
+    const tunnel = await readManagedTunnel({
+      path: managedSshTunnelPath,
+      port: sshRelayPort,
+      sessionName: sessions.sshTunnel,
+      workerMode: "ssh-tunnel",
+      label: "managed SSH Quick Tunnel",
+    });
+    console.log(`Stopping disabled SSH Quick Tunnel session: ${sessions.sshTunnel}`);
+    await stopOwnedTmuxSession(sessions.sshTunnel, realmWorkerExpectation("ssh-tunnel"), `SSH Quick Tunnel ${tunnel.sessionName}`);
+  }
+  if (await tmuxExists(sessions.sshRelay)) {
+    const relay = await readAnyActiveSshRelay();
+    console.log(`Stopping disabled SSH Core relay session: ${sessions.sshRelay}`);
+    await stopOwnedTmuxSession(sessions.sshRelay, realmWorkerExpectation("ssh-relay", relay.pid), "SSH Core relay");
   }
   await Promise.all([
     rm(managedSshTunnelPath, { force: true }),
@@ -667,26 +851,11 @@ async function readOwnedRealmForReplacement(): Promise<ReturnType<typeof parseAc
 }
 
 async function stopOwnedRealmWorker(record: ReturnType<typeof parseActiveRealmRecord>): Promise<void> {
-  let commandLine: string[];
-  try { commandLine = (await readFile(`/proc/${record.pid}/cmdline`)).toString("utf8").split("\0").filter(Boolean); }
-  catch (error) { if (!processIsAlive(record.pid)) return; throw error; }
-  if (!isOwnedRealmWorkerCommand(commandLine, workerPath, configPath)) {
-    throw new Error("refusing to signal a Realm PID that is not the configured worker");
+  const expected = realmWorkerExpectation("realm", record.pid);
+  if (!isOwnedRealmWorkerCommand(expected.argv, process.execPath, workerPath, configPath)) {
+    throw new Error("configured Realm worker identity is invalid");
   }
-  process.kill(record.pid, "SIGTERM");
-  const gracefulDeadline = Date.now() + 5_000;
-  while (processIsAlive(record.pid) && Date.now() < gracefulDeadline) await Bun.sleep(100);
-  if (!processIsAlive(record.pid)) return;
-  let currentCommandLine: string[];
-  try { currentCommandLine = (await readFile(`/proc/${record.pid}/cmdline`)).toString("utf8").split("\0").filter(Boolean); }
-  catch (error) { if (!processIsAlive(record.pid)) return; throw error; }
-  if (!isOwnedRealmWorkerCommand(currentCommandLine, workerPath, configPath)) {
-    throw new Error("refusing to force-stop a reused Realm PID");
-  }
-  process.kill(record.pid, "SIGKILL");
-  const forceDeadline = Date.now() + 2_000;
-  while (processIsAlive(record.pid) && Date.now() < forceDeadline) await Bun.sleep(50);
-  if (processIsAlive(record.pid)) throw new Error("owned Realm worker did not exit");
+  await stopOwnedTmuxSession(sessions.realm, expected, "Realm worker");
 }
 
 async function waitForRealm(expectedPublicOrigin: string, expectedSshPublicOrigin?: string | null): Promise<void> {
@@ -728,11 +897,8 @@ async function ensureRealm(
       console.log(active
         ? `Updating Realm runtime: ${active.runtimeRevision?.slice(0, 12) ?? "legacy"} -> ${runtimeRevision.slice(0, 12)}`
         : "Replacing Realm session with changed runtime endpoint configuration");
-      if (ownedWorker) await stopOwnedRealmWorker(ownedWorker);
-      const stopped = await tmux(["kill-session", "-t", `=${sessions.realm}`]);
-      if (!tmuxStopResultIsSafe(stopped.code, await tmuxExists(sessions.realm))) {
-        throw new Error(stopped.stderr.trim() || "failed to stop outdated Realm session");
-      }
+      if (!ownedWorker) throw new Error("refusing to replace a Realm session without an exact owned worker record");
+      await stopOwnedRealmWorker(ownedWorker);
       await rm(activeRealmPath, { force: true });
     } else {
       console.log(`Reusing Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
@@ -741,8 +907,7 @@ async function ensureRealm(
   if (!await tmuxExists(sessions.realm)) {
     const legacyWorker = await readOwnedRealmForReplacement();
     if (legacyWorker) {
-      console.log("Migrating legacy Realm worker into its deterministic session");
-      await stopOwnedRealmWorker(legacyWorker);
+      throw new Error("refusing to replace an active Realm worker outside its exact deterministic session");
     }
     await rm(activeRealmPath, { force: true });
     console.log(`Starting Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
