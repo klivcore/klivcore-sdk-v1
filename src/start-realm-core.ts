@@ -196,6 +196,10 @@ export function startRealmSessionNames(realmId: string, stateDir: string): Reado
   });
 }
 
+export function tmuxStopResultIsSafe(exitCode: number, sessionStillExists: boolean): boolean {
+  return exitCode === 0 || !sessionStillExists;
+}
+
 export function isOwnedRealmWorkerCommand(
   argv: readonly string[],
   workerPath: string,

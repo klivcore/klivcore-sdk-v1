@@ -17,6 +17,7 @@ import {
   probePublicHealth,
   renderLoopbackSshdDropIn,
   startRealmSessionNames,
+  tmuxStopResultIsSafe,
   waitForManagedPublicHealth,
   type ManagedTunnelRecord,
 } from "./start-realm-core";
@@ -729,7 +730,9 @@ async function ensureRealm(
         : "Replacing Realm session with changed runtime endpoint configuration");
       if (ownedWorker) await stopOwnedRealmWorker(ownedWorker);
       const stopped = await tmux(["kill-session", "-t", `=${sessions.realm}`]);
-      if (stopped.code !== 0) throw new Error(stopped.stderr.trim() || "failed to stop outdated Realm session");
+      if (!tmuxStopResultIsSafe(stopped.code, await tmuxExists(sessions.realm))) {
+        throw new Error(stopped.stderr.trim() || "failed to stop outdated Realm session");
+      }
       await rm(activeRealmPath, { force: true });
     } else {
       console.log(`Reusing Realm session: ${sessions.realm} (${runtimeRevision.slice(0, 12)})`);
