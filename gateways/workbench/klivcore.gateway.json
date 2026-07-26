@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": 1,
+  "id": "workbench",
+  "capabilities": [
+    "workbench:read",
+    "workbench:write"
+  ],
+  "routes": [
+    {
+      "id": "workbench",
+      "path": "/",
+      "title": "Workbench",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-main",
+        "js": "ui/main.js",
+        "css": "ui/main.css"
+      }
+    }
+  ],
+  "server": {
+    "id": "api",
+    "process": "server",
+    "requiredCapabilities": [
+      "workbench:read",
+      "workbench:write"
+    ],
+    "allowedRequests": [
+      {
+        "method": "GET",
+        "path": "/v1/bootstrap"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/bench"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/bench"
+      }
+    ],
+    "healthPath": "/health"
+  },
+  "processes": [
+    {
+      "role": "server",
+      "entrypoint": "bin/server.js"
+    }
+  ]
+}
