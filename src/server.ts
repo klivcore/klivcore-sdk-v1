@@ -410,7 +410,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
       throw new TypeError(`Realm HTTP relay ${index} capabilities are invalid`);
     }
     if (!Array.isArray(relay.allowedRequests) || relay.allowedRequests.length < 1 || relay.allowedRequests.length > 32
-      || relay.allowedRequests.some((rule) => !["GET", "HEAD", "POST"].includes(rule.method)
+      || relay.allowedRequests.some((rule) => !["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"].includes(rule.method)
         || (rule.path === undefined) === (rule.pathPrefix === undefined)
         || !/^\/v1\/[A-Za-z0-9._~-]+(?:\/[A-Za-z0-9._~-]+)*$/.test(rule.path ?? rule.pathPrefix ?? ""))) {
       throw new TypeError(`Realm HTTP relay ${index} request allowlist is invalid`);
