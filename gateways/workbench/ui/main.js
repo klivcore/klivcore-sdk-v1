@@ -36140,7 +36140,7 @@ async function createPastedImagePath(file, exists) {
   const baseName = sanitizeFileBaseName(file.name.replace(/\.[^.]*$/, "")) || "image";
   for (let index2 = 1;index2 < 1e4; index2 += 1) {
     const suffix2 = index2 === 1 ? "" : `-${index2}`;
-    const path = `./assets/images/${baseName}${suffix2}.${extension}`;
+    const path = `assets/images/${baseName}${suffix2}.${extension}`;
     if (!await exists(path))
       return path;
   }
