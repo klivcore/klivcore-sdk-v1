@@ -1,4 +1,4 @@
-import { reconcileRealmDirectory, resolveRealmDirectoryArgs } from "./start-realm-directory";
+import { planLatestSdkExecution, reconcileRealmDirectory, resolveRealmDirectoryArgs } from "./start-realm-directory";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 
@@ -21,12 +21,32 @@ export async function resolveLatestSdkRevision(): Promise<string> {
 }
 
 try {
-  const invocation = resolveRealmDirectoryArgs(process.argv.slice(2));
-  const configPath = await reconcileRealmDirectory(invocation.realmDirectory, await resolveLatestSdkRevision());
-  process.argv = invocation.command === "registration-url"
-    ? [process.argv[0]!, process.argv[1]!, "registration-url", configPath]
-    : [process.argv[0]!, process.argv[1]!, configPath];
-  await import("./start-realm-coordinator");
+  const args = process.argv.slice(2);
+  const latestRevision = await resolveLatestSdkRevision();
+  const execution = planLatestSdkExecution(latestRevision, process.env.KLIVCORE_PINNED_SDK_REVISION);
+  if (execution.mode === "delegate") {
+    const child = Bun.spawn([
+      "bunx",
+      "--bun",
+      "--package", `${SDK_REPOSITORY}#${execution.revision}`,
+      "sdk-v1",
+      "start-realm",
+      ...args,
+    ], {
+      env: { ...process.env, KLIVCORE_PINNED_SDK_REVISION: execution.revision },
+      stdin: "inherit",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    process.exitCode = await child.exited;
+  } else {
+    const invocation = resolveRealmDirectoryArgs(args);
+    const configPath = await reconcileRealmDirectory(invocation.realmDirectory, execution.revision);
+    process.argv = invocation.command === "registration-url"
+      ? [process.argv[0]!, process.argv[1]!, "registration-url", configPath]
+      : [process.argv[0]!, process.argv[1]!, configPath];
+    await import("./start-realm-coordinator");
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.message : "start-realm failed");
   process.exitCode = 1;

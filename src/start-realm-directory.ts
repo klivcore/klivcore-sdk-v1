@@ -9,6 +9,15 @@ const REALM_ID = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/u;
 const USER = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u;
 
 export type RealmDirectoryInvocation = StartRealmArgs & Readonly<{ realmDirectory: string }>;
+export type LatestSdkExecution = Readonly<{ mode: "current" | "delegate"; revision: string }>;
+
+export function planLatestSdkExecution(latestRevision: string, pinnedRevision?: string): LatestSdkExecution {
+  if (!/^[a-f0-9]{40}$/u.test(latestRevision)) throw new TypeError("latest SDK revision is invalid");
+  if (pinnedRevision !== undefined && !/^[a-f0-9]{40}$/u.test(pinnedRevision)) {
+    throw new TypeError("pinned SDK revision is invalid");
+  }
+  return Object.freeze({ mode: pinnedRevision === latestRevision ? "current" : "delegate", revision: latestRevision });
+}
 
 export function resolveRealmDirectoryArgs(args: readonly string[], cwd = process.cwd()): RealmDirectoryInvocation {
   const command = args[0] === "registration-url" ? "registration-url" : "run";
