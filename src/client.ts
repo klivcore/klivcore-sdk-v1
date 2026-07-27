@@ -1,7 +1,8 @@
 import { HOST_API_VERSION, parseRealmCatalog, parseRealmDescriptor, type RealmCatalog, type RealmDescriptor, type RealmRoute } from "./contracts";
 
 const MAX_JSON_BYTES = 512 * 1024;
-const MAX_ARTIFACT_BYTES = 1024 * 1024;
+const MAX_JAVASCRIPT_ARTIFACT_BYTES = 2 * 1024 * 1024;
+const MAX_CSS_ARTIFACT_BYTES = 1024 * 1024;
 const MAX_BADGE_BYTES = 1024;
 const MAX_SERVICE_ACCESS_BYTES = 16 * 1024;
 
@@ -280,10 +281,10 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
     });
     services = Object.freeze(Object.fromEntries(entries));
   }
-  const jsBytes = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm JavaScript artifact");
+  const jsBytes = await request(fetcher, route.component.js.url, { headers, signal: options.signal }, MAX_JAVASCRIPT_ARTIFACT_BYTES, "Realm JavaScript artifact");
   if (await sha256Hex(jsBytes) !== route.component.js.sha256) throw new Error("Realm JavaScript artifact integrity check failed");
   const js = decodeUtf8(jsBytes);
-  const cssBytes = await request(fetcher, route.component.css.url, { headers, signal: options.signal }, MAX_ARTIFACT_BYTES, "Realm CSS artifact");
+  const cssBytes = await request(fetcher, route.component.css.url, { headers, signal: options.signal }, MAX_CSS_ARTIFACT_BYTES, "Realm CSS artifact");
   if (await sha256Hex(cssBytes) !== route.component.css.sha256) throw new Error("Realm CSS artifact integrity check failed");
   const css = decodeUtf8(cssBytes);
   return Object.freeze({ descriptor, catalog, route, services, js, css });
