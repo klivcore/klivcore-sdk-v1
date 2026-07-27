@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "bin/server.js",
-      "bytes": 103056,
-      "sha256": "981a0c118a8e7ce4c6a66e85ff7a0b1b935ce46f581763702da6dd0a0f1524d9",
+      "bytes": 104405,
+      "sha256": "e6fedf688e880fab27dbd1f4a8a129c38d34ee72f636406a4015b62c4c672daa",
       "mode": 420
     },
     {
@@ -25,8 +25,8 @@
     },
     {
       "path": "ui/main.css",
-      "bytes": 32838,
-      "sha256": "d70c9155917080c529fb4f15259ed90f573cedda4203a0d7a5595f91bb6c286c",
+      "bytes": 35066,
+      "sha256": "8b0039a768c90639f835c8928a123748c997d754781a65620abe66c65b7a0283",
       "mode": 420
     },
     {

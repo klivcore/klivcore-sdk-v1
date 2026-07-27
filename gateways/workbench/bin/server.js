@@ -1397,8 +1397,8 @@ import { readFile as readFile2 } from "fs/promises";
 import { resolve as resolve3 } from "path";
 
 // packages/publish-sdk/src/gateway-server-core.ts
-import { chmod, mkdir as mkdir3, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname3, resolve as resolve2 } from "path";
+import { chmod, lstat as lstat2, mkdir as mkdir3, writeFile as writeFile2 } from "fs/promises";
+import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
 
 // packages/server/src/index.ts
 import { lstat, mkdir as mkdir2, open, readFile, readdir, rename, rm as rm2, stat, unlink, utimes, writeFile } from "fs/promises";
@@ -2689,27 +2689,53 @@ var grandchildBench = Object.freeze({
 });
 var modularitySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="Native image element"><rect width="640" height="360" rx="28" fill="#0f172a"/><rect x="56" y="78" width="220" height="204" rx="20" fill="#164e63" stroke="#22d3ee" stroke-width="6"/><rect x="364" y="78" width="220" height="204" rx="20" fill="#14532d" stroke="#4ade80" stroke-width="6"/><path d="M276 180h88" stroke="#e2e8f0" stroke-width="8"/><text x="320" y="44" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#e2e8f0">Native image element</text><text x="166" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#cffafe">Workbench</text><text x="474" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#dcfce7">Realm</text></svg>
 `;
-async function createWorkbenchGatewayHandler(homePath) {
+function parseWorkbenchGatewayConfig(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new TypeError("Workbench Gateway config is invalid");
+  const config = value;
+  if (Object.keys(config).sort().join("\x00") !== ["initialView", "vaultRoot", "workspaceName"].sort().join("\x00") || typeof config.vaultRoot !== "string" || !isAbsolute(config.vaultRoot) || typeof config.initialView !== "string" || !/^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u.test(config.initialView) || typeof config.workspaceName !== "string" || config.workspaceName.trim() === "" || config.workspaceName.length > 128) {
+    throw new TypeError("Workbench Gateway config is invalid");
+  }
+  return Object.freeze({
+    initialView: config.initialView,
+    vaultRoot: resolve2(config.vaultRoot),
+    workspaceName: config.workspaceName
+  });
+}
+async function createWorkbenchGatewayHandler(homePath, configured) {
   const home = resolve2(homePath);
-  const vault = resolve2(home, "vault");
+  const vault = configured ? resolve2(configured.vaultRoot) : resolve2(home, "vault");
   const cache = resolve2(home, "cache");
-  await mkdir3(vault, { recursive: true, mode: 448 });
+  if (configured) {
+    const info = await lstat2(vault);
+    if (!info.isDirectory() || info.isSymbolicLink())
+      throw new TypeError("Workbench Gateway vault root is invalid");
+  } else {
+    await mkdir3(vault, { recursive: true, mode: 448 });
+  }
   await mkdir3(cache, { recursive: true, mode: 448 });
   await chmod(home, 448);
-  await Promise.all([
-    seed(resolve2(vault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
+  if (!configured) {
+    await Promise.all([
+      seed(resolve2(vault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
 `),
-    seed(resolve2(vault, "notes/readme.md"), `# Acme Workbench
+      seed(resolve2(vault, "notes/readme.md"), `# Acme Workbench
 
 This native text-file element is backed by the isolated Workbench Gateway vault.
 `),
-    seed(resolve2(vault, "assets/modularity.svg"), modularitySvg),
-    seed(resolve2(vault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
+      seed(resolve2(vault, "assets/modularity.svg"), modularitySvg),
+      seed(resolve2(vault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
 `),
-    seed(resolve2(vault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
+      seed(resolve2(vault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
 `)
-  ]);
-  const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap, vaults: [{ id: "main", root: vault, cacheRoot: cache }] });
+    ]);
+  }
+  const effectiveBootstrap = configured ? {
+    ...bootstrap,
+    initialView: { resource: { kind: "bench-file", path: configured.initialView, vaultId: "main" }, sourceId: "workbench-vault" },
+    workspace: { id: "workbench", name: configured.workspaceName }
+  } : bootstrap;
+  const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: [{ id: "main", root: vault, cacheRoot: cache }] });
   return requestHandler(server);
 }
 function requestHandler(server) {
@@ -2746,9 +2772,7 @@ function requiredPort() {
 var home = requiredAbsolute("KLIVCORE_GATEWAY_HOME");
 var configPath = requiredAbsolute("KLIVCORE_GATEWAY_CONFIG");
 var config = JSON.parse(await readFile2(configPath, "utf8"));
-if (!config || typeof config !== "object" || Array.isArray(config) || Object.keys(config).length !== 0)
-  throw new TypeError("Workbench Gateway config must be an empty object");
-var handler = await createWorkbenchGatewayHandler(home);
+var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config));
 var server = Bun.serve({ hostname: "127.0.0.1", port: requiredPort(), fetch: handler });
 console.log(`Canonical Workbench Gateway ready on http://127.0.0.1:${server.port}`);
 var stopping = false;
