@@ -99,6 +99,20 @@ export function renderLoopbackSshdDropIn(user: string, authorizedKeysFile: strin
   ].join("\n");
 }
 
+export function isManagedLoopbackSshdDropIn(value: string, user: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u.test(user) || value.length > 4_096) return false;
+  const lines = value.split("\n");
+  if (lines.length !== 4
+    || lines[0] !== `Match User ${user} LocalAddress 127.0.0.1`
+    || lines[2] !== "Match all" || lines[3] !== "") return false;
+  const prefix = "    AuthorizedKeysFile .ssh/authorized_keys ";
+  if (!lines[1]?.startsWith(prefix)) return false;
+  const authorizedKeysFile = lines[1].slice(prefix.length);
+  return authorizedKeysFile.startsWith("/")
+    && authorizedKeysFile.endsWith("/desktop-authorized-keys")
+    && !/[\u0000-\u0020\u007f-\u009f]/u.test(authorizedKeysFile);
+}
+
 export function effectiveSshdUsesAuthorizedKeysFile(output: string, authorizedKeysFile: string): boolean {
   return output.split(/\r?\n/u).some((line) => {
     const fields = line.trim().split(/\s+/u);
