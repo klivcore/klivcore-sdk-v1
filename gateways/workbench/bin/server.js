@@ -2706,7 +2706,16 @@ async function createWorkbenchGatewayHandler(homePath, configured) {
   const home = resolve2(homePath);
   const vault = configured ? resolve2(configured.vaultRoot) : resolve2(home, "vault");
   const cache = resolve2(home, "cache");
+  let shouldSeedVault = !configured;
   if (configured) {
+    try {
+      await lstat2(vault);
+    } catch (error) {
+      if (error.code !== "ENOENT" || dirname3(vault) !== home)
+        throw error;
+      await mkdir3(vault, { recursive: true, mode: 448 });
+      shouldSeedVault = true;
+    }
     const info = await lstat2(vault);
     if (!info.isDirectory() || info.isSymbolicLink())
       throw new TypeError("Workbench Gateway vault root is invalid");
@@ -2715,7 +2724,7 @@ async function createWorkbenchGatewayHandler(homePath, configured) {
   }
   await mkdir3(cache, { recursive: true, mode: 448 });
   await chmod(home, 448);
-  if (!configured) {
+  if (shouldSeedVault) {
     await Promise.all([
       seed(resolve2(vault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
 `),
