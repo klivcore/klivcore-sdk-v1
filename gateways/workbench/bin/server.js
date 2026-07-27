@@ -2676,7 +2676,7 @@ var childBench = Object.freeze({
   name: "Nested child bench",
   elements: Object.freeze([
     Object.freeze({ id: "text:child", type: "text", value: "Nested child bench", x: 40, y: 40, w: 320, h: 180 }),
-    Object.freeze({ id: "bench:grandchild", type: "bench", path: "grandchild.bench.json", x: 400, y: 40, w: 520, h: 320 })
+    Object.freeze({ id: "bench:grandchild", type: "bench", path: "nested/grandchild.bench.json", x: 400, y: 40, w: 520, h: 320 })
   ]),
   edges: Object.freeze([])
 });

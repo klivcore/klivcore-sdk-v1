@@ -32,8 +32,8 @@
     },
     {
       "path": "src/client.ts",
-      "bytes": 14786,
-      "sha256": "628aa2152225a18468352c720bfc95df9e2aa1b379326f22186a3674a1b83e6f"
+      "bytes": 15159,
+      "sha256": "9924e4c0f1605207a82c5f52233e363f1896efdf3fc09f2db4a481294dafaa1d"
     },
     {
       "path": "src/connect-desktop-core.ts",

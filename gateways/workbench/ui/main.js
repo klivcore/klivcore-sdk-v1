@@ -32975,7 +32975,7 @@ function isRecord2(value) {
 function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
-function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", applicationChrome, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, expectedInitialView, fetcher = fetch, pluginRegistry = createWorkbenchPluginRegistry(), scenarioId, uploadRawFile }) {
+function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", applicationChrome, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, expectedInitialView, fetcher = fetch, pluginRegistry = createWorkbenchPluginRegistry(), runtimeMode = "debug", scenarioId, uploadRawFile }) {
   const [bootstrap, setBootstrap] = import_react12.useState(null);
   const [error, setError] = import_react12.useState(null);
   import_react12.useEffect(() => {
@@ -33031,6 +33031,7 @@ function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", application
     elementTypeRegistry,
     fetcher,
     pluginRegistry,
+    runtimeMode,
     scenarioId,
     uploadRawFile,
     vaultId: bootstrap.initialView.resource.vaultId
@@ -33650,7 +33651,7 @@ async function createEmptyBenchFile(path, vaultFiles) {
 function hasStableBenchRecordIds(bench) {
   return [bench.elements ?? [], bench.edges ?? []].every((records) => records.every((record) => typeof record.id === "string" && record.id.length > 0));
 }
-function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
+function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, runtimeMode = "debug", scenarioId, uploadRawFile, vaultId = "main" }) {
   const vaultFiles = import_react12.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
   const assetTransport = import_react12.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
@@ -33732,7 +33733,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     directoryHydrationGenerationRef.current += 1;
     let cancelled = false;
-    loadMainBenchScenario(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
+    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, runtimeMode === "production" ? 8 : 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
       if (cancelled)
         return;
       restoredNestedNavigationPendingRef.current = false;
@@ -33741,8 +33742,8 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       rootAppearanceSnapshotRef.current = loaded.bench;
       activeBenchCanonicalPathRef.current = loaded.benchPath;
       benchBaseContentRef.current = hasStableBenchRecordIds(loaded.bench) ? loaded.benchContent : undefined;
-      loadedNestedBenchesRef.current = new Map;
-      nestedAppearanceSnapshotsRef.current = new Map;
+      loadedNestedBenchesRef.current = new Map(loaded.nestedBenches);
+      nestedAppearanceSnapshotsRef.current = new Map(loaded.nestedBenches);
       benchEtagRef.current = loaded.benchEtag;
       textFileEtagsRef.current = new Map(loaded.scenario.elements.flatMap((element) => element.kind === "text-file" && element.resourceRevision ? [[element.resourcePath ?? element.path, element.resourceRevision]] : []));
       scenarioRef.current = loaded.scenario;
@@ -33771,7 +33772,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchPath, activeBenchStack, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
+  }, [activeBenchPath, activeBenchStack, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, runtimeMode, scenarioId, vaultFiles]);
   import_react12.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
@@ -34927,7 +34928,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     path: item.path,
     onClick: item.isCurrent ? undefined : () => void handleBenchBreadcrumbClick(item.stackIndex, item.path)
   }));
-  const debugControlsEnabled = isWorkbenchDebugControlsEnabled(typeof window === "undefined" ? "" : window.location.href);
+  const debugControlsEnabled = runtimeMode === "debug" && isWorkbenchDebugControlsEnabled(typeof window === "undefined" ? "" : window.location.href);
   const debugPanelState = createBenchDebugPanelState(debugControlsEnabled, debugMenuRequested, debugPanelRequested);
   const debugActionGroups = createBenchDebugPanelActionGroups({
     browserStressAvailable: scriptedNestedBenchScenarioIds.has(scenarioId),
@@ -35444,9 +35445,9 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       }] : [],
       actorActivityFadeReferenceAt,
       actorActivityFadeSeconds,
-      backHref: componentHref,
-      backLabel: `${componentName} scenarios`,
-      onBackNavigate: handleBackNavigate,
+      backHref: runtimeMode === "debug" ? componentHref : undefined,
+      backLabel: runtimeMode === "debug" ? `${componentName} scenarios` : undefined,
+      onBackNavigate: runtimeMode === "debug" ? handleBackNavigate : undefined,
       onActorActivitySelect: handleActorActivitySelect,
       breadcrumbs,
       debugApiRef: benchViewportDebugApiRef,
@@ -35461,7 +35462,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       onFocusElementApplied: handleFocusElementApplied,
       onBenchElementCreate: handleBenchElementCreate,
       onBenchFileList: vaultFiles.listFiles,
-      onBenchElementLoad: handleBenchElementLoad,
+      onBenchElementLoad: runtimeMode === "debug" ? handleBenchElementLoad : undefined,
       onBenchElementOpen: handleBenchElementOpen,
       onElementDelete: handleElementDelete,
       onEdgesChange: handleEdgesChange,
@@ -35645,6 +35646,27 @@ async function loadMainBenchScenario(benchPath = "main.bench.hjson", scenarioId 
       name: scenarioSummary?.name ?? benchPath
     }
   };
+}
+async function loadMainBenchRuntime(benchPath = "main.bench.hjson", scenarioId = "main-bench", activeBenchAncestorPaths = [], preferredPreviewFormat = "svg", vaultFiles = mainVaultFileClient, automaticNestedDepth = 0) {
+  const loaded = await loadMainBenchScenario(benchPath, scenarioId, activeBenchAncestorPaths, preferredPreviewFormat, vaultFiles);
+  if (automaticNestedDepth <= 0)
+    return { ...loaded, nestedBenches: new Map };
+  const nested = await loadNestedBenchRuntimeTree(loaded.scenario, {
+    depth: Math.min(8, automaticNestedDepth),
+    preferredPreviewFormat,
+    readBenchFile: async (path) => {
+      const file = await vaultFiles.readFile(path);
+      const bench = parseBenchDocument(file.content, path);
+      return {
+        ...hasStableBenchRecordIds(bench) ? { baseContent: file.content } : {},
+        bench,
+        benchEtag: file.etag,
+        path: file.path
+      };
+    },
+    vaultFiles
+  });
+  return { ...loaded, nestedBenches: nested.nestedBenches, scenario: nested.scenario };
 }
 async function loadBenchElement(element, index2, preferredPreviewFormat = "svg", vaultFiles = mainVaultFileClient) {
   const persistedElement = element;
@@ -35880,28 +35902,64 @@ async function loadBenchElement(element, index2, preferredPreviewFormat = "svg",
     y: element.y ?? index2 * 160
   };
 }
+function getNestedBenchReadCacheKey(path) {
+  if (getVaultRelativePathError(path))
+    return path;
+  return path.trim().replace(/\\/g, "/").split("/").filter((part) => part !== "" && part !== ".").join("/");
+}
 async function loadNestedBenchRuntimeTree(scenario, options2) {
   const depth = Math.max(0, Math.floor(options2.depth));
+  const maxLoadedBenches = Math.max(0, Math.floor(options2.maxLoadedBenches ?? 128));
+  const maxRuntimeElements = Math.max(0, Math.floor(options2.maxRuntimeElements ?? 4096));
   const baseElements = scenario.elements.filter((element) => !isLoadedNestedBenchElement(element));
   if (depth <= 0)
     return { loadedCount: 0, nestedBenches: new Map, scenario: { ...scenario, elements: baseElements } };
+  const loadErrors = new Map;
   const nestedBenches = new Map;
+  const readBenchFiles = new Map;
   const runtimeElements = [];
+  let attemptedLoads = 0;
   let frontier = baseElements.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path));
   for (let level = 0;level < depth && frontier.length > 0; level += 1) {
     const nextFrontier = [];
     for (const parent of frontier) {
       if (nestedBenches.has(parent.id))
         continue;
-      const loaded = await options2.readBenchFile(parent.path);
-      nestedBenches.set(parent.id, { bench: loaded.bench, benchEtag: loaded.benchEtag, path: loaded.path });
-      const children = await loadNestedBenchRuntimeElements(parent, loaded.bench, options2.preferredPreviewFormat, options2.vaultFiles);
+      if (attemptedLoads >= maxLoadedBenches || runtimeElements.length >= maxRuntimeElements) {
+        loadErrors.set(parent.id, "Automatic nested bench limit reached");
+        continue;
+      }
+      attemptedLoads += 1;
+      const readCacheKey = getNestedBenchReadCacheKey(parent.path);
+      let pending = readBenchFiles.get(readCacheKey);
+      if (!pending) {
+        pending = options2.readBenchFile(parent.path);
+        readBenchFiles.set(readCacheKey, pending);
+      }
+      let loaded;
+      try {
+        loaded = await pending;
+      } catch (caught) {
+        loadErrors.set(parent.id, formatCaughtError(caught));
+        continue;
+      }
+      nestedBenches.set(parent.id, loaded);
+      const remainingElements = maxRuntimeElements - runtimeElements.length;
+      const sourceElements = loaded.bench.elements ?? [];
+      const boundedBench = sourceElements.length > remainingElements ? { ...loaded.bench, elements: sourceElements.slice(0, remainingElements) } : loaded.bench;
+      if (boundedBench !== loaded.bench)
+        loadErrors.set(parent.id, "Automatic nested bench limit reached");
+      const children = await loadNestedBenchRuntimeElements(parent, boundedBench, options2.preferredPreviewFormat, options2.vaultFiles);
       runtimeElements.push(...children);
       nextFrontier.push(...children.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path)));
     }
     frontier = nextFrontier;
   }
-  return { loadedCount: nestedBenches.size, nestedBenches, scenario: { ...scenario, elements: [...baseElements, ...runtimeElements] } };
+  const elements = [...baseElements, ...runtimeElements].map((element) => {
+    const error = loadErrors.get(element.id);
+    return error && element.kind === "bench" ? { ...element, error } : element;
+  });
+  return { loadedCount: nestedBenches.size, nestedBenches, scenario: { ...scenario, elements } };
 }
 async function loadNestedBenchRuntimeElements(parent, bench, preferredPreviewFormat = "svg", vaultFiles = mainVaultFileClient) {
   const idMap = new Map;
@@ -36663,9 +36721,10 @@ function planBenchPersistenceWrites(rootBench, viewportElements, viewportEdges =
   const nested = new Map;
   const nestedRuntimeIds = new Set;
   for (const [benchElementId, loaded] of loadedNestedBenches) {
+    const loadedDescendantBenchIds = [...loadedNestedBenches.keys()].filter((candidateId) => candidateId.startsWith(`${benchElementId}::`));
     const benchParent = viewportElements.find((element) => element.kind === "bench" && element.id === benchElementId);
     const benchTransform = benchParent && (loaded.bench.elements ?? []).length > 0 ? getNestedBenchTransform(benchParent, loaded.bench.elements ?? []) : undefined;
-    const nestedViewportElements = viewportElements.filter((element) => isElementOwnedByBenchInstance(element, benchElementId)).map((element) => stripNestedBenchRuntimeElement(element, benchElementId, benchTransform));
+    const nestedViewportElements = viewportElements.filter((element) => isElementOwnedByBenchInstance(element, benchElementId) && !loadedDescendantBenchIds.some((descendantId) => isElementOwnedByBenchInstance(element, descendantId))).map((element) => stripNestedBenchRuntimeElement(element, benchElementId, benchTransform));
     for (const element of viewportElements) {
       if (isElementOwnedByBenchInstance(element, benchElementId))
         nestedRuntimeIds.add(element.id);
@@ -36690,7 +36749,8 @@ function isElementOwnedByBenchInstance(element, benchElementId) {
 function stripMovedOutNestedRuntimeElement(element, loadedNestedBenches) {
   if (!("parentId" in element))
     return element;
-  for (const benchElementId of loadedNestedBenches.keys()) {
+  const benchElementIds = [...loadedNestedBenches.keys()].sort((left, right) => right.length - left.length || left.localeCompare(right));
+  for (const benchElementId of benchElementIds) {
     const prefix2 = `${benchElementId}::`;
     if (!element.id.startsWith(prefix2))
       continue;
@@ -37042,6 +37102,7 @@ function Workbench({
     elementTypeRegistry,
     expectedInitialView,
     fetcher,
+    runtimeMode: "production",
     scenarioId: "native",
     uploadRawFile
   });

@@ -85,7 +85,15 @@ function decodeUtf8(bytes: Uint8Array): string {
 }
 
 function servicePath(path: string): string {
-  if (!/^\/v1\/[A-Za-z0-9._~!$&'()*+,;=:@/?=-]+$/.test(path) || path.includes("//") || path.includes("#")) {
+  const queryIndex = path.indexOf("?");
+  const pathname = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : path.slice(queryIndex + 1);
+  if (!/^\/v1\/[A-Za-z0-9._~!$&'()*+,;=:@/-]+$/.test(pathname)
+    || pathname.split("/").some((segment) => segment === "." || segment === "..")
+    || !/^[A-Za-z0-9._~!$&'()*+,;=:@/?=%-]*$/.test(query)
+    || /%(?![A-Fa-f0-9]{2})/.test(query)
+    || path.includes("//")
+    || path.includes("#")) {
     throw new Error("Invalid Realm service path");
   }
   return path;
