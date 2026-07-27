@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -179,6 +179,22 @@ async function inspectReusableTmuxWorker(sessionName: string, expected: ManagedP
   const pid = await tmuxPanePid(sessionName);
   const snapshot = await readManagedProcessSnapshot(pid);
   if (!snapshot || !isCompatibleManagedWorkerForReuse(snapshot, { ...expected, pid: expected.pid ?? pid })) {
+    throw new Error(`refusing to reuse tmux session with unverified process identity: ${sessionName}`);
+  }
+  return snapshot;
+}
+
+async function inspectCompatibleGatewayPane(
+  sessionName: string,
+  expected: ManagedProcessExpectation,
+  serviceUid: number,
+  serviceGid: number,
+): Promise<ManagedProcessSnapshot> {
+  const pid = await tmuxPanePid(sessionName);
+  const snapshot = await readManagedProcessSnapshot(pid);
+  if (!snapshot
+    || !isExactManagedProcess(snapshot, { ...expected, pid: expected.pid ?? pid, argv: snapshot.argv })
+    || !gatewayProcessSupervisorArgvCompatible(snapshot.argv, expected.argv, serviceUid, serviceGid)) {
     throw new Error(`refusing to reuse tmux session with unverified process identity: ${sessionName}`);
   }
   return snapshot;
@@ -513,7 +529,7 @@ async function inspectOwnedGatewaySession(
   entrypoint: string,
 ): Promise<Readonly<{ pane: ManagedProcessSnapshot; worker: ManagedProcessSnapshot; expectations: Awaited<ReturnType<typeof gatewayProcessExpectations>> }>> {
   const expectations = await gatewayProcessExpectations(mount, entrypoint);
-  const pane = await inspectReusableTmuxWorker(session, expectations.pane);
+  const pane = await inspectCompatibleGatewayPane(session, expectations.pane, mount.serviceUid, mount.serviceGid);
   const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
   return Object.freeze({ pane, worker, expectations });
 }

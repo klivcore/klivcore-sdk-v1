@@ -52,8 +52,8 @@
     },
     {
       "path": "src/gateway-runtime.ts",
-      "bytes": 16674,
-      "sha256": "96321f777d2f3abbf09fd30d4ecefffb643de7d40edbd224dc837617ef88c2bb"
+      "bytes": 17702,
+      "sha256": "5cb657b82d1bcd5f053d69ab8211d81ef5591a52766dd44829afb9d95a204a64"
     },
     {
       "path": "src/index.ts",
@@ -72,8 +72,8 @@
     },
     {
       "path": "src/start-realm-coordinator.ts",
-      "bytes": 49518,
-      "sha256": "db908921a5a7c4f5055bc0ef3e44c4415749faa8906c1652135e7479e3a8f1e4"
+      "bytes": 50243,
+      "sha256": "04a9ff3ecbfb12deaa1645575a740d1d8f61152c01d2f4698012d9c5f3212f89"
     },
     {
       "path": "src/start-realm-core.ts",
