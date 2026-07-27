@@ -52,8 +52,8 @@
     },
     {
       "path": "src/gateway-runtime.ts",
-      "bytes": 14257,
-      "sha256": "b5f3ed9a01543409d56c8be018d2c7fc276a942b6d6980c3ebce28c252f4bcbf"
+      "bytes": 15805,
+      "sha256": "f403eae9af0195d614cd8e0f0f7b247d4e95f05bf024def28e00bfc90f179335"
     },
     {
       "path": "src/index.ts",

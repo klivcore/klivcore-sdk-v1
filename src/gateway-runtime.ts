@@ -185,6 +185,42 @@ export async function loadGatewayManifest(packageRoot: string): Promise<GatewayM
   return parseGatewayManifest(JSON.parse(await readGatewayAsset(packageRoot, "klivcore.gateway.json", 128 * 1024)));
 }
 
+function parsePersistedGatewayManifest(value: unknown): GatewayManifest {
+  try { return parseGatewayManifest(value); } catch (currentError) {
+    try {
+      const root = record(value);
+      if (!exact(root, ["schemaVersion", "contractVersion", "id", "capabilities", "routes", "httpRelay", "processes"])
+        || !Array.isArray(root.routes)) throw currentError;
+      const relay = record(root.httpRelay);
+      if (!exact(relay, ["requiredCapabilities", "allowedRequests", "healthPath"])) throw currentError;
+      if (!Array.isArray(relay.allowedRequests) || relay.allowedRequests.some((raw) => {
+        const rule = record(raw);
+        return !["GET", "HEAD", "POST"].includes(rule.method as string);
+      })) throw currentError;
+      const routes = root.routes.map((raw) => {
+        const route = record(raw);
+        if (!exact(route, ["id", "path", "title", "requiredCapabilities", "component"])) throw currentError;
+        return { ...route, services: ["legacy-http-relay"] };
+      });
+      return parseGatewayManifest({
+        schemaVersion: root.schemaVersion,
+        contractVersion: root.contractVersion,
+        id: root.id,
+        capabilities: root.capabilities,
+        routes,
+        server: {
+          id: "legacy-http-relay",
+          process: "server",
+          requiredCapabilities: relay.requiredCapabilities,
+          allowedRequests: relay.allowedRequests,
+          healthPath: relay.healthPath,
+        },
+        processes: root.processes,
+      });
+    } catch { throw currentError; }
+  }
+}
+
 export function parseActiveGatewayMount(value: unknown, authority: ActiveGatewayMountAuthority): ActiveGatewayMount {
   const mount = record(value);
   if (!exact(mount, ["schemaVersion", "key", "source", "revision", "packageDigest", "serviceUser", "serviceUid", "serviceGid", "baseRoute", "storageSubdir", "packageRoot", "home", "configPath", "port", "sessions", "manifest"])
@@ -199,7 +235,7 @@ export function parseActiveGatewayMount(value: unknown, authority: ActiveGateway
   parseGatewayPackageLocator(mount.source);
   const sessions = record(mount.sessions);
   if (Object.values(sessions).some((session) => typeof session !== "string" || session.length < 1 || session.length > 100)) throw new TypeError("active Gateway record is invalid");
-  const manifest = parseGatewayManifest(mount.manifest);
+  const manifest = parsePersistedGatewayManifest(mount.manifest);
   const roles = manifest.processes.map((process) => process.role).sort();
   const sessionRoles = Object.keys(sessions).sort();
   if (sessionRoles.length !== roles.length || sessionRoles.some((role, index) => role !== roles[index])) throw new TypeError("active Gateway record is invalid");
