@@ -10,6 +10,7 @@ import {
   isCompatibleManagedWorkerForReuse,
   isExactManagedProcess,
   isManagedLoopbackSshdDropIn,
+  managedSshdDropInStatIsSafe,
   isOwnedRealmWorkerCommand,
   parseActiveRealmRecord,
   parseActiveSshRelayRecord,
@@ -93,11 +94,11 @@ async function ensureLoopbackSshGateway(): Promise<void> {
   const target = "/etc/ssh/sshd_config.d/99-klivcore-realm-gateway.conf";
   const exists = await run(["sudo", "-n", "test", "-e", target]);
   if (exists.code === 0) {
-    const info = await lstat(target);
-    const content = !info.isSymbolicLink() && info.isFile() && info.uid === 0
-      && (info.mode & 0o022) === 0 && info.size > 0 && info.size <= 4_096
-      ? await readFile(target, "utf8") : "";
-    if (!isManagedLoopbackSshdDropIn(content, ssh.user)) {
+    const metadata = await run(["sudo", "-n", "stat", "-c", "%f\n%u\n%s", "--", target]);
+    const content = await run(["sudo", "-n", "cat", "--", target]);
+    if (metadata.code !== 0 || content.code !== 0
+      || !managedSshdDropInStatIsSafe(metadata.stdout)
+      || !isManagedLoopbackSshdDropIn(content.stdout, ssh.user)) {
       throw new Error(`SSH Gateway host integration exists but is not a recognized managed file: ${target}`);
     }
     console.log("Replacing stale SSH Gateway host integration");

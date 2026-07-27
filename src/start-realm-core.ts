@@ -113,6 +113,16 @@ export function isManagedLoopbackSshdDropIn(value: string, user: string): boolea
     && !/[\u0000-\u0020\u007f-\u009f]/u.test(authorizedKeysFile);
 }
 
+export function managedSshdDropInStatIsSafe(value: string): boolean {
+  const [rawMode, rawUid, rawSize, ...extra] = value.trimEnd().split("\n");
+  if (extra.length !== 0 || !rawMode || !/^[0-9a-f]+$/u.test(rawMode)
+    || !rawUid || !/^[0-9]+$/u.test(rawUid) || !rawSize || !/^[0-9]+$/u.test(rawSize)) return false;
+  const mode = Number.parseInt(rawMode, 16);
+  const size = Number(rawSize);
+  return (mode & 0o170000) === 0o100000 && (mode & 0o022) === 0
+    && rawUid === "0" && Number.isSafeInteger(size) && size > 0 && size <= 4_096;
+}
+
 export function effectiveSshdUsesAuthorizedKeysFile(output: string, authorizedKeysFile: string): boolean {
   return output.split(/\r?\n/u).some((line) => {
     const fields = line.trim().split(/\s+/u);
