@@ -7,6 +7,7 @@ import {
   effectiveSshdUsesAuthorizedKeysFile,
   failAfterRollbackOperations,
   formatRegistrationUrlBlock,
+  isCompatibleManagedWorkerForReuse,
   isExactManagedProcess,
   isOwnedRealmWorkerCommand,
   parseActiveRealmRecord,
@@ -170,6 +171,15 @@ async function inspectOwnedTmuxSession(sessionName: string, expected: ManagedPro
   const snapshot = await readManagedProcessSnapshot(pid);
   if (!snapshot || !isExactManagedProcess(snapshot, { ...expected, pid: expected.pid ?? pid })) {
     throw new Error(`refusing to manage tmux session with unverified process identity: ${sessionName}`);
+  }
+  return snapshot;
+}
+
+async function inspectReusableTmuxWorker(sessionName: string, expected: ManagedProcessExpectation): Promise<ManagedProcessSnapshot> {
+  const pid = await tmuxPanePid(sessionName);
+  const snapshot = await readManagedProcessSnapshot(pid);
+  if (!snapshot || !isCompatibleManagedWorkerForReuse(snapshot, { ...expected, pid: expected.pid ?? pid })) {
+    throw new Error(`refusing to reuse tmux session with unverified process identity: ${sessionName}`);
   }
   return snapshot;
 }
@@ -713,7 +723,8 @@ async function waitForManagedTunnel(options: ManagedTunnelOptions): Promise<Mana
 
 async function ensureManagedTunnel(options: ManagedTunnelOptions): Promise<ManagedTunnelRecord> {
   if (await tmuxExists(options.sessionName)) {
-    await inspectOwnedTmuxSession(options.sessionName, realmWorkerExpectation(options.workerMode));
+    const record = await readManagedTunnel(options);
+    await inspectReusableTmuxWorker(options.sessionName, realmWorkerExpectation(options.workerMode, record.pid));
     console.log(`Reusing ${options.label} session: ${options.sessionName}`);
     return waitForManagedTunnel(options);
   }

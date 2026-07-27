@@ -72,13 +72,13 @@
     },
     {
       "path": "src/start-realm-coordinator.ts",
-      "bytes": 49143,
-      "sha256": "861cd315f06178303c5f64917a3fc7db6c8591d36f4a958f3a6aa1959f15ec49"
+      "bytes": 49725,
+      "sha256": "8d7f63ffb86a8406108aec4d46b1f7aaa899c511babc57373ce492c955a2fbfd"
     },
     {
       "path": "src/start-realm-core.ts",
-      "bytes": 31445,
-      "sha256": "6af4cf456840b2c7d917fed9c3fcf0a1352152c0453413e484a87564006b7548"
+      "bytes": 32350,
+      "sha256": "e0e5dac884731c794604355532681e757d6d3703653e4f0f778bcb04c59ab5c7"
     },
     {
       "path": "src/start-realm.ts",

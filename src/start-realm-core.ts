@@ -238,6 +238,23 @@ export function isExactManagedProcess(
     && snapshot.argv.every((argument, index) => argument === expected.argv[index]);
 }
 
+export function isCompatibleManagedWorkerForReuse(
+  snapshot: ManagedProcessSnapshot,
+  expected: ManagedProcessExpectation,
+): boolean {
+  if (isExactManagedProcess(snapshot, expected)) return true;
+  if (expected.pid === undefined || snapshot.pid !== expected.pid
+    || !/^(?:0|[1-9][0-9]*)$/u.test(snapshot.startTimeTicks)
+    || snapshot.uid !== expected.uid || snapshot.gid !== expected.gid
+    || snapshot.argv.length !== 3 || expected.argv.length !== 3
+    || snapshot.argv[0] !== expected.argv[0] || snapshot.argv[2] !== expected.argv[2]) return false;
+  const marker = "/node_modules/";
+  const snapshotMarker = snapshot.argv[1]!.lastIndexOf(marker);
+  const expectedMarker = expected.argv[1]!.lastIndexOf(marker);
+  return snapshotMarker >= 0 && expectedMarker >= 0
+    && snapshot.argv[1]!.slice(snapshotMarker + marker.length) === expected.argv[1]!.slice(expectedMarker + marker.length);
+}
+
 export type ManagedProcessTerminationOperations = Readonly<{
   read: (pid: number) => Promise<ManagedProcessSnapshot | undefined>;
   signal: (pid: number, signal: "TERM" | "KILL") => Promise<void>;
