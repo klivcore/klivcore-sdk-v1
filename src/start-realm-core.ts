@@ -324,6 +324,21 @@ export function isStaleManagedSshRelayWorker(
   return isStaleManagedRealmWorker(snapshot, identity, environment, realmId, sessionName, "ssh-relay");
 }
 
+export function priorRealmDirectorySessionMode(
+  sessionName: string,
+  realmId: string,
+): "realm" | "tunnel" | "ssh-relay" | "ssh-tunnel" | undefined {
+  const prefix = `klivcore-${realmId}-`;
+  if (!sessionName.startsWith(prefix)) return undefined;
+  for (const mode of ["ssh-tunnel", "ssh-relay", "tunnel", "realm"] as const) {
+    const suffix = `-${mode}`;
+    if (!sessionName.endsWith(suffix)) continue;
+    const layoutHash = sessionName.slice(prefix.length, -suffix.length);
+    return /^[a-f0-9]{12}$/u.test(layoutHash) ? mode : undefined;
+  }
+  return undefined;
+}
+
 export type ManagedProcessTerminationOperations = Readonly<{
   read: (pid: number) => Promise<ManagedProcessSnapshot | undefined>;
   signal: (pid: number, signal: "TERM" | "KILL") => Promise<void>;

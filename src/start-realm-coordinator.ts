@@ -16,6 +16,7 @@ import {
   parseActiveRealmRecord,
   parseActiveSshRelayRecord,
   parseManagedTunnelRecord,
+  priorRealmDirectorySessionMode,
   parseStartRealmArgs,
   parseStartRealmConfig,
   parseGatewayPackageLocator,
@@ -872,11 +873,10 @@ async function waitForSshRelay(
 
 async function reconcilePriorRealmDirectorySessions(): Promise<void> {
   const current = new Set(Object.values(sessions));
-  const prefix = `klivcore-${config.realm.id}-`;
   const modes = ["ssh-tunnel", "ssh-relay", "tunnel", "realm"] as const;
   const stale = (await tmuxSessionNames()).flatMap((sessionName) => {
-    if (current.has(sessionName) || !sessionName.startsWith(prefix)) return [];
-    const mode = modes.find((candidate) => sessionName.endsWith(`-${candidate}`));
+    if (current.has(sessionName)) return [];
+    const mode = priorRealmDirectorySessionMode(sessionName, config.realm.id);
     return mode ? [{ mode, sessionName }] : [];
   }).sort((left, right) => modes.indexOf(left.mode) - modes.indexOf(right.mode));
   for (const { mode, sessionName } of stale) {
