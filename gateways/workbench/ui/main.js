@@ -13085,6 +13085,11 @@ function isCanvasPointerPassThroughTarget(target) {
   const closest = target?.closest;
   return typeof closest === "function" && Boolean(closest.call(target, "[data-workbench-canvas-backdrop='true']"));
 }
+function isNodeWrapperPointerInside(event, wrapper) {
+  if (event.composedPath().includes(wrapper))
+    return true;
+  return event.target instanceof Node && wrapper.contains(event.target);
+}
 function NodeWrapper({
   activeEdgeHandleSide,
   bodyClassName = "",
@@ -13125,7 +13130,7 @@ function NodeWrapper({
   };
   import_react2.useEffect(() => {
     const handleDocumentPointerDown = (event) => {
-      if (!wrapperRef.current?.contains(event.target)) {
+      if (wrapperRef.current && !isNodeWrapperPointerInside(event, wrapperRef.current)) {
         setIsActive(false);
         setIsConfirmingDelete(false);
       }
@@ -27363,7 +27368,7 @@ function BenchViewport({
       if (!shouldClearViewportSelectionForEvent(event))
         return;
       const node = viewportRef.current;
-      if (!node || isElementInteractionTarget(event.target))
+      if (!node || isWorkbenchInteractionEvent(event))
         return;
       blurActiveEditableInViewport(node);
       clearViewportSelection();
@@ -30280,16 +30285,20 @@ function blurActiveEditableInViewport(viewportNode) {
   if (activeElement2 instanceof HTMLElement || activeElement2 instanceof SVGElement)
     activeElement2.blur();
 }
-var WORKBENCH_INTERACTION_SELECTOR = "[data-workbench-element-id], [data-debug-id='element-add-menu'], [data-debug-id='bench-add-panel'], [data-workbench-viewport-controls='true']";
+var WORKBENCH_INTERACTION_SELECTOR = "[data-workbench-element-id], [data-edge-delete-id], [data-debug-id='element-add-menu'], [data-debug-id='bench-add-panel'], [data-workbench-viewport-controls='true']";
 function isWorkbenchInteractionElement(target) {
   if (target.closest("[data-workbench-canvas-backdrop='true']"))
     return false;
   return Boolean(target.closest(WORKBENCH_INTERACTION_SELECTOR));
 }
 function isElementInteractionTarget(target) {
-  if (!(target instanceof Element) || target.closest("[data-workbench-canvas-backdrop='true']"))
+  const closest = target?.closest;
+  if (typeof closest !== "function" || closest.call(target, "[data-workbench-canvas-backdrop='true']"))
     return false;
   return isWorkbenchInteractionElement(target);
+}
+function isWorkbenchInteractionEvent(event) {
+  return event.composedPath().some((target) => isElementInteractionTarget(target ?? null)) || isElementInteractionTarget(event.target);
 }
 function getClipboardImageFile(data) {
   if (!data)
