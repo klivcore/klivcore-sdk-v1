@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseStartRealmConfig, type StartRealmArgs } from "./start-realm-core";
+import { gatewayDurableHome } from "./gateway-runtime";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 const CONFIG_NAME = "realm.config.json";
@@ -99,6 +100,10 @@ export async function reconcileRealmDirectory(
     ? gateways["resource-monitor"] as Record<string, unknown> : {};
   const workbench = gateways.workbench && typeof gateways.workbench === "object" && !Array.isArray(gateways.workbench)
     ? gateways.workbench as Record<string, unknown> : {};
+  const stateDir = resolve(resolvedDirectory, typeof existing?.stateDir === "string" ? existing.stateDir : "./state");
+  const workbenchConfig = workbench.config;
+  const useManagedWorkbenchConfig = !workbenchConfig || typeof workbenchConfig !== "object" || Array.isArray(workbenchConfig)
+    || Object.keys(workbenchConfig as Record<string, unknown>).length === 0;
   gateways["resource-monitor"] = {
     ...resourceMonitor,
     source: gatewaySource(sdkRevision, "gateways/resource-monitor"),
@@ -111,7 +116,14 @@ export async function reconcileRealmDirectory(
     source: gatewaySource(sdkRevision, "gateways/workbench"),
     baseRoute: "/workbench",
     storageSubdir: "workbench",
-    config: workbench.config ?? {},
+    config: useManagedWorkbenchConfig ? {
+      initialView: "main.bench.json",
+      vaultRoot: resolve(gatewayDurableHome(id, stateDir, "workbench", "workbench"), "vault"),
+      workspaceName: existing?.realm && typeof existing.realm === "object" && !Array.isArray(existing.realm)
+        && typeof (existing.realm as Record<string, unknown>).name === "string"
+        ? (existing.realm as Record<string, unknown>).name
+        : realmName(id),
+    } : workbenchConfig,
   };
   const config = existing ?? {
     schemaVersion: 1,
