@@ -17,17 +17,15 @@ The SDK is incomplete if an external agent needs private instructions to configu
 
 ## One-command fresh-server Realm
 
-On a fresh Linux x64 or arm64 host with only Bun and `config.json`, run the SDK directly from GitHub:
+On a fresh Linux x64 or arm64 host with Bun, Git, and tmux, run the SDK directly from GitHub:
 
 ```bash
-bunx --bun \
-  --package https://github.com/klivcore/klivcore-sdk-v1.git#[SDK_COMMIT] \
-  start-realm config.json
+bunx "https://github.com/klivcore/klivcore-sdk-v1.git" start-realm ec2-test
 ```
 
-Replace `[SDK_COMMIT]` with the verified lowercase 40-character commit from the canonical generated SDK repository. Never launch a Realm from a branch, tag, floating package URL, abbreviated commit, or unverified local projection.
+`ec2-test` is the self-contained Realm directory, resolved from the current working directory. The command creates `ec2-test/realm.config.json` and `ec2-test/state/` on first use. Rerunning the same command resolves the latest SDK revision, updates the SDK-owned Resource Monitor and Workbench Gateway sources, preserves user configuration, and reconciles the existing Realm instead of creating duplicate sessions.
 
-Start from `examples/start-realm.config.json`. The command:
+The command:
 
 1. validates the strict configuration;
 2. creates a private durable state directory;
@@ -118,9 +116,7 @@ Owner publishers operate only in a quiescent generated-SDK checkout. That workin
 While the Realm is running, an operating agent generates a fresh registration URL with:
 
 ```bash
-bunx --bun \
-  --package https://github.com/klivcore/klivcore-sdk-v1.git#[SDK_COMMIT] \
-  start-realm registration-url config.json
+bunx "https://github.com/klivcore/klivcore-sdk-v1.git" start-realm registration-url ec2-test
 ```
 
 The command verifies the private active-runtime record, running process, exact local Realm identity, and exact public Realm identity. It then authenticates a local POST with the runtime-scoped control capability. The exact live Realm—not the command process—creates the grant and returns the URL. A stopped or replacement process cannot issue from a stale record because it does not hold the matching capability in memory. The active record is sensitive host-local state: never log or copy it, and let the launcher remove it during shutdown. The command prints one URL and exits. The URL:

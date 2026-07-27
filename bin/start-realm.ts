@@ -1,2 +1,2 @@
 #!/usr/bin/env bun
-await import("../src/start-realm-coordinator");
+await import("../src/start-realm-entry");
