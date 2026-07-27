@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -510,13 +510,39 @@ function gatewayProcessEnvironment(mount: ActiveGatewayMount): Readonly<Record<s
   });
 }
 
+const gatewaySupervisorModes = new Map<string, "portable" | "legacy">();
+
+async function gatewayProcessSupervisorArgvForHost(
+  uid: number,
+  gid: number,
+  environment: Readonly<Record<string, string>>,
+  workerArgv: readonly string[],
+): Promise<readonly string[]> {
+  const key = `${uid}:${gid}`;
+  let mode = gatewaySupervisorModes.get(key);
+  if (!mode) {
+    const portableProbe = gatewayProcessSupervisorArgv(uid, gid, {}, ["/usr/bin/true"]);
+    if ((await run(portableProbe)).code === 0) mode = "portable";
+    else {
+      const legacyProbe = gatewayLegacyProcessSupervisorArgv(uid, gid, {}, ["/usr/bin/true"]);
+      const legacy = await run(legacyProbe);
+      if (legacy.code !== 0) throw new Error(legacy.stderr.trim() || "passwordless Gateway privilege drop is unavailable");
+      mode = "legacy";
+    }
+    gatewaySupervisorModes.set(key, mode);
+  }
+  return mode === "portable"
+    ? gatewayProcessSupervisorArgv(uid, gid, environment, workerArgv)
+    : gatewayLegacyProcessSupervisorArgv(uid, gid, environment, workerArgv);
+}
+
 async function gatewayProcessExpectations(mount: ActiveGatewayMount, entrypoint: string): Promise<Readonly<{
   pane: ManagedProcessExpectation;
   worker: ManagedProcessExpectation;
 }>> {
   const bunPath = await ensureSandboxBun();
   const workerArgv = Object.freeze([bunPath, resolve(mount.packageRoot, entrypoint)]);
-  const paneArgv = gatewayProcessSupervisorArgv(mount.serviceUid, mount.serviceGid, gatewayProcessEnvironment(mount), workerArgv);
+  const paneArgv = await gatewayProcessSupervisorArgvForHost(mount.serviceUid, mount.serviceGid, gatewayProcessEnvironment(mount), workerArgv);
   return Object.freeze({
     pane: Object.freeze({ ...coordinatorIdentity(), gid: 0, argv: paneArgv }),
     worker: Object.freeze({ uid: mount.serviceUid, gid: mount.serviceGid, argv: workerArgv }),
@@ -573,7 +599,7 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
   await readGatewayAsset(mount.packageRoot, entrypoint, 16 * 1024 * 1024);
   if (await gatewayPackageDigest(mount.packageRoot) !== mount.packageDigest) throw new Error(`Gateway package changed before process start: ${mount.key}`);
   const bunPath = await ensureSandboxBun();
-  const argv = gatewayProcessSupervisorArgv(
+  const argv = await gatewayProcessSupervisorArgvForHost(
     mount.serviceUid,
     mount.serviceGid,
     gatewayProcessEnvironment(mount),

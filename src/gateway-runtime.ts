@@ -190,6 +190,19 @@ export function gatewayProcessSupervisorArgv(
   ]);
 }
 
+export function gatewayLegacyProcessSupervisorArgv(
+  uid: number,
+  gid: number,
+  environment: Readonly<Record<string, string>>,
+  workerArgv: readonly string[],
+): readonly string[] {
+  const portable = gatewayProcessSupervisorArgv(uid, gid, environment, workerArgv);
+  return Object.freeze([
+    "sudo", "-n", "--", "/usr/bin/setpriv", `--reuid=${uid}`, `--regid=${gid}`, "--clear-groups", "env", "-i",
+    ...portable.slice(7),
+  ]);
+}
+
 export function gatewayProcessSupervisorArgvCompatible(
   actual: readonly string[],
   expected: readonly string[],
