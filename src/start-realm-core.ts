@@ -722,11 +722,11 @@ export function parseDnsOverHttpsIpv4Answers(value: unknown, hostname: string): 
   }
   const answer = (value as { Answer?: unknown }).Answer;
   if (!Array.isArray(answer) || answer.length > 32) throw new Error(`DNS-over-HTTPS did not resolve ${hostname}`);
-  const expectedName = `${hostname.toLowerCase()}.`;
+  const expectedName = hostname.toLowerCase();
   const addresses = answer.flatMap((entry) => {
     if (!entry || typeof entry !== "object") return [];
     const { name, type, data } = entry as { name?: unknown; type?: unknown; data?: unknown };
-    return typeof name === "string" && name.toLowerCase() === expectedName && type === 1 && typeof data === "string" && isIP(data) === 4
+    return typeof name === "string" && name.toLowerCase().replace(/\.$/u, "") === expectedName && type === 1 && typeof data === "string" && isIP(data) === 4
       ? [data]
       : [];
   });
