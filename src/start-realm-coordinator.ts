@@ -513,7 +513,7 @@ async function inspectOwnedGatewaySession(
   entrypoint: string,
 ): Promise<Readonly<{ pane: ManagedProcessSnapshot; worker: ManagedProcessSnapshot; expectations: Awaited<ReturnType<typeof gatewayProcessExpectations>> }>> {
   const expectations = await gatewayProcessExpectations(mount, entrypoint);
-  const pane = await inspectOwnedTmuxSession(session, expectations.pane);
+  const pane = await inspectReusableTmuxWorker(session, expectations.pane);
   const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
   return Object.freeze({ pane, worker, expectations });
 }
