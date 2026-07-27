@@ -211,8 +211,13 @@ async function removeDeadTmuxSession(sessionName: string, label: string): Promis
 
 async function stopOwnedTmuxSession(sessionName: string, expected: ManagedProcessExpectation, label: string): Promise<void> {
   if (!await tmuxExists(sessionName)) return;
-  const initial = await inspectOwnedTmuxSession(sessionName, expected);
-  await stopRevalidatedProcess(initial, { ...expected, pid: initial.pid }, label);
+  const initial = await inspectReusableTmuxWorker(sessionName, expected);
+  await stopRevalidatedProcess(initial, {
+    pid: initial.pid,
+    uid: initial.uid,
+    gid: initial.gid,
+    argv: initial.argv,
+  }, label);
   await removeDeadTmuxSession(sessionName, label);
 }
 
