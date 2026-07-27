@@ -77,8 +77,8 @@
     },
     {
       "path": "src/start-realm-core.ts",
-      "bytes": 32350,
-      "sha256": "e0e5dac884731c794604355532681e757d6d3703653e4f0f778bcb04c59ab5c7"
+      "bytes": 32580,
+      "sha256": "ec066477e09793fd536c6d42e79d16832d288915f0459c912405e1d8e24858fe"
     },
     {
       "path": "src/start-realm.ts",

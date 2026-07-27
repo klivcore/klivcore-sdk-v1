@@ -251,8 +251,12 @@ export function isCompatibleManagedWorkerForReuse(
   const marker = "/node_modules/";
   const snapshotMarker = snapshot.argv[1]!.lastIndexOf(marker);
   const expectedMarker = expected.argv[1]!.lastIndexOf(marker);
-  return snapshotMarker >= 0 && expectedMarker >= 0
-    && snapshot.argv[1]!.slice(snapshotMarker + marker.length) === expected.argv[1]!.slice(expectedMarker + marker.length);
+  if (snapshotMarker < 0 || expectedMarker < 0) return false;
+  const snapshotWorker = snapshot.argv[1]!.slice(snapshotMarker + marker.length);
+  const expectedWorker = expected.argv[1]!.slice(expectedMarker + marker.length);
+  if (snapshotWorker === expectedWorker) return true;
+  return snapshotWorker === "start-realm/src/start-realm.ts"
+    && expectedWorker === "@klivcore/sdk-v1/src/start-realm.ts";
 }
 
 export type ManagedProcessTerminationOperations = Readonly<{
