@@ -7,8 +7,8 @@
   "files": [
     {
       "path": "bin/server.js",
-      "bytes": 104684,
-      "sha256": "79af3360dcbbba6ad064431d134fd1a1a7e94f9eda21865c2fa794f835135e3e",
+      "bytes": 104405,
+      "sha256": "e6fedf688e880fab27dbd1f4a8a129c38d34ee72f636406a4015b62c4c672daa",
       "mode": 420
     },
     {
