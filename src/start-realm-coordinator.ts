@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -500,12 +500,7 @@ async function gatewayProcessExpectations(mount: ActiveGatewayMount, entrypoint:
 }>> {
   const bunPath = await ensureSandboxBun();
   const workerArgv = Object.freeze([bunPath, resolve(mount.packageRoot, entrypoint)]);
-  const paneArgv = Object.freeze([
-    "sudo", "-n", "--", "/usr/bin/setpriv",
-    `--reuid=${mount.serviceUid}`, `--regid=${mount.serviceGid}`, "--clear-groups", "env", "-i",
-    ...Object.entries(gatewayProcessEnvironment(mount)).map(([name, value]) => `${name}=${value}`),
-    ...workerArgv,
-  ]);
+  const paneArgv = gatewayProcessSupervisorArgv(mount.serviceUid, mount.serviceGid, gatewayProcessEnvironment(mount), workerArgv);
   return Object.freeze({
     pane: Object.freeze({ ...coordinatorIdentity(), gid: 0, argv: paneArgv }),
     worker: Object.freeze({ uid: mount.serviceUid, gid: mount.serviceGid, argv: workerArgv }),
@@ -562,9 +557,13 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
   await readGatewayAsset(mount.packageRoot, entrypoint, 16 * 1024 * 1024);
   if (await gatewayPackageDigest(mount.packageRoot) !== mount.packageDigest) throw new Error(`Gateway package changed before process start: ${mount.key}`);
   const bunPath = await ensureSandboxBun();
-  const env = gatewayProcessEnvironment(mount);
-  const assignments = Object.entries(env).map(([name, value]) => shellQuote(`${name}=${value}`)).join(" ");
-  const command = `exec sudo -n -- /usr/bin/setpriv --reuid=${mount.serviceUid} --regid=${mount.serviceGid} --clear-groups env -i ${assignments} ${shellQuote(bunPath)} ${shellQuote(resolve(mount.packageRoot, entrypoint))}`;
+  const argv = gatewayProcessSupervisorArgv(
+    mount.serviceUid,
+    mount.serviceGid,
+    gatewayProcessEnvironment(mount),
+    [bunPath, resolve(mount.packageRoot, entrypoint)],
+  );
+  const command = `exec ${argv.map(shellQuote).join(" ")}`;
   const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
   if (started.code !== 0) throw new Error(started.stderr.trim() || `failed to start Gateway process ${mount.key}/${role}`);
 }

@@ -171,6 +171,25 @@ export function gatewayProcessSessionName(realmId: string, stateDir: string, key
   return `klivcore-${realmId}-${key}-${role}-${digest}`.slice(0, 96);
 }
 
+export function gatewayProcessSupervisorArgv(
+  uid: number,
+  gid: number,
+  environment: Readonly<Record<string, string>>,
+  workerArgv: readonly string[],
+): readonly string[] {
+  if (!Number.isSafeInteger(uid) || uid < 1 || !Number.isSafeInteger(gid) || gid < 1) throw new TypeError("Gateway service identity is invalid");
+  const assignments = Object.entries(environment).map(([name, value]) => {
+    if (!/^[A-Z][A-Z0-9_]*$/.test(name) || value.includes("\0")) throw new TypeError("Gateway process environment is invalid");
+    return `${name}=${value}`;
+  });
+  if (workerArgv.length < 1 || workerArgv.some((value) => !value || value.includes("\0"))) throw new TypeError("Gateway worker argv is invalid");
+  return Object.freeze([
+    "sudo", "-n", `--user=#${uid}`, `--group=#${gid}`, "--", "/usr/bin/env", "-i",
+    ...assignments,
+    ...workerArgv,
+  ]);
+}
+
 export async function readGatewayAsset(root: string, path: string, maximum = 1024 * 1024): Promise<string> {
   if (!safePath(path)) throw new Error("Gateway asset path is unsafe");
   const absoluteRoot = resolve(root);
