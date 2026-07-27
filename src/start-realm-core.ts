@@ -283,6 +283,47 @@ export function isCompatibleManagedWorkerForReuse(
     && expectedWorker === "@klivcore/sdk-v1/src/start-realm.ts";
 }
 
+export function isStaleManagedRealmWorker(
+  snapshot: ManagedProcessSnapshot,
+  identity: Readonly<{ uid: number; gid: number; executablePath: string }>,
+  environment: Readonly<Record<string, string>>,
+  realmId: string,
+  sessionName: string,
+  mode: "realm" | "tunnel" | "ssh-tunnel" | "ssh-relay",
+): boolean {
+  const prefix = `klivcore-${realmId}-`;
+  const suffix = `-${mode}`;
+  const hash = sessionName.startsWith(prefix) && sessionName.endsWith(suffix)
+    ? sessionName.slice(prefix.length, -suffix.length) : "";
+  if (!/^[a-f0-9]{12}$/u.test(hash)
+    || snapshot.uid !== identity.uid || snapshot.gid !== identity.gid
+    || snapshot.argv.length !== 3 || snapshot.argv[0] !== identity.executablePath
+    || !snapshot.argv[1] || !snapshot.argv[2]?.startsWith("/")
+    || /[\u0000-\u001f\u007f]/u.test(snapshot.argv[2])
+    || environment.KLIVCORE_START_REALM_MODE !== mode) return false;
+  if ((mode === "tunnel" || mode === "ssh-tunnel")
+    && environment.KLIVCORE_START_REALM_TUNNEL_SESSION !== sessionName) return false;
+  if (mode === "ssh-relay" && environment.KLIVCORE_START_REALM_SSH_RELAY_SESSION !== sessionName) return false;
+  const marker = "/node_modules/";
+  const markerIndex = snapshot.argv[1].lastIndexOf(marker);
+  if (markerIndex < 0) return false;
+  return [
+    "sdk-v1/src/start-realm.ts",
+    "@klivcore/sdk-v1/src/start-realm.ts",
+    "start-realm/src/start-realm.ts",
+  ].includes(snapshot.argv[1].slice(markerIndex + marker.length));
+}
+
+export function isStaleManagedSshRelayWorker(
+  snapshot: ManagedProcessSnapshot,
+  identity: Readonly<{ uid: number; gid: number; executablePath: string }>,
+  environment: Readonly<Record<string, string>>,
+  realmId: string,
+  sessionName: string,
+): boolean {
+  return isStaleManagedRealmWorker(snapshot, identity, environment, realmId, sessionName, "ssh-relay");
+}
+
 export type ManagedProcessTerminationOperations = Readonly<{
   read: (pid: number) => Promise<ManagedProcessSnapshot | undefined>;
   signal: (pid: number, signal: "TERM" | "KILL") => Promise<void>;

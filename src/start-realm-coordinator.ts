@@ -10,6 +10,7 @@ import {
   isCompatibleManagedWorkerForReuse,
   isExactManagedProcess,
   isManagedLoopbackSshdDropIn,
+  isStaleManagedRealmWorker,
   managedSshdDropInStatIsSafe,
   isOwnedRealmWorkerCommand,
   parseActiveRealmRecord,
@@ -141,6 +142,17 @@ async function tmuxExists(sessionName: string): Promise<boolean> {
   throw new Error(result.stderr.trim() || `tmux has-session failed (${result.code})`);
 }
 
+async function tmuxSessionNames(): Promise<readonly string[]> {
+  const result = await tmux(["list-sessions", "-F", "#{session_name}"]);
+  if (result.code === 1 && /no server running|no sessions/u.test(result.stderr)) return Object.freeze([]);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "failed to list tmux sessions");
+  const names = result.stdout.trim() ? result.stdout.trim().split("\n") : [];
+  if (names.length > 128 || names.some((name) => !/^[A-Za-z0-9_.-]{1,128}$/u.test(name))) {
+    throw new Error("tmux session list is invalid");
+  }
+  return Object.freeze(names);
+}
+
 async function tmuxPanePid(sessionName: string): Promise<number> {
   const result = await tmux(["display-message", "-p", "-t", `=${sessionName}:0.0`, "#{pane_pid}"]);
   const value = result.stdout.trim();
@@ -175,6 +187,23 @@ async function readManagedProcessSnapshot(pid: number): Promise<ManagedProcessSn
     throw new Error(`managed process snapshot is invalid: ${pid}`);
   }
   return Object.freeze({ ...value, argv: Object.freeze([...value.argv]) });
+}
+
+async function readManagedProcessEnvironment(pid: number): Promise<Readonly<Record<string, string>>> {
+  let data: Buffer;
+  try { data = await readFile(`/proc/${pid}/environ`); }
+  catch (error) { if (!await readManagedProcessSnapshot(pid)) return Object.freeze({}); throw error; }
+  if (data.byteLength > 1024 * 1024) throw new Error(`managed process environment exceeds safety limits: ${pid}`);
+  const selected: Record<string, string> = {};
+  for (const entry of data.toString("utf8").split("\0")) {
+    const separator = entry.indexOf("=");
+    if (separator < 1) continue;
+    const key = entry.slice(0, separator);
+    if (["KLIVCORE_START_REALM_MODE", "KLIVCORE_START_REALM_SSH_RELAY_SESSION", "KLIVCORE_START_REALM_TUNNEL_SESSION"].includes(key)) {
+      selected[key] = entry.slice(separator + 1);
+    }
+  }
+  return Object.freeze(selected);
 }
 
 async function inspectOwnedTmuxSession(sessionName: string, expected: ManagedProcessExpectation): Promise<ManagedProcessSnapshot> {
@@ -841,6 +870,33 @@ async function waitForSshRelay(
   throw new Error(`SSH Core relay did not become ready\n${await tmuxOutput(sessions.sshRelay)}`);
 }
 
+async function reconcilePriorRealmDirectorySessions(): Promise<void> {
+  const current = new Set(Object.values(sessions));
+  const prefix = `klivcore-${config.realm.id}-`;
+  const modes = ["ssh-tunnel", "ssh-relay", "tunnel", "realm"] as const;
+  const stale = (await tmuxSessionNames()).flatMap((sessionName) => {
+    if (current.has(sessionName) || !sessionName.startsWith(prefix)) return [];
+    const mode = modes.find((candidate) => sessionName.endsWith(`-${candidate}`));
+    return mode ? [{ mode, sessionName }] : [];
+  }).sort((left, right) => modes.indexOf(left.mode) - modes.indexOf(right.mode));
+  for (const { mode, sessionName } of stale) {
+    const pid = await tmuxPanePid(sessionName);
+    const snapshot = await readManagedProcessSnapshot(pid);
+    const environment = snapshot ? await readManagedProcessEnvironment(pid) : Object.freeze({});
+    if (!snapshot || !isStaleManagedRealmWorker(
+      snapshot,
+      { ...coordinatorIdentity(), executablePath: process.execPath },
+      environment,
+      config.realm.id,
+      sessionName,
+      mode,
+    )) throw new Error(`refusing to replace an unverified stale Realm session: ${sessionName}`);
+    console.log(`Stopping stale ${mode} session from a prior Realm directory: ${sessionName}`);
+    await stopRevalidatedProcess(snapshot, { pid, uid: snapshot.uid, gid: snapshot.gid, argv: snapshot.argv }, `stale Realm ${mode}`);
+    await removeDeadTmuxSession(sessionName, `stale Realm ${mode}`);
+  }
+}
+
 async function ensureSshRelay(realmPublicOrigin: string): Promise<ReturnType<typeof parseActiveSshRelayRecord>> {
   const configRevision = createHash("sha256").update(JSON.stringify({
     realmPublicOrigin,
@@ -1007,6 +1063,7 @@ await ensureLoopbackSshGateway();
 
 const tmuxVersion = await tmux(["-V"]);
 if (tmuxVersion.code !== 0) throw new Error("start-realm requires tmux for durable managed sessions");
+await reconcilePriorRealmDirectorySessions();
 
 const tunnel = config.publicOrigin ? undefined : await ensureManagedTunnel({
   path: managedTunnelPath,
