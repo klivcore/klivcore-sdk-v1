@@ -37048,6 +37048,12 @@ function Workbench({
 }
 
 // packages/publish-sdk/src/gateway-ui-core.ts
+function createWorkbenchMountContainer(root2) {
+  const container = root2.ownerDocument.createElement("div");
+  container.classList.add("workbench-gateway", "workbench-gateway--native");
+  root2.append(container);
+  return container;
+}
 function createWorkbenchServiceFetcher(service, baseHref = globalThis.location?.href ?? "http://workbench.invalid/") {
   const base = new URL(baseHref);
   return async (input, init) => {
@@ -37071,13 +37077,21 @@ function mount(host) {
   const service = host.services.api;
   if (!service)
     throw new Error("Workbench API service is unavailable");
-  host.root.classList.add("workbench-gateway", "workbench-gateway--native");
-  const root2 = import_client.createRoot(host.root);
-  root2.render(import_react14.createElement(Workbench, { apiBaseUrl: "/v1", fetcher: createWorkbenchServiceFetcher(service) }));
-  return () => {
-    root2.unmount();
-    host.root.classList.remove("workbench-gateway", "workbench-gateway--native");
-  };
+  const container = createWorkbenchMountContainer(host.root);
+  try {
+    const root2 = import_client.createRoot(container);
+    root2.render(import_react14.createElement(Workbench, { apiBaseUrl: "/v1", fetcher: createWorkbenchServiceFetcher(service) }));
+    return () => {
+      try {
+        root2.unmount();
+      } finally {
+        container.remove();
+      }
+    };
+  } catch (error) {
+    container.remove();
+    throw error;
+  }
 }
 export {
   mount
