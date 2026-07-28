@@ -157,6 +157,23 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-bench-viewport-stress-1k",
+      "path": "/debug/bench-viewport/stress-1k",
+      "title": "Workbench debug: Stress 1k",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-stress-1k",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {
