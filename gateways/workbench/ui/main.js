@@ -32734,9 +32734,6 @@ function createOpenedBenchStack(stack, currentPath, element) {
 function createActiveBenchAncestorPaths(_activePath, _stack) {
   return [];
 }
-function getAutomaticNestedBenchDepth(_runtimeMode) {
-  return 0;
-}
 function shouldSkipBenchBreadcrumbClick(_activeBenchPath, stack, stackIndex) {
   return stackIndex >= stack.length;
 }
@@ -32987,7 +32984,7 @@ function isRecord2(value) {
 function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
-function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", applicationChrome, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, expectedInitialView, fetcher = fetch, pluginRegistry = createWorkbenchPluginRegistry(), runtimeMode = "debug", scenarioId, uploadRawFile }) {
+function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", applicationChrome, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, expectedInitialView, fetcher = fetch, pluginRegistry = createWorkbenchPluginRegistry(), scenarioId, uploadRawFile }) {
   const [bootstrap, setBootstrap] = import_react12.useState(null);
   const [error, setError] = import_react12.useState(null);
   import_react12.useEffect(() => {
@@ -33043,7 +33040,6 @@ function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", application
     elementTypeRegistry,
     fetcher,
     pluginRegistry,
-    runtimeMode,
     scenarioId,
     uploadRawFile,
     vaultId: bootstrap.initialView.resource.vaultId
@@ -33663,7 +33659,7 @@ async function createEmptyBenchFile(path, vaultFiles) {
 function hasStableBenchRecordIds(bench) {
   return [bench.elements ?? [], bench.edges ?? []].every((records) => records.every((record) => typeof record.id === "string" && record.id.length > 0));
 }
-function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, runtimeMode = "debug", scenarioId, uploadRawFile, vaultId = "main" }) {
+function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
   const vaultFiles = import_react12.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
   const assetTransport = import_react12.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
@@ -33745,7 +33741,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     directoryHydrationGenerationRef.current += 1;
     let cancelled = false;
-    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, getAutomaticNestedBenchDepth(runtimeMode)).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
+    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
       if (cancelled)
         return;
       restoredNestedNavigationPendingRef.current = false;
@@ -33784,7 +33780,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchPath, activeBenchStack, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, runtimeMode, scenarioId, vaultFiles]);
+  }, [activeBenchPath, activeBenchStack, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
   import_react12.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
@@ -34940,7 +34936,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     path: item.path,
     onClick: item.isCurrent ? undefined : () => void handleBenchBreadcrumbClick(item.stackIndex, item.path)
   }));
-  const debugControlsEnabled = runtimeMode === "debug" && isWorkbenchDebugControlsEnabled(typeof window === "undefined" ? "" : window.location.href);
+  const debugControlsEnabled = isWorkbenchDebugControlsEnabled(typeof window === "undefined" ? "" : window.location.href);
   const debugPanelState = createBenchDebugPanelState(debugControlsEnabled, debugMenuRequested, debugPanelRequested);
   const debugActionGroups = createBenchDebugPanelActionGroups({
     browserStressAvailable: scriptedNestedBenchScenarioIds.has(scenarioId),
@@ -35457,9 +35453,9 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       }] : [],
       actorActivityFadeReferenceAt,
       actorActivityFadeSeconds,
-      backHref: runtimeMode === "debug" ? componentHref : undefined,
-      backLabel: runtimeMode === "debug" ? `${componentName} scenarios` : undefined,
-      onBackNavigate: runtimeMode === "debug" ? handleBackNavigate : undefined,
+      backHref: componentHref,
+      backLabel: `${componentName} scenarios`,
+      onBackNavigate: handleBackNavigate,
       onActorActivitySelect: handleActorActivitySelect,
       breadcrumbs,
       debugApiRef: benchViewportDebugApiRef,
@@ -35474,7 +35470,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       onFocusElementApplied: handleFocusElementApplied,
       onBenchElementCreate: handleBenchElementCreate,
       onBenchFileList: vaultFiles.listFiles,
-      onBenchElementLoad: runtimeMode === "debug" ? handleBenchElementLoad : undefined,
+      onBenchElementLoad: handleBenchElementLoad,
       onBenchElementOpen: handleBenchElementOpen,
       onElementDelete: handleElementDelete,
       onEdgesChange: handleEdgesChange,
@@ -37126,7 +37122,6 @@ function Workbench({
     elementTypeRegistry,
     expectedInitialView,
     fetcher,
-    runtimeMode: "production",
     scenarioId: "native",
     uploadRawFile
   });
