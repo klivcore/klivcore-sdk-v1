@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewayProcessSupervisorPaneGid, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentMatches, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewayProcessSupervisorPaneGid, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentProbeScript, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -610,7 +610,7 @@ async function inspectOwnedGatewaySession(
     const pane = await readManagedProcessSnapshot(pid);
     if (!pane || !isExactManagedProcess(pane, { ...expectations.pane, pid, argv: pane.argv })) throw strictFailure;
     const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
-    if (!gatewayWorkerEnvironmentMatches(await readExactGatewayWorkerEnvironment(worker), gatewayProcessEnvironment(mount))) {
+    if (await readExactGatewayWorkerPort(worker, gatewayProcessEnvironment(mount)) !== mount.port) {
       throw new Error(`refusing to reuse Gateway worker with an unverified environment: ${session}`, { cause: strictFailure });
     }
     return Object.freeze({
@@ -660,9 +660,37 @@ async function assertGatewaySessionsRecoverable(mount: ActiveGatewayMount): Prom
   }
 }
 
-async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot): Promise<string> {
-  const result = await run(["sudo", "-n", "cat", `/proc/${worker.pid}/environ`]);
-  if (result.code !== 0) throw new Error(result.stderr.trim() || "failed to read owned Gateway worker environment");
+async function readExactGatewayWorkerPort(
+  worker: ManagedProcessSnapshot,
+  expected: Readonly<Record<string, string>>,
+): Promise<number> {
+  const serializedExpected = JSON.stringify(expected);
+  if (Buffer.byteLength(serializedExpected, "utf8") > 64 * 1024) {
+    throw new Error("owned Gateway worker environment expectation exceeds safety limits");
+  }
+  const result = await run(await gatewayProcessSupervisorArgvForHost(
+    worker.uid,
+    worker.gid,
+    Object.freeze({}),
+    [
+      "/usr/bin/python3",
+      "-c",
+      gatewayWorkerEnvironmentProbeScript,
+      String(worker.pid),
+      serializedExpected,
+      String(worker.uid),
+    ],
+  ));
+  if (result.code !== 0) throw new Error("owned Gateway worker environment probe failed");
+  let value: unknown;
+  try { value = JSON.parse(result.stdout); }
+  catch { throw new Error("owned Gateway worker environment probe returned invalid output"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.keys(value).join("\0") !== "port"
+    || !Number.isSafeInteger((value as { port?: unknown }).port)
+    || ((value as { port: number }).port < 1 || (value as { port: number }).port > 65_535)) {
+    throw new Error("owned Gateway worker environment probe returned invalid output");
+  }
   const current = await readManagedProcessSnapshot(worker.pid);
   if (!current || current.startTimeTicks !== worker.startTimeTicks || !isExactManagedProcess(current, {
     pid: worker.pid,
@@ -670,7 +698,7 @@ async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot)
     gid: worker.gid,
     argv: worker.argv,
   })) throw new Error("owned Gateway worker changed while recovering its environment");
-  return result.stdout;
+  return (value as { port: number }).port;
 }
 
 async function findOwnedGatewayWorkerFromImmutablePackage(
@@ -737,8 +765,8 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
     sessions,
     manifest,
   });
-  const port = recoverGatewayPortFromWorkerEnvironment(
-    await readExactGatewayWorkerEnvironment(located.worker),
+  const port = await readExactGatewayWorkerPort(
+    located.worker,
     gatewayProcessEnvironment(recoveredBase),
   );
   const recovered = Object.freeze({ ...recoveredBase, port });

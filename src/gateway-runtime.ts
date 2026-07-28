@@ -78,6 +78,32 @@ export function recoverGatewayPackageRootFromWorkerArgv(
   return packageRoot;
 }
 
+export const gatewayWorkerEnvironmentProbeScript = [
+  "import json, os, sys",
+  "def fail(): raise SystemExit('Gateway worker environment is invalid')",
+  "try:",
+  "  pid = int(sys.argv[1]); expected = json.loads(sys.argv[2]); expected_uid = int(sys.argv[3])",
+  "  if os.getuid() != expected_uid or not isinstance(expected, dict): fail()",
+  "  if any(not isinstance(key, str) or not isinstance(value, str) for key, value in expected.items()): fail()",
+  "  data = open(f'/proc/{pid}/environ', 'rb').read(1048577)",
+  "  if len(data) > 1048576 or not data.endswith(b'\\0'): fail()",
+  "  values = {}",
+  "  for raw in data[:-1].split(b'\\0'):",
+  "    entry = raw.decode('utf-8', 'strict')",
+  "    if '=' not in entry: fail()",
+  "    key, value = entry.split('=', 1)",
+  "    if not key or key in values: fail()",
+  "    values[key] = value",
+  "  if sorted(values) != sorted([*expected, 'KLIVCORE_GATEWAY_PORT']): fail()",
+  "  if any(values.get(key) != value for key, value in expected.items()): fail()",
+  "  raw_port = values.get('KLIVCORE_GATEWAY_PORT', '')",
+  "  if not raw_port.isascii() or not raw_port.isdecimal() or raw_port.startswith('0') or len(raw_port) > 5: fail()",
+  "  port = int(raw_port)",
+  "  if port < 1 or port > 65535: fail()",
+  "except (OSError, ValueError, TypeError, UnicodeError, KeyError, IndexError, json.JSONDecodeError): fail()",
+  "print(json.dumps({'port': port}, separators=(',', ':')))",
+].join("\n");
+
 export function recoverGatewayPortFromWorkerEnvironment(
   text: string,
   expected: Readonly<Record<string, string>>,
