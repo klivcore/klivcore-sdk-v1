@@ -32734,6 +32734,9 @@ function createOpenedBenchStack(stack, currentPath, element) {
 function createActiveBenchAncestorPaths(_activePath, _stack) {
   return [];
 }
+function getAutomaticNestedBenchDepth(_runtimeMode) {
+  return 0;
+}
 function shouldSkipBenchBreadcrumbClick(_activeBenchPath, stack, stackIndex) {
   return stackIndex >= stack.length;
 }
@@ -33742,7 +33745,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     directoryHydrationGenerationRef.current += 1;
     let cancelled = false;
-    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, runtimeMode === "production" ? 8 : 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
+    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, getAutomaticNestedBenchDepth(runtimeMode)).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
       if (cancelled)
         return;
       restoredNestedNavigationPendingRef.current = false;
