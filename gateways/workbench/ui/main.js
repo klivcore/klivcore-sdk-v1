@@ -35673,6 +35673,7 @@ async function loadMainBenchRuntime(benchPath = "main.bench.hjson", scenarioId =
         path: file.path
       };
     },
+    rootBenchPath: loaded.benchPath,
     vaultFiles
   });
   return { ...loaded, nestedBenches: nested.nestedBenches, scenario: nested.scenario };
@@ -35928,23 +35929,32 @@ async function loadNestedBenchRuntimeTree(scenario, options2) {
   const readBenchFiles = new Map;
   const runtimeElements = [];
   let attemptedLoads = 0;
-  let frontier = baseElements.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path));
+  const rootAncestorPaths = new Set(options2.rootBenchPath ? [getNestedBenchReadCacheKey(options2.rootBenchPath)] : []);
+  let frontier = baseElements.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path)).map((element) => ({ ancestorPaths: rootAncestorPaths, element }));
   for (let level = 0;level < depth && frontier.length > 0; level += 1) {
     const nextFrontier = [];
-    for (const parent of frontier) {
+    const pendingParents = [];
+    for (const { ancestorPaths, element: parent } of frontier) {
       if (nestedBenches.has(parent.id))
         continue;
+      const readCacheKey = getNestedBenchReadCacheKey(parent.path);
+      if (ancestorPaths.has(readCacheKey)) {
+        loadErrors.set(parent.id, "Recursive bench reference");
+        continue;
+      }
       if (attemptedLoads >= maxLoadedBenches || runtimeElements.length >= maxRuntimeElements) {
         loadErrors.set(parent.id, "Automatic nested bench limit reached");
         continue;
       }
       attemptedLoads += 1;
-      const readCacheKey = getNestedBenchReadCacheKey(parent.path);
       let pending = readBenchFiles.get(readCacheKey);
       if (!pending) {
         pending = options2.readBenchFile(parent.path);
         readBenchFiles.set(readCacheKey, pending);
       }
+      pendingParents.push({ ancestorPaths, parent, pending, readCacheKey });
+    }
+    for (const { ancestorPaths, parent, pending, readCacheKey } of pendingParents) {
       let loaded;
       try {
         loaded = await pending;
@@ -35960,7 +35970,9 @@ async function loadNestedBenchRuntimeTree(scenario, options2) {
         loadErrors.set(parent.id, "Automatic nested bench limit reached");
       const children = await loadNestedBenchRuntimeElements(parent, boundedBench, options2.preferredPreviewFormat, options2.vaultFiles);
       runtimeElements.push(...children);
-      nextFrontier.push(...children.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path)));
+      const childAncestorPaths = new Set(ancestorPaths);
+      childAncestorPaths.add(readCacheKey);
+      nextFrontier.push(...children.filter((element) => element.kind === "bench" && !element.error && Boolean(element.path)).map((element) => ({ ancestorPaths: childAncestorPaths, element })));
     }
     frontier = nextFrontier;
   }
