@@ -315,8 +315,13 @@ export function isCompatibleManagedWorkerForReuse(
   const snapshotWorker = snapshot.argv[1]!.slice(snapshotMarker + marker.length);
   const expectedWorker = expected.argv[1]!.slice(expectedMarker + marker.length);
   if (snapshotWorker === expectedWorker) return true;
-  return snapshotWorker === "start-realm/src/start-realm.ts"
-    && expectedWorker === "@klivcore/sdk-v1/src/start-realm.ts";
+  const publishedWorkerAliases = new Set([
+    "sdk-v1/src/start-realm.ts",
+    "klivcore-sdk-v1/src/start-realm.ts",
+    "@klivcore/sdk-v1/src/start-realm.ts",
+    "start-realm/src/start-realm.ts",
+  ]);
+  return publishedWorkerAliases.has(snapshotWorker) && publishedWorkerAliases.has(expectedWorker);
 }
 
 export function isStaleManagedRealmWorker(
