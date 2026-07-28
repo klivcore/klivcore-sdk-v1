@@ -23,6 +23,23 @@
         "js": "ui/main.js",
         "css": "ui/main.css"
       }
+    },
+    {
+      "id": "debug-bench-viewport-rgb-squares",
+      "path": "/debug/bench-viewport/rgb-squares",
+      "title": "Workbench debug: RGB squares",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-rgb-squares",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {
@@ -56,6 +73,10 @@
       {
         "method": "DELETE",
         "pathPrefix": "/v1/vaults"
+      },
+      {
+        "method": "GET",
+        "pathPrefix": "/v1/debug/assets"
       }
     ],
     "healthPath": "/health"

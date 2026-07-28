@@ -1397,7 +1397,8 @@ import { readFile as readFile2 } from "fs/promises";
 import { resolve as resolve3 } from "path";
 
 // packages/publish-sdk/src/gateway-server-core.ts
-import { chmod, lstat as lstat2, mkdir as mkdir3, writeFile as writeFile2 } from "fs/promises";
+import { constants } from "fs";
+import { chmod, lstat as lstat2, mkdir as mkdir3, open as open2, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
 
 // packages/server/src/index.ts
@@ -2738,7 +2739,7 @@ function parseWorkbenchGatewayConfig(value) {
 function normalizeWorkbenchGatewayConfig(configured) {
   return "vaultRoot" in configured ? parseWorkbenchGatewayConfig(configured) : configured;
 }
-async function createWorkbenchGatewayHandler(homePath, configured) {
+async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPath, publishedDebugCategoryIds = []) {
   const home = resolve2(homePath);
   const cache = resolve2(home, "cache");
   const effectiveConfig = configured ? normalizeWorkbenchGatewayConfig(configured) : undefined;
@@ -2777,15 +2778,102 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
     workspace: { id: "workbench", name: effectiveConfig.workspaceName }
   } : bootstrap;
   const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: vaults.map((vault) => ({ ...vault, cacheRoot: cache })) });
-  return requestHandler(server);
+  let debugAssets = new Map;
+  if (debugAssetsPath) {
+    debugAssets = await openPublishedDebugAssets(resolve2(debugAssetsPath), publishedDebugCategoryIds);
+  }
+  return requestHandler(server, debugAssets);
 }
-function requestHandler(server) {
-  return async (request) => {
+async function openPublishedDebugAssets(debugAssetsPath, publishedDebugCategoryIds) {
+  const opened = new Map;
+  const root = await open2(debugAssetsPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(() => {
+    return;
+  });
+  if (!root)
+    throw new TypeError("Workbench Gateway debug asset root is invalid");
+  try {
+    const rootInfo = await root.stat();
+    if (!rootInfo.isDirectory())
+      throw new TypeError("Workbench Gateway debug asset root is invalid");
+    const categoryIds = new Set;
+    for (const categoryId of publishedDebugCategoryIds) {
+      if (!/^[a-z0-9][a-z0-9-]{0,127}$/u.test(categoryId) || categoryIds.has(categoryId)) {
+        throw new TypeError("Workbench Gateway debug category id is invalid");
+      }
+      categoryIds.add(categoryId);
+      for (const extension of ["js", "css"]) {
+        const name = `${categoryId}.${extension}`;
+        let file = await open2(`/proc/self/fd/${root.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          const info = await file.stat();
+          if (!info.isFile() || info.size > 16 * 1024 * 1024) {
+            throw new TypeError(`Workbench Gateway debug asset is invalid: ${name}`);
+          }
+          opened.set(name, Object.freeze({
+            file,
+            size: info.size,
+            contentType: extension === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8"
+          }));
+          file = undefined;
+        } finally {
+          await file?.close().catch(() => {
+            return;
+          });
+        }
+      }
+    }
+    await root.close();
+    return opened;
+  } catch (error) {
+    await Promise.all([root.close().catch(() => {
+      return;
+    }), ...[...opened.values()].map(({ file }) => file.close().catch(() => {
+      return;
+    }))]);
+    throw error;
+  }
+}
+async function readPublishedDebugAsset(asset) {
+  const buffer = new ArrayBuffer(asset.size);
+  const bytes = new Uint8Array(buffer);
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const { bytesRead } = await asset.file.read(bytes, offset, bytes.byteLength - offset, offset);
+    if (bytesRead === 0)
+      throw new Error("Workbench Gateway debug asset ended unexpectedly");
+    offset += bytesRead;
+  }
+  return buffer;
+}
+function requestHandler(server, debugAssets) {
+  let closed = false;
+  const handler = async (request) => {
+    if (closed)
+      return new Response("Gateway closed", { status: 503 });
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health" && !url.search)
       return Response.json({ status: "ok", gateway: "workbench-v1" });
+    const debugMatch = request.method === "GET" && !url.search ? /^\/v1\/debug\/assets\/([a-z0-9][a-z0-9-]{0,127})\.(js|css)$/u.exec(url.pathname) : null;
+    if (debugMatch) {
+      const asset = debugAssets.get(`${debugMatch[1]}.${debugMatch[2]}`);
+      if (!asset)
+        return new Response("Not found", { status: 404 });
+      return new Response(await readPublishedDebugAsset(asset), {
+        headers: { "cache-control": "no-store", "content-type": asset.contentType }
+      });
+    }
     return server.fetch(request);
   };
+  return Object.assign(handler, {
+    async close() {
+      if (closed)
+        return;
+      closed = true;
+      await Promise.all([...debugAssets.values()].map(({ file }) => file.close().catch(() => {
+        return;
+      })));
+    }
+  });
 }
 async function seed(path, content) {
   await mkdir3(dirname3(path), { recursive: true, mode: 448 });
@@ -2796,6 +2884,11 @@ async function seed(path, content) {
       throw error;
   }
 }
+
+// packages/publish-sdk/src/gateway-debug-publication.ts
+var publishedWorkbenchDebugCategoryIds = Object.freeze([
+  "bench-viewport"
+]);
 
 // packages/publish-sdk/src/gateway-server.ts
 function requiredAbsolute(name) {
@@ -2813,15 +2906,21 @@ function requiredPort() {
 var home = requiredAbsolute("KLIVCORE_GATEWAY_HOME");
 var configPath = requiredAbsolute("KLIVCORE_GATEWAY_CONFIG");
 var config = JSON.parse(await readFile2(configPath, "utf8"));
-var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config));
+var debugAssets = resolve3(import.meta.dir, "../debug/assets");
+var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config), debugAssets, publishedWorkbenchDebugCategoryIds);
 var server = Bun.serve({ hostname: "127.0.0.1", port: requiredPort(), fetch: handler });
 console.log(`Canonical Workbench Gateway ready on http://127.0.0.1:${server.port}`);
 var stopping = false;
-function stop() {
+async function stop() {
   if (stopping)
     return;
   stopping = true;
+  await handler.close();
   server.stop(true);
 }
-process.once("SIGINT", stop);
-process.once("SIGTERM", stop);
+process.once("SIGINT", () => {
+  stop();
+});
+process.once("SIGTERM", () => {
+  stop();
+});
