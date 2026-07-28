@@ -65,9 +65,12 @@ async function mount(host) {
   }
   return () => {
     disposed = true;
-    scenarioCleanup?.();
-    style?.remove();
-    status.remove();
+    try {
+      scenarioCleanup?.();
+    } finally {
+      style?.remove();
+      status.remove();
+    }
   };
 }
 export {
