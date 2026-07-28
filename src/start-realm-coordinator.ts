@@ -824,9 +824,26 @@ async function startGatewayMount(mount: ActiveGatewayMount): Promise<void> {
   }
 }
 
+async function userOwnedAncestorDirectories(descendant: string): Promise<readonly string[]> {
+  const uid = process.getuid?.();
+  if (uid === undefined) throw new Error("Default Workbench vault access requires a current user identity");
+  const owned: string[] = [];
+  for (let path = dirname(descendant);;) {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error(`Workbench vault ancestor is unsafe: ${path}`);
+    if (info.uid === uid) owned.push(path);
+    else if ((info.mode & 0o001) === 0) throw new Error(`Workbench vault ancestor is not traversable: ${path}`);
+    const parent = dirname(path);
+    if (parent === path) break;
+    path = parent;
+  }
+  return Object.freeze(owned);
+}
+
 async function prepareDefaultWorkbenchVaultAccess(
   key: string,
   gatewayConfig: Readonly<Record<string, unknown>>,
+  serviceUid: number,
   serviceGid: number,
 ): Promise<void> {
   if (key !== "workbench" || typeof gatewayConfig.vaultRoot !== "string") return;
@@ -847,6 +864,14 @@ async function prepareDefaultWorkbenchVaultAccess(
   await sudo(["chgrp", String(serviceGid), "--", realmRoot, vaultsRoot], "failed to share default Workbench vault parents");
   await sudo(["chmod", "g+x", "--", realmRoot, vaultsRoot], "failed to make default Workbench vault parents traversable");
   await sudo(["chmod", "g+s", "--", vaultRoot], "failed to preserve the default Workbench vault service group");
+  const ancestors = await userOwnedAncestorDirectories(realmRoot);
+  if (ancestors.length > 0) {
+    await sudo(["chmod", "o+x", "--", ...ancestors], "failed to make user-owned Workbench vault ancestors traversable");
+  }
+  for (const [flag, path] of [["-x", vaultRoot], ["-r", resolve(vaultRoot, "main.bench.hjson")]] as const) {
+    const access = await run(["sudo", "-n", `--user=#${serviceUid}`, `--group=#${serviceGid}`, "test", flag, path]);
+    if (access.code !== 0) throw new Error(access.stderr.trim() || `failed to verify isolated Workbench access to its default vault: ${path}`);
+  }
 }
 
 async function ensureGateways(): Promise<boolean> {
@@ -866,7 +891,7 @@ async function ensureGateways(): Promise<boolean> {
     const revision = gatewayMountRevision(key, mountConfig);
     const sourceRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
     const isolation = await ensureGatewayServiceUser(key);
-    await prepareDefaultWorkbenchVaultAccess(key, mountConfig.config, isolation.gid);
+    await prepareDefaultWorkbenchVaultAccess(key, mountConfig.config, isolation.uid, isolation.gid);
     const immutable = await ensureImmutableGatewayPackage(key, revision, sourceRoot);
     const packageRoot = immutable.packageRoot;
     const manifest = await loadGatewayManifest(packageRoot);
