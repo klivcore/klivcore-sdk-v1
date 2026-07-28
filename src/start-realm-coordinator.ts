@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
@@ -533,11 +533,12 @@ async function waitForGateway(mount: ActiveGatewayMount): Promise<void> {
   if (!serverRole) return;
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (!await tmuxExists(mount.sessions[serverRole]!)) throw new Error(`Gateway server exited during startup: ${mount.key}`);
+    if (!await tmuxExists(mount.sessions[serverRole]!)) throw await gatewayStartupFailure(mount, serverRole);
     if (await gatewayHealthy(mount)) return;
     await Bun.sleep(250);
   }
-  throw new Error(`Gateway did not become healthy: ${mount.key}`);
+  const output = await gatewayProcessLogTail(mount, serverRole);
+  throw new Error(`Gateway did not become healthy: ${mount.key}${output ? `\nGateway process log (redacted):\n${output}` : "\nGateway process log is empty"}`);
 }
 
 function gatewayProcessEnvironment(mount: ActiveGatewayMount): Readonly<Record<string, string>> {
@@ -751,6 +752,37 @@ async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
   if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, `Gateway session cleanup was incomplete: ${mount.key}`);
 }
 
+function gatewayProcessLogPath(mount: ActiveGatewayMount, role: string): string {
+  return resolve(stateDir, "logs", "gateways", `${mount.key}-${role}.log`);
+}
+
+function redactGatewayLog(text: string): string {
+  return text
+    .replace(/https:\/\/[^\s]*\/auth\/register[^\s]*/giu, "[REDACTED registration URL]")
+    .replace(/\b(token|secret|password|authorization)=\S+/giu, "$1=[REDACTED]")
+    .replace(/[^\t\n\r\x20-\x7e]/gu, "?");
+}
+
+async function gatewayProcessLogTail(mount: ActiveGatewayMount, role: string): Promise<string> {
+  let handle;
+  try {
+    handle = await open(gatewayProcessLogPath(mount, role), "r");
+    const info = await handle.stat();
+    const length = Math.min(info.size, 8 * 1024);
+    const buffer = Buffer.alloc(8 * 1024);
+    const { bytesRead } = await handle.read(buffer, 0, length, Math.max(0, info.size - length));
+    return redactGatewayLog(buffer.subarray(0, bytesRead).toString("utf8")).trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw error;
+  } finally { await handle?.close(); }
+}
+
+async function gatewayStartupFailure(mount: ActiveGatewayMount, role: string): Promise<Error> {
+  const output = await gatewayProcessLogTail(mount, role);
+  return new Error(`Gateway server exited during startup: ${mount.key}${output ? `\nGateway process log (redacted):\n${output}` : "\nGateway process log is empty"}`);
+}
+
 async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entrypoint: string): Promise<void> {
   const session = mount.sessions[role];
   if (!session) throw new Error(`Gateway process session is missing: ${mount.key}/${role}`);
@@ -763,7 +795,10 @@ async function startGatewayProcess(mount: ActiveGatewayMount, role: string, entr
     gatewayProcessEnvironment(mount),
     [bunPath, resolve(mount.packageRoot, entrypoint)],
   );
-  const command = `exec ${argv.map(shellQuote).join(" ")}`;
+  const logPath = gatewayProcessLogPath(mount, role);
+  await mkdir(dirname(logPath), { recursive: true, mode: 0o700 });
+  await privateWrite(logPath, "");
+  const command = `exec ${argv.map(shellQuote).join(" ")} >> ${shellQuote(logPath)} 2>&1`;
   const started = await tmux(["new-session", "-d", "-s", session, "-c", mount.packageRoot, command]);
   if (started.code !== 0) throw new Error(started.stderr.trim() || `failed to start Gateway process ${mount.key}/${role}`);
 }
