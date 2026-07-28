@@ -840,6 +840,18 @@ async function userOwnedAncestorDirectories(descendant: string): Promise<readonl
   return Object.freeze(owned);
 }
 
+function gatewayPathAccessAllows(
+  info: Readonly<{ uid: number; gid: number; mode: number }>,
+  serviceUid: number,
+  serviceGid: number,
+  required: number,
+): boolean {
+  const granted = info.uid === serviceUid ? (info.mode >> 6) & 0o7
+    : info.gid === serviceGid ? (info.mode >> 3) & 0o7
+      : info.mode & 0o7;
+  return (granted & required) === required;
+}
+
 async function prepareDefaultWorkbenchVaultAccess(
   key: string,
   gatewayConfig: Readonly<Record<string, unknown>>,
@@ -868,9 +880,22 @@ async function prepareDefaultWorkbenchVaultAccess(
   if (ancestors.length > 0) {
     await sudo(["chmod", "o+x", "--", ...ancestors], "failed to make user-owned Workbench vault ancestors traversable");
   }
-  for (const [flag, path] of [["-x", vaultRoot], ["-r", resolve(vaultRoot, "main.bench.hjson")]] as const) {
-    const access = await run(["sudo", "-n", `--user=#${serviceUid}`, `--group=#${serviceGid}`, "test", flag, path]);
-    if (access.code !== 0) throw new Error(access.stderr.trim() || `failed to verify isolated Workbench access to its default vault: ${path}`);
+  for (let path = vaultRoot;;) {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || !gatewayPathAccessAllows(info, serviceUid, serviceGid, 0o1)) {
+      throw new Error(`failed to verify isolated Workbench access to its default vault: ${path}`);
+    }
+    const parent = dirname(path);
+    if (parent === path) break;
+    path = parent;
+  }
+  const vaultInfo = await lstat(vaultRoot);
+  const initialView = resolve(vaultRoot, "main.bench.hjson");
+  const initialViewInfo = await lstat(initialView);
+  if (!gatewayPathAccessAllows(vaultInfo, serviceUid, serviceGid, 0o5)
+    || !initialViewInfo.isFile() || initialViewInfo.isSymbolicLink()
+    || !gatewayPathAccessAllows(initialViewInfo, serviceUid, serviceGid, 0o4)) {
+    throw new Error(`failed to verify isolated Workbench access to its default vault: ${initialView}`);
   }
 }
 
