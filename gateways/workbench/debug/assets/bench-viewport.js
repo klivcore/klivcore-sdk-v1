@@ -30025,18 +30025,32 @@ function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
 }
 
 // packages/publish-sdk/src/gateway-debug-bench-viewport.tsx
-function mountDebugScenario(host, scenarioId, context) {
+function mountDebugScenario(host, scenarioId, context, createDebugRoot = import_client.createRoot) {
   const container = host.root.ownerDocument.createElement("div");
   container.setAttribute("data-workbench-debug-category", "bench-viewport");
   host.root.append(container);
-  const root2 = import_client.createRoot(container);
-  root2.render(benchViewportDebugComponent.renderScenario(scenarioId, {
-    ...context,
-    componentName: benchViewportDebugComponent.name
-  }));
+  let root2;
+  try {
+    root2 = createDebugRoot(container);
+    root2.render(benchViewportDebugComponent.renderScenario(scenarioId, {
+      ...context,
+      componentName: benchViewportDebugComponent.name
+    }));
+  } catch (error) {
+    try {
+      root2?.unmount();
+    } catch {}
+    try {
+      container.remove();
+    } catch {}
+    throw error;
+  }
   return () => {
-    root2.unmount();
-    container.remove();
+    try {
+      root2.unmount();
+    } finally {
+      container.remove();
+    }
   };
 }
 export {
