@@ -13,8 +13,8 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 115847,
-      "sha256": "63edec51600e5a6e457a86116d95ab92eb6938d6c80e3338b7dc60f428a719e3",
+      "bytes": 115861,
+      "sha256": "f772e8f4644a7798ad416fd4f9f19010c07c66983ed8c2feca23e327ac67cc3e",
       "mode": 420
     },
     {
@@ -25,14 +25,14 @@
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1604016,
-      "sha256": "ef4b515ad6d81cf44ff4ae139041500b6f90afd72e1b3a45c9fa1335e6760bdd",
+      "bytes": 1604030,
+      "sha256": "cfccc77ac5a152e28d6bb601bc5576c134d620d7051928f1a43b2a89a9a9258a",
       "mode": 420
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 5549,
-      "sha256": "0841a3d429d5959c4d354755041062aab4f1f51951bf80c0b6e06d06b27342d9",
+      "bytes": 6002,
+      "sha256": "ffea3944adb9ebd9dc4101caaebdb20b70aba12088f8a2cdca2c9e1e85e8cb99",
       "mode": 420
     },
     {
@@ -49,8 +49,8 @@
     },
     {
       "path": "ui/debug-index.js",
-      "bytes": 532133,
-      "sha256": "f594a2aaf5255568a1ba062ff245d8513930f07df950d2b6a376ec77b52f9952",
+      "bytes": 532147,
+      "sha256": "f252fb853994d7e5e84e2b3a28a8f68c29fc0e1cd7ef0c1021d66c5825616e1e",
       "mode": 420
     },
     {
