@@ -123,6 +123,23 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-bench-viewport-comment-parenting",
+      "path": "/debug/bench-viewport/comment-parenting",
+      "title": "Workbench debug: Comment parenting",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-comment-parenting",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {
