@@ -4,6 +4,8 @@ import { basename, relative, resolve } from "node:path";
 import { parseGatewayPackageLocator, type GatewayMountConfig } from "./start-realm-core";
 
 export type GatewayProcess = Readonly<{ role: string; entrypoint: string }>;
+export type GatewayAgentTool = Readonly<{ command: string; description: string; entrypoint: string }>;
+export type DiscoveredGatewayAgentTool = Readonly<GatewayAgentTool & { gateway: string }>;
 export type GatewayServer = Readonly<{
   id: string;
   process: string;
@@ -26,6 +28,7 @@ export type GatewayManifest = Readonly<{
   }>[];
   server: GatewayServer | null;
   processes: readonly GatewayProcess[];
+  agentTools?: readonly GatewayAgentTool[];
 }>;
 
 export type ActiveGatewayMount = Readonly<{
@@ -180,7 +183,8 @@ const strings = (value: unknown, pattern: RegExp, maximum: number): readonly str
 
 export function parseGatewayManifest(value: unknown): GatewayManifest {
   const root = record(value);
-  if (!exact(root, ["schemaVersion", "contractVersion", "id", "capabilities", "routes", "server", "processes"])
+  const rootKeys = ["schemaVersion", "contractVersion", "id", "capabilities", "routes", "server", "processes", ...(root.agentTools === undefined ? [] : ["agentTools"])];
+  if (!exact(root, rootKeys)
     || root.schemaVersion !== 1 || root.contractVersion !== 1 || typeof root.id !== "string" || !idPattern.test(root.id)) throw new TypeError("Gateway package contract is invalid");
   const capabilities = strings(root.capabilities, capabilityPattern, 64);
   if (!Array.isArray(root.routes) || root.routes.length < 1 || root.routes.length > 32) throw new TypeError("Gateway package contract is invalid");
@@ -206,6 +210,19 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
     return Object.freeze({ role: process.role, entrypoint: process.entrypoint });
   });
   if (new Set(processes.map((process) => process.role)).size !== processes.length) throw new TypeError("Gateway package contract is invalid");
+  let agentTools: readonly GatewayAgentTool[] | undefined;
+  if (root.agentTools !== undefined) {
+    if (!Array.isArray(root.agentTools) || root.agentTools.length < 1 || root.agentTools.length > 16) throw new TypeError("Gateway package contract is invalid");
+    agentTools = Object.freeze(root.agentTools.map((raw) => {
+      const tool = record(raw);
+      if (!exact(tool, ["command", "description", "entrypoint"])
+        || typeof tool.command !== "string" || !/^[a-z][a-z0-9-]{0,31}$/u.test(tool.command)
+        || typeof tool.description !== "string" || tool.description.length < 1 || tool.description.length > 200
+        || !safePath(tool.entrypoint)) throw new TypeError("Gateway package contract is invalid");
+      return Object.freeze({ command: tool.command, description: tool.description, entrypoint: tool.entrypoint });
+    }));
+    if (new Set(agentTools.map((tool) => tool.command)).size !== agentTools.length) throw new TypeError("Gateway package contract is invalid");
+  }
   let server: GatewayServer | null = null;
   if (root.server !== null) {
     const rawServer = record(root.server);
@@ -225,7 +242,7 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
     server = Object.freeze({ id: rawServer.id, process: rawServer.process, requiredCapabilities: serverCapabilities, allowedRequests: Object.freeze(allowedRequests), healthPath: rawServer.healthPath as string });
   }
   if (routes.some((route) => route.services.some((service) => service !== server?.id))) throw new TypeError("Gateway package contract is invalid");
-  return Object.freeze({ schemaVersion: 1, contractVersion: 1, id: root.id, capabilities, routes: Object.freeze(routes), server, processes: Object.freeze(processes) });
+  return Object.freeze({ schemaVersion: 1, contractVersion: 1, id: root.id, capabilities, routes: Object.freeze(routes), server, processes: Object.freeze(processes), ...(agentTools ? { agentTools } : {}) });
 }
 
 export function gatewayMountRevision(key: string, mount: GatewayMountConfig): string {
@@ -311,6 +328,37 @@ export async function readGatewayAsset(root: string, path: string, maximum = 102
 
 export async function loadGatewayManifest(packageRoot: string): Promise<GatewayManifest> {
   return parseGatewayManifest(JSON.parse(await readGatewayAsset(packageRoot, "klivcore.gateway.json", 128 * 1024)));
+}
+
+export async function discoverGatewayAgentTools(gatewaysRoot: string): Promise<readonly DiscoveredGatewayAgentTool[]> {
+  const root = resolve(gatewaysRoot);
+  const rootInfo = await lstat(root);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink()) throw new Error("Gateway root is invalid");
+  const packages = (await readdir(root, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .sort((left, right) => left.name.localeCompare(right.name));
+  if (packages.length > 128) throw new Error("Gateway root exceeds safety limits");
+  const tools: DiscoveredGatewayAgentTool[] = [];
+  const gatewayIds = new Set<string>();
+  for (const entry of packages) {
+    const packageRoot = resolve(root, entry.name);
+    const manifest = await loadGatewayManifest(packageRoot);
+    if (gatewayIds.has(manifest.id)) throw new Error(`Duplicate Gateway id: ${manifest.id}`);
+    gatewayIds.add(manifest.id);
+    for (const tool of manifest.agentTools ?? []) {
+      const entrypoint = resolve(packageRoot, tool.entrypoint);
+      const info = await lstat(entrypoint);
+      if (!info.isFile() || info.isSymbolicLink()) throw new Error(`Gateway agent tool is invalid: ${manifest.id}/${tool.command}`);
+      tools.push(Object.freeze({ gateway: manifest.id, ...tool, entrypoint }));
+    }
+  }
+  return Object.freeze(tools.sort((left, right) => left.gateway.localeCompare(right.gateway) || left.command.localeCompare(right.command)));
+}
+
+export async function resolveGatewayAgentTool(gatewaysRoot: string, gateway: string, command: string): Promise<DiscoveredGatewayAgentTool> {
+  const tool = (await discoverGatewayAgentTools(gatewaysRoot)).find((candidate) => candidate.gateway === gateway && candidate.command === command);
+  if (!tool) throw new Error(`Gateway agent tool not found: ${gateway}/${command}`);
+  return tool;
 }
 
 function parsePersistedGatewayManifest(value: unknown): GatewayManifest {

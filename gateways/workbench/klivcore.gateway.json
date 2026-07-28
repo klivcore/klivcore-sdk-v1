@@ -65,5 +65,12 @@
       "role": "server",
       "entrypoint": "bin/server.js"
     }
+  ],
+  "agentTools": [
+    {
+      "command": "bench",
+      "description": "Inspect, validate, create, and safely edit Workbench bench files",
+      "entrypoint": "bin/bench.js"
+    }
   ]
 }

@@ -6,6 +6,12 @@
   },
   "files": [
     {
+      "path": "bin/bench.js",
+      "bytes": 79786,
+      "sha256": "dd23ff7e26cab952a4eac8983eaf86ce983a532c00b442f86f8c3f38170a2236",
+      "mode": 420
+    },
+    {
       "path": "bin/server.js",
       "bytes": 106930,
       "sha256": "42f1ad5a77698fa4a534a58c07f4df016e137c5ea9a6337890f8779ee8de9da4",
@@ -13,8 +19,8 @@
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 1260,
-      "sha256": "c58e77d63a576b159066f729bfc4518af2db6babcc4948d2df96462c71f980c8",
+      "bytes": 1445,
+      "sha256": "76a7517d5ade852c4789dfa0a1d126a8c2666f0ee5aebef2e6681b73edbfb24d",
       "mode": 420
     },
     {
