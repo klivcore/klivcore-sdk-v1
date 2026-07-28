@@ -59,6 +59,42 @@ export type ActiveSshRelayRecord = Readonly<{
   realmPublicOrigin?: string;
 }>;
 
+const START_REALM_FAILURE_LIMIT = 16 * 1024;
+
+function redactStartRealmFailure(value: string): string {
+  return value
+    .replace(/\b(token|secret|password|authorization|cookie)(\s*[:=]\s*)([^\s]+)/giu, "$1$2[REDACTED]")
+    .replace(/([?&#](?:token|secret|password|authorization|cookie)=)[^&#\s]*/giu, "$1[REDACTED]")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/gu, "?");
+}
+
+function renderStartRealmFailure(error: unknown, depth: number, seen: Set<unknown>): readonly string[] {
+  const indent = "  ".repeat(depth);
+  if (depth > 8) return [`${indent}[nested failure depth exceeded]`];
+  if (error && typeof error === "object") {
+    if (seen.has(error)) return [`${indent}[cyclic failure]`];
+    seen.add(error);
+  }
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "start-realm failed";
+  const lines = [ `${indent}${message || error?.constructor?.name || "start-realm failed"}` ];
+  if (error instanceof AggregateError) {
+    const nested = [...error.errors].slice(0, 16);
+    nested.forEach((failure, index) => {
+      lines.push(`${indent}  Cause ${index + 1}:`);
+      lines.push(...renderStartRealmFailure(failure, depth + 2, seen));
+    });
+    if (error.errors.length > nested.length) lines.push(`${indent}  [additional causes omitted]`);
+  }
+  return lines;
+}
+
+export function formatStartRealmFailure(error: unknown): string {
+  const rendered = redactStartRealmFailure(renderStartRealmFailure(error, 0, new Set()).join("\n"));
+  if (rendered.length <= START_REALM_FAILURE_LIMIT) return rendered;
+  const suffix = "\n[start-realm failure output truncated]";
+  return `${rendered.slice(0, START_REALM_FAILURE_LIMIT - suffix.length)}${suffix}`;
+}
+
 export function formatRegistrationUrlBlock(value: string): string {
   let parsed: URL;
   try {

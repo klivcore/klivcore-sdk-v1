@@ -1,4 +1,5 @@
 import { planLatestSdkExecution, reconcileRealmDirectory, resolveRealmDirectoryArgs } from "./start-realm-directory";
+import { formatStartRealmFailure } from "./start-realm-core";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 
@@ -48,6 +49,6 @@ try {
     await import("./start-realm-coordinator");
   }
 } catch (error) {
-  console.error(error instanceof Error ? error.message : "start-realm failed");
+  console.error(formatStartRealmFailure(error));
   process.exitCode = 1;
 }

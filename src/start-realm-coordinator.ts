@@ -753,7 +753,7 @@ async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
 }
 
 function gatewayProcessLogPath(mount: ActiveGatewayMount, role: string): string {
-  return resolve(stateDir, "logs", "gateways", `${mount.key}-${role}.log`);
+  return resolve(stateDir, "logs", "gateways", `${mount.key}-${role}-${mount.revision.slice(0, 12)}.log`);
 }
 
 function redactGatewayLog(text: string): string {
