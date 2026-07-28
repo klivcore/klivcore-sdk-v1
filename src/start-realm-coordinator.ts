@@ -624,15 +624,17 @@ async function tmuxSessionDead(session: string): Promise<boolean> {
   return value === "1";
 }
 
-async function gatewaySessionsRecoverable(mount: ActiveGatewayMount): Promise<boolean> {
-  try {
-    for (const process of mount.manifest.processes) {
+async function assertGatewaySessionsRecoverable(mount: ActiveGatewayMount): Promise<void> {
+  for (const process of mount.manifest.processes) {
+    try {
       const session = mount.sessions[process.role];
       if (!session || !await tmuxExists(session) || await tmuxSessionDead(session)) continue;
       await inspectOwnedGatewaySession(session, mount, process.entrypoint);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Gateway orphan live session identity is invalid: ${mount.key}/${process.role}: ${detail}`, { cause: error });
     }
-    return true;
-  } catch { return false; }
+  }
 }
 
 async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot): Promise<string> {
@@ -717,9 +719,7 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
     gatewayProcessEnvironment(recoveredBase),
   );
   const recovered = Object.freeze({ ...recoveredBase, port });
-  if (!await gatewaySessionsRecoverable(recovered)) {
-    throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
-  }
+  await assertGatewaySessionsRecoverable(recovered);
   return recovered;
 }
 
