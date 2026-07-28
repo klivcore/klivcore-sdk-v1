@@ -57,6 +57,24 @@ export function replaceActiveGatewayMount(
     .sort((left, right) => left.key.localeCompare(right.key)));
 }
 
+export function recoverGatewayPackageRootFromWorkerArgv(
+  argv: readonly string[],
+  bunPath: string,
+  sandboxRoot: string,
+  entrypoint: string,
+): string {
+  if (argv.length !== 2 || argv[0] !== bunPath) throw new TypeError("Gateway worker identity is invalid");
+  const runtimeRoot = resolve(sandboxRoot, "runtime");
+  const executable = resolve(argv[1]!);
+  const packageRoot = executable.slice(0, -entrypoint.length).replace(/\/$/u, "");
+  if (!packageRoot.startsWith(`${runtimeRoot}/`)
+    || resolve(packageRoot, entrypoint) !== executable
+    || !/^[a-f0-9]{64}-[a-f0-9]{16}$/u.test(basename(packageRoot))) {
+    throw new TypeError("Gateway worker identity is invalid");
+  }
+  return packageRoot;
+}
+
 export function recoverGatewayPortFromWorkerEnvironment(
   text: string,
   expected: Readonly<Record<string, string>>,

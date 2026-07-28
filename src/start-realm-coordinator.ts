@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
-import { dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -625,6 +625,35 @@ async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot)
   return result.stdout;
 }
 
+async function findOwnedGatewayWorkerFromImmutablePackage(
+  rootPid: number,
+  mount: ActiveGatewayMount,
+  entrypoint: string,
+  bunPath: string,
+): Promise<Readonly<{ worker: ManagedProcessSnapshot; packageRoot: string }>> {
+  const sandboxRoot = gatewaySandboxRoot(config.realm.id, stateDir, mount.key);
+  const queue = [...await processChildren(rootPid)];
+  const matches: Array<Readonly<{ worker: ManagedProcessSnapshot; packageRoot: string }>> = [];
+  let inspected = 0;
+  while (queue.length > 0) {
+    const pid = queue.shift()!;
+    if (++inspected > 16) throw new Error("managed process tree exceeds safety limits");
+    const snapshot = await readManagedProcessSnapshot(pid);
+    if (!snapshot) continue;
+    if (snapshot.uid === mount.serviceUid && snapshot.gid === mount.serviceGid) {
+      try {
+        matches.push(Object.freeze({
+          worker: snapshot,
+          packageRoot: recoverGatewayPackageRootFromWorkerArgv(snapshot.argv, bunPath, sandboxRoot, entrypoint),
+        }));
+      } catch { /* not the bounded immutable Gateway worker */ }
+    }
+    queue.push(...await processChildren(pid));
+  }
+  if (matches.length !== 1) throw new Error("managed process tree does not contain one exact service worker");
+  return matches[0]!;
+}
+
 async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<ActiveGatewayMount | undefined> {
   const existing = await Promise.all(mount.manifest.processes.map(async (process) => await tmuxExists(mount.sessions[process.role]!)));
   if (existing.every((value) => !value)) return undefined;
@@ -642,16 +671,31 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
   const identity = coordinatorIdentity();
   if (!pane || pane.uid !== identity.uid) throw new Error(`Gateway orphan supervisor identity is invalid: ${mount.key}`);
   const bunPath = await ensureSandboxBun();
-  const worker = await findExactManagedDescendant(pane.pid, Object.freeze({
-    uid: mount.serviceUid,
-    gid: mount.serviceGid,
-    argv: Object.freeze([bunPath, resolve(mount.packageRoot, server.entrypoint)]),
-  }));
+  const located = await findOwnedGatewayWorkerFromImmutablePackage(pane.pid, mount, server.entrypoint, bunPath);
+  const packageDigest = await gatewayPackageDigest(located.packageRoot);
+  const packageName = basename(located.packageRoot);
+  const revision = packageName.slice(0, 64);
+  if (packageName !== `${revision}-${packageDigest.slice(0, 16)}`) {
+    throw new Error(`Gateway orphan package identity is invalid: ${mount.key}`);
+  }
+  const manifest = await loadGatewayManifest(located.packageRoot);
+  const sessions = Object.freeze(Object.fromEntries(manifest.processes.map((process) => [
+    process.role,
+    gatewayProcessSessionName(config.realm.id, stateDir, mount.key, process.role),
+  ])));
+  const recoveredBase = Object.freeze({
+    ...mount,
+    revision,
+    packageDigest,
+    packageRoot: located.packageRoot,
+    sessions,
+    manifest,
+  });
   const port = recoverGatewayPortFromWorkerEnvironment(
-    await readExactGatewayWorkerEnvironment(worker),
-    gatewayProcessEnvironment(mount),
+    await readExactGatewayWorkerEnvironment(located.worker),
+    gatewayProcessEnvironment(recoveredBase),
   );
-  const recovered = Object.freeze({ ...mount, port });
+  const recovered = Object.freeze({ ...recoveredBase, port });
   if (!await gatewaySessionsOwned(recovered) || !await gatewayHealthy(recovered)) {
     throw new Error(`Gateway orphan identity or health is invalid: ${mount.key}`);
   }
@@ -771,9 +815,9 @@ async function ensureGateways(): Promise<boolean> {
       manifest,
     });
     const orphan = prior ? undefined : await recoverOwnedGatewayOrphan(unassigned);
-    const candidate = orphan ?? Object.freeze({
+    const candidate = Object.freeze({
       ...unassigned,
-      port: manifest.server === null ? null : prior?.port ?? await allocateGatewayPort(),
+      port: manifest.server === null ? null : prior?.port ?? orphan?.port ?? await allocateGatewayPort(),
     });
     const authority = prior ?? orphan;
     const reusable = authority?.revision === candidate.revision && authority.source === candidate.source
@@ -795,17 +839,20 @@ async function ensureGateways(): Promise<boolean> {
       await writeActiveGateways(journal);
       continue;
     }
-    console.log(`${prior ? "Updating" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
+    console.log(`${prior ? "Updating" : orphan ? "Updating orphaned" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
     try {
       if (prior) await stopGatewaySessions(prior);
+      else if (orphan) await stopGatewaySessions(orphan);
       await stopGatewaySessions(candidate);
       await startGatewayMount(candidate);
     } catch (replacementError) {
       await failAfterRollbackOperations(replacementError, `Gateway replacement rollback was incomplete: ${key}`, [
         async () => stopGatewaySessions(candidate),
         ...(prior ? [async () => stopGatewaySessions(prior)] : []),
+        ...(orphan ? [async () => stopGatewaySessions(orphan)] : []),
         ...(priorConfig !== undefined ? [async () => installGatewayConfigText(prior!.home, prior!.serviceUser, prior!.configPath, priorConfig)] : []),
         ...(prior ? [async () => startGatewayMount(prior)] : []),
+        ...(orphan ? [async () => startGatewayMount(orphan)] : []),
       ]);
     }
     active.push(candidate);
