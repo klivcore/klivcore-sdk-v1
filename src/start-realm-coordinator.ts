@@ -852,50 +852,82 @@ function gatewayPathAccessAllows(
   return (granted & required) === required;
 }
 
-async function prepareDefaultWorkbenchVaultAccess(
+async function prepareWorkbenchVaultAccess(
   key: string,
   gatewayConfig: Readonly<Record<string, unknown>>,
   serviceUid: number,
   serviceGid: number,
 ): Promise<void> {
-  if (key !== "workbench" || typeof gatewayConfig.vaultRoot !== "string") return;
+  if (key !== "workbench") return;
   const realmRoot = dirname(configPath);
   const vaultsRoot = resolve(realmRoot, "vaults");
-  const expected = resolve(dirname(configPath), "vaults", `${config.realm.id}-vault`);
-  const vaultRoot = resolve(gatewayConfig.vaultRoot);
-  if (vaultRoot !== expected) return;
+  const configuredVaults = Array.isArray(gatewayConfig.vaults) ? gatewayConfig.vaults : undefined;
+  const entries: ReadonlyArray<Readonly<{ id: string; root: string }>> = configuredVaults
+    ? configuredVaults.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Workbench vault config is invalid");
+      const entry = value as Record<string, unknown>;
+      if (typeof entry.id !== "string" || typeof entry.root !== "string") throw new Error("Workbench vault config is invalid");
+      return Object.freeze({ id: entry.id, root: resolve(entry.root) });
+    })
+    : typeof gatewayConfig.vaultRoot === "string"
+      ? [Object.freeze({ id: "main", root: resolve(gatewayConfig.vaultRoot) })]
+      : [];
+  const managed = new Map<string, Readonly<{ id: string; root: string }>>();
+  for (const entry of entries) {
+    const vaultRoot = entry.root;
+    if (dirname(vaultRoot) !== vaultsRoot) continue;
+    if (managed.has(vaultRoot)) throw new Error(`Workbench vault root is duplicated: ${vaultRoot}`);
+    managed.set(vaultRoot, entry);
+  }
+  const vaultRoots = Object.freeze([...managed.keys()]);
+  if (vaultRoots.length === 0) return;
   const uid = process.getuid?.();
-  for (const path of [realmRoot, vaultsRoot, vaultRoot]) {
+  for (const path of [realmRoot, vaultsRoot, ...vaultRoots]) {
     const info = await lstat(path);
     if (!info.isDirectory() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid)) {
-      throw new Error(`Default Workbench vault path must be an owned non-symlink directory: ${path}`);
+      throw new Error(`Realm-local Workbench vault path must be an owned non-symlink directory: ${path}`);
     }
   }
-  await sudo(["chgrp", "-R", String(serviceGid), "--", vaultRoot], "failed to share the default Workbench vault with its isolated service");
-  await sudo(["chmod", "-R", "g+rwX", "--", vaultRoot], "failed to grant the isolated Workbench service access to its default vault");
-  await sudo(["chgrp", String(serviceGid), "--", realmRoot, vaultsRoot], "failed to share default Workbench vault parents");
-  await sudo(["chmod", "g+x", "--", realmRoot, vaultsRoot], "failed to make default Workbench vault parents traversable");
-  await sudo(["chmod", "g+s", "--", vaultRoot], "failed to preserve the default Workbench vault service group");
+  for (const vaultRoot of vaultRoots) {
+    await sudo(["chgrp", "-R", String(serviceGid), "--", vaultRoot], "failed to share a Workbench vault with its isolated service");
+    await sudo(["chmod", "-R", "g+rwX", "--", vaultRoot], "failed to grant the isolated Workbench service access to its vault");
+    await sudo(["find", vaultRoot, "-type", "d", "-exec", "chmod", "g+s", "--", "{}", "+"], "failed to preserve a Workbench vault service group");
+  }
+  await sudo(["chgrp", String(serviceGid), "--", realmRoot, vaultsRoot], "failed to share Workbench vault parents");
+  await sudo(["chmod", "g+x", "--", realmRoot, vaultsRoot], "failed to make Workbench vault parents traversable");
   const ancestors = await userOwnedAncestorDirectories(realmRoot);
   if (ancestors.length > 0) {
     await sudo(["chmod", "o+x", "--", ...ancestors], "failed to make user-owned Workbench vault ancestors traversable");
   }
-  for (let path = vaultRoot;;) {
-    const info = await lstat(path);
-    if (!info.isDirectory() || info.isSymbolicLink() || !gatewayPathAccessAllows(info, serviceUid, serviceGid, 0o1)) {
-      throw new Error(`failed to verify isolated Workbench access to its default vault: ${path}`);
+  for (const vaultRoot of vaultRoots) {
+    for (let path = vaultRoot;;) {
+      const info = await lstat(path);
+      if (!info.isDirectory() || info.isSymbolicLink() || !gatewayPathAccessAllows(info, serviceUid, serviceGid, 0o1)) {
+        throw new Error(`failed to verify isolated Workbench access to its vault: ${path}`);
+      }
+      const parent = dirname(path);
+      if (parent === path) break;
+      path = parent;
     }
-    const parent = dirname(path);
-    if (parent === path) break;
-    path = parent;
+    const vaultInfo = await lstat(vaultRoot);
+    if (!gatewayPathAccessAllows(vaultInfo, serviceUid, serviceGid, 0o7)) {
+      throw new Error(`failed to verify isolated Workbench access to its vault: ${vaultRoot}`);
+    }
   }
-  const vaultInfo = await lstat(vaultRoot);
-  const initialView = resolve(vaultRoot, "main.bench.hjson");
-  const initialViewInfo = await lstat(initialView);
-  if (!gatewayPathAccessAllows(vaultInfo, serviceUid, serviceGid, 0o5)
-    || !initialViewInfo.isFile() || initialViewInfo.isSymbolicLink()
-    || !gatewayPathAccessAllows(initialViewInfo, serviceUid, serviceGid, 0o4)) {
-    throw new Error(`failed to verify isolated Workbench access to its default vault: ${initialView}`);
+  const initialView = gatewayConfig.initialView;
+  const initialVaultId = initialView && typeof initialView === "object" && !Array.isArray(initialView)
+    ? (initialView as Record<string, unknown>).vaultId : "main";
+  const initialPath = typeof initialView === "string" ? initialView
+    : initialView && typeof initialView === "object" && !Array.isArray(initialView)
+      ? (initialView as Record<string, unknown>).path : undefined;
+  const initialVault = entries.find((entry) => entry.id === initialVaultId && managed.has(entry.root));
+  if (initialVault && typeof initialPath === "string") {
+    const path = resolve(initialVault.root, initialPath);
+    if (path !== initialVault.root && !path.startsWith(`${initialVault.root}/`)) throw new Error("Workbench initial view escapes its vault");
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || !gatewayPathAccessAllows(info, serviceUid, serviceGid, 0o4)) {
+      throw new Error(`failed to verify isolated Workbench access to its vault: ${path}`);
+    }
   }
 }
 
@@ -916,7 +948,7 @@ async function ensureGateways(): Promise<boolean> {
     const revision = gatewayMountRevision(key, mountConfig);
     const sourceRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
     const isolation = await ensureGatewayServiceUser(key);
-    await prepareDefaultWorkbenchVaultAccess(key, mountConfig.config, isolation.uid, isolation.gid);
+    await prepareWorkbenchVaultAccess(key, mountConfig.config, isolation.uid, isolation.gid);
     const immutable = await ensureImmutableGatewayPackage(key, revision, sourceRoot);
     const packageRoot = immutable.packageRoot;
     const manifest = await loadGatewayManifest(packageRoot);
