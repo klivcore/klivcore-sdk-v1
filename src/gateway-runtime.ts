@@ -49,6 +49,40 @@ export type ActiveGatewayMount = Readonly<{
 
 export type ActiveGatewayMountAuthority = Readonly<{ realmId: string; stateDir: string }>;
 
+export function replaceActiveGatewayMount(
+  mounts: readonly ActiveGatewayMount[],
+  replacement: ActiveGatewayMount,
+): readonly ActiveGatewayMount[] {
+  return Object.freeze([...mounts.filter((mount) => mount.key !== replacement.key), replacement]
+    .sort((left, right) => left.key.localeCompare(right.key)));
+}
+
+export function recoverGatewayPortFromWorkerEnvironment(
+  text: string,
+  expected: Readonly<Record<string, string>>,
+): number {
+  if (!text.endsWith("\0")) throw new TypeError("Gateway worker environment is invalid");
+  const entries = text.slice(0, -1).split("\0");
+  const values = new Map<string, string>();
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator < 1) throw new TypeError("Gateway worker environment is invalid");
+    const key = entry.slice(0, separator);
+    if (values.has(key)) throw new TypeError("Gateway worker environment is invalid");
+    values.set(key, entry.slice(separator + 1));
+  }
+  const expectedKeys = [...Object.keys(expected), "KLIVCORE_GATEWAY_PORT"].sort();
+  if ([...values.keys()].sort().join("\0") !== expectedKeys.join("\0")
+    || Object.entries(expected).some(([key, value]) => values.get(key) !== value)) {
+    throw new TypeError("Gateway worker environment is invalid");
+  }
+  const rawPort = values.get("KLIVCORE_GATEWAY_PORT");
+  if (!rawPort || !/^[1-9][0-9]{0,4}$/u.test(rawPort)) throw new TypeError("Gateway worker port is invalid");
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port > 65_535) throw new TypeError("Gateway worker port is invalid");
+  return port;
+}
+
 export function gatewaySandboxIdentity(realmId: string, stateDir: string, key: string): string {
   return createHash("sha256").update(`${realmId}\0${resolve(stateDir)}\0${key}`).digest("hex").slice(0, 20);
 }

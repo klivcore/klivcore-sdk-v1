@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -612,6 +612,57 @@ async function gatewaySessionsOwned(mount: ActiveGatewayMount): Promise<boolean>
   } catch { return false; }
 }
 
+async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot): Promise<string> {
+  const result = await run(["sudo", "-n", "cat", `/proc/${worker.pid}/environ`]);
+  if (result.code !== 0) throw new Error(result.stderr.trim() || "failed to read owned Gateway worker environment");
+  const current = await readManagedProcessSnapshot(worker.pid);
+  if (!current || current.startTimeTicks !== worker.startTimeTicks || !isExactManagedProcess(current, {
+    pid: worker.pid,
+    uid: worker.uid,
+    gid: worker.gid,
+    argv: worker.argv,
+  })) throw new Error("owned Gateway worker changed while recovering its environment");
+  return result.stdout;
+}
+
+async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<ActiveGatewayMount | undefined> {
+  const existing = await Promise.all(mount.manifest.processes.map(async (process) => await tmuxExists(mount.sessions[process.role]!)));
+  if (existing.every((value) => !value)) return undefined;
+  if (!existing.every(Boolean)) throw new Error(`Gateway orphan sessions are incomplete: ${mount.key}`);
+  if (mount.manifest.server === null) {
+    if (!await gatewaySessionsOwned(mount) || !await gatewayHealthy(mount)) throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
+    return mount;
+  }
+  const server = mount.manifest.processes.find((process) => process.role === mount.manifest.server!.process);
+  if (!server) throw new Error(`Gateway server process is missing: ${mount.key}`);
+  const session = mount.sessions[server.role];
+  if (!session) throw new Error(`Gateway process session is missing: ${mount.key}/${server.role}`);
+  const panePid = await tmuxPanePid(session);
+  const pane = await readManagedProcessSnapshot(panePid);
+  const identity = coordinatorIdentity();
+  if (!pane || pane.uid !== identity.uid) throw new Error(`Gateway orphan supervisor identity is invalid: ${mount.key}`);
+  const bunPath = await ensureSandboxBun();
+  const worker = await findExactManagedDescendant(pane.pid, Object.freeze({
+    uid: mount.serviceUid,
+    gid: mount.serviceGid,
+    argv: Object.freeze([bunPath, resolve(mount.packageRoot, server.entrypoint)]),
+  }));
+  const port = recoverGatewayPortFromWorkerEnvironment(
+    await readExactGatewayWorkerEnvironment(worker),
+    gatewayProcessEnvironment(mount),
+  );
+  const recovered = Object.freeze({ ...mount, port });
+  if (!await gatewaySessionsOwned(recovered) || !await gatewayHealthy(recovered)) {
+    throw new Error(`Gateway orphan identity or health is invalid: ${mount.key}`);
+  }
+  return recovered;
+}
+
+async function writeActiveGateways(mounts: readonly ActiveGatewayMount[]): Promise<void> {
+  if (mounts.length === 0) await rm(activeGatewaysPath, { force: true });
+  else await privateWrite(activeGatewaysPath, `${JSON.stringify(mounts, null, 2)}\n`);
+}
+
 async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
   const failures: unknown[] = [];
   for (const process of mount.manifest.processes) {
@@ -676,12 +727,14 @@ async function ensureGateways(): Promise<boolean> {
   const previous = await readActiveGateways();
   const configured = Object.entries(config.gateways ?? {}).sort(([left], [right]) => left.localeCompare(right));
   const configuredKeys = new Set(configured.map(([key]) => key));
+  let journal: readonly ActiveGatewayMount[] = previous.filter((mount) => configuredKeys.has(mount.key));
   let changed = false;
   for (const stale of previous.filter((mount) => !configuredKeys.has(mount.key))) {
     console.log(`Stopping disabled Gateway: ${stale.key}`);
     await stopGatewaySessions(stale);
     changed = true;
   }
+  if (journal.length !== previous.length) await writeActiveGateways(journal);
   const active: ActiveGatewayMount[] = [];
   for (const [key, mountConfig] of configured) {
     const revision = gatewayMountRevision(key, mountConfig);
@@ -699,7 +752,7 @@ async function ensureGateways(): Promise<boolean> {
       process.role,
       gatewayProcessSessionName(config.realm.id, stateDir, key, process.role),
     ])));
-    const candidate = Object.freeze({
+    const unassigned = Object.freeze({
       schemaVersion: 1 as const,
       key,
       source: mountConfig.source,
@@ -713,22 +766,33 @@ async function ensureGateways(): Promise<boolean> {
       packageRoot,
       home,
       configPath,
-      port: manifest.server === null ? null : prior?.port ?? await allocateGatewayPort(),
+      port: null,
       sessions,
       manifest,
     });
-    const reusable = prior?.revision === candidate.revision && prior.source === candidate.source
-      && prior.packageDigest === candidate.packageDigest && prior.serviceUser === candidate.serviceUser
-      && prior.serviceUid === candidate.serviceUid && prior.serviceGid === candidate.serviceGid
-      && prior.baseRoute === candidate.baseRoute && prior.storageSubdir === candidate.storageSubdir
-      && prior.packageRoot === candidate.packageRoot && prior.home === candidate.home && prior.configPath === candidate.configPath
+    const orphan = prior ? undefined : await recoverOwnedGatewayOrphan(unassigned);
+    const candidate = orphan ?? Object.freeze({
+      ...unassigned,
+      port: manifest.server === null ? null : prior?.port ?? await allocateGatewayPort(),
+    });
+    const authority = prior ?? orphan;
+    const reusable = authority?.revision === candidate.revision && authority.source === candidate.source
+      && authority.packageDigest === candidate.packageDigest && authority.serviceUser === candidate.serviceUser
+      && authority.serviceUid === candidate.serviceUid && authority.serviceGid === candidate.serviceGid
+      && authority.baseRoute === candidate.baseRoute && authority.storageSubdir === candidate.storageSubdir
+      && authority.packageRoot === candidate.packageRoot && authority.home === candidate.home && authority.configPath === candidate.configPath
+      && authority.port === candidate.port
       && await gatewayPackageDigest(candidate.packageRoot) === candidate.packageDigest
-      && JSON.stringify(prior.sessions) === JSON.stringify(candidate.sessions)
+      && JSON.stringify(authority.sessions) === JSON.stringify(candidate.sessions)
       && await gatewaySessionsOwned(candidate)
       && await gatewayHealthy(candidate);
     if (reusable) {
-      console.log(`Reusing Gateway: ${key} (${revision.slice(0, 12)})`);
+      console.log(orphan
+        ? `Reusing orphaned Gateway: ${key} (${revision.slice(0, 12)})`
+        : `Reusing Gateway: ${key} (${revision.slice(0, 12)})`);
       active.push(candidate);
+      journal = replaceActiveGatewayMount(journal, candidate);
+      await writeActiveGateways(journal);
       continue;
     }
     console.log(`${prior ? "Updating" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
@@ -745,10 +809,10 @@ async function ensureGateways(): Promise<boolean> {
       ]);
     }
     active.push(candidate);
+    journal = replaceActiveGatewayMount(journal, candidate);
+    await writeActiveGateways(journal);
     changed = true;
   }
-  if (active.length === 0) await rm(activeGatewaysPath, { force: true });
-  else await privateWrite(activeGatewaysPath, `${JSON.stringify(active, null, 2)}\n`);
   if (JSON.stringify(previous.map((mount) => ({ key: mount.key, revision: mount.revision, packageDigest: mount.packageDigest, baseRoute: mount.baseRoute, port: mount.port })))
     !== JSON.stringify(active.map((mount) => ({ key: mount.key, revision: mount.revision, packageDigest: mount.packageDigest, baseRoute: mount.baseRoute, port: mount.port })))) changed = true;
   return changed;
