@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseStartRealmConfig, type StartRealmArgs } from "./start-realm-core";
+import { gatewayDurableHome } from "./gateway-runtime";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 const CONFIG_NAME = "realm.config.json";
@@ -131,8 +132,11 @@ export async function reconcileRealmDirectory(
     && typeof (existing.realm as Record<string, unknown>).name === "string"
     ? (existing.realm as Record<string, unknown>).name as string
     : realmName(id);
-  const defaultVaultRoot = typeof workbenchConfig.vaultRoot === "string"
-    ? workbenchConfig.vaultRoot
+  const stateDir = resolve(resolvedDirectory, typeof existing?.stateDir === "string" ? existing.stateDir : "./state");
+  const legacyManagedVaultRoot = resolve(gatewayDurableHome(id, stateDir, "workbench", "workbench"), "vault");
+  const configuredVaultRoot = typeof workbenchConfig.vaultRoot === "string" ? workbenchConfig.vaultRoot : undefined;
+  const defaultVaultRoot = configuredVaultRoot !== undefined && resolve(configuredVaultRoot) !== legacyManagedVaultRoot
+    ? configuredVaultRoot
     : await ensureDefaultVault(resolvedDirectory, id, configuredRealmName);
   gateways["resource-monitor"] = {
     ...resourceMonitor,
