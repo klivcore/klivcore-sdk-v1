@@ -72,6 +72,23 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-bench-viewport-textareas",
+      "path": "/debug/bench-viewport/textareas",
+      "title": "Workbench debug: Textareas",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-textareas",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {

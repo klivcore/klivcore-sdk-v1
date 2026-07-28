@@ -2956,7 +2956,7 @@ var workbenchReactDebugContributions = Object.freeze([
 
 // packages/publish-sdk/src/gateway-debug-publication.ts
 var publishedScenarioIdsByCategory = Object.freeze({
-  "bench-viewport": Object.freeze(["rgb-squares"])
+  "bench-viewport": Object.freeze(["rgb-squares", "textareas"])
 });
 var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
   const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);
