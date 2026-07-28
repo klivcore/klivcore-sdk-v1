@@ -824,6 +824,31 @@ async function startGatewayMount(mount: ActiveGatewayMount): Promise<void> {
   }
 }
 
+async function prepareDefaultWorkbenchVaultAccess(
+  key: string,
+  gatewayConfig: Readonly<Record<string, unknown>>,
+  serviceGid: number,
+): Promise<void> {
+  if (key !== "workbench" || typeof gatewayConfig.vaultRoot !== "string") return;
+  const realmRoot = dirname(configPath);
+  const vaultsRoot = resolve(realmRoot, "vaults");
+  const expected = resolve(dirname(configPath), "vaults", `${config.realm.id}-vault`);
+  const vaultRoot = resolve(gatewayConfig.vaultRoot);
+  if (vaultRoot !== expected) return;
+  const uid = process.getuid?.();
+  for (const path of [realmRoot, vaultsRoot, vaultRoot]) {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid)) {
+      throw new Error(`Default Workbench vault path must be an owned non-symlink directory: ${path}`);
+    }
+  }
+  await sudo(["chgrp", "-R", String(serviceGid), "--", vaultRoot], "failed to share the default Workbench vault with its isolated service");
+  await sudo(["chmod", "-R", "g+rwX", "--", vaultRoot], "failed to grant the isolated Workbench service access to its default vault");
+  await sudo(["chgrp", String(serviceGid), "--", realmRoot, vaultsRoot], "failed to share default Workbench vault parents");
+  await sudo(["chmod", "g+x", "--", realmRoot, vaultsRoot], "failed to make default Workbench vault parents traversable");
+  await sudo(["chmod", "g+s", "--", vaultRoot], "failed to preserve the default Workbench vault service group");
+}
+
 async function ensureGateways(): Promise<boolean> {
   const previous = await readActiveGateways();
   const configured = Object.entries(config.gateways ?? {}).sort(([left], [right]) => left.localeCompare(right));
@@ -841,6 +866,7 @@ async function ensureGateways(): Promise<boolean> {
     const revision = gatewayMountRevision(key, mountConfig);
     const sourceRoot = await materializeGatewayPackage(key, mountConfig.source, revision);
     const isolation = await ensureGatewayServiceUser(key);
+    await prepareDefaultWorkbenchVaultAccess(key, mountConfig.config, isolation.gid);
     const immutable = await ensureImmutableGatewayPackage(key, revision, sourceRoot);
     const packageRoot = immutable.packageRoot;
     const manifest = await loadGatewayManifest(packageRoot);

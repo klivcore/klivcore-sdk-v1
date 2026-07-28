@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseStartRealmConfig, type StartRealmArgs } from "./start-realm-core";
-import { gatewayDurableHome } from "./gateway-runtime";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 const CONFIG_NAME = "realm.config.json";
@@ -80,6 +79,32 @@ async function atomicPrivateJson(path: string, value: unknown): Promise<void> {
   }
 }
 
+async function ensureDefaultVault(realmDirectory: string, realmId: string, name: string): Promise<string> {
+  const vaultsRoot = join(realmDirectory, "vaults");
+  const vaultRoot = join(vaultsRoot, `${realmId}-vault`);
+  await ensurePrivateDirectory(vaultsRoot);
+  await ensurePrivateDirectory(vaultRoot);
+  const repository = Bun.spawn(["git", "-C", vaultRoot, "rev-parse", "--is-inside-work-tree"], { stdout: "pipe", stderr: "pipe" });
+  if (await repository.exited !== 0) {
+    const initialized = Bun.spawn(["git", "init", "--quiet", "--initial-branch=main", vaultRoot], { stdout: "pipe", stderr: "pipe" });
+    if (await initialized.exited !== 0) {
+      throw new Error((await new Response(initialized.stderr).text()).trim() || `failed to initialize default Realm vault: ${vaultRoot}`);
+    }
+  }
+  const initialView = join(vaultRoot, "main.bench.hjson");
+  try {
+    const info = await lstat(initialView);
+    const uid = process.getuid?.();
+    if (!info.isFile() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid)) {
+      throw new Error(`Default Realm bench must be an owned regular file: ${initialView}`);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    await writeFile(initialView, `${JSON.stringify({ name, elements: [], edges: [] }, null, 2)}\n`, { flag: "wx", mode: 0o600 });
+  }
+  return vaultRoot;
+}
+
 export async function reconcileRealmDirectory(
   realmDirectory: string,
   sdkRevision: string,
@@ -100,10 +125,15 @@ export async function reconcileRealmDirectory(
     ? gateways["resource-monitor"] as Record<string, unknown> : {};
   const workbench = gateways.workbench && typeof gateways.workbench === "object" && !Array.isArray(gateways.workbench)
     ? gateways.workbench as Record<string, unknown> : {};
-  const stateDir = resolve(resolvedDirectory, typeof existing?.stateDir === "string" ? existing.stateDir : "./state");
-  const workbenchConfig = workbench.config;
-  const useManagedWorkbenchConfig = !workbenchConfig || typeof workbenchConfig !== "object" || Array.isArray(workbenchConfig)
-    || Object.keys(workbenchConfig as Record<string, unknown>).length === 0;
+  const workbenchConfig = workbench.config && typeof workbench.config === "object" && !Array.isArray(workbench.config)
+    ? { ...workbench.config as Record<string, unknown> } : {};
+  const configuredRealmName = existing?.realm && typeof existing.realm === "object" && !Array.isArray(existing.realm)
+    && typeof (existing.realm as Record<string, unknown>).name === "string"
+    ? (existing.realm as Record<string, unknown>).name as string
+    : realmName(id);
+  const defaultVaultRoot = typeof workbenchConfig.vaultRoot === "string"
+    ? workbenchConfig.vaultRoot
+    : await ensureDefaultVault(resolvedDirectory, id, configuredRealmName);
   gateways["resource-monitor"] = {
     ...resourceMonitor,
     source: gatewaySource(sdkRevision, "gateways/resource-monitor"),
@@ -116,14 +146,13 @@ export async function reconcileRealmDirectory(
     source: gatewaySource(sdkRevision, "gateways/workbench"),
     baseRoute: "/workbench",
     storageSubdir: "workbench",
-    config: useManagedWorkbenchConfig ? {
-      initialView: "main.bench.json",
-      vaultRoot: resolve(gatewayDurableHome(id, stateDir, "workbench", "workbench"), "vault"),
-      workspaceName: existing?.realm && typeof existing.realm === "object" && !Array.isArray(existing.realm)
-        && typeof (existing.realm as Record<string, unknown>).name === "string"
-        ? (existing.realm as Record<string, unknown>).name
-        : realmName(id),
-    } : workbenchConfig,
+    config: {
+      ...workbenchConfig,
+      initialView: typeof workbenchConfig.initialView === "string" && workbenchConfig.initialView !== "main.bench.json"
+        ? workbenchConfig.initialView : "main.bench.hjson",
+      vaultRoot: defaultVaultRoot,
+      workspaceName: typeof workbenchConfig.workspaceName === "string" ? workbenchConfig.workspaceName : configuredRealmName,
+    },
   };
   const config = existing ?? {
     schemaVersion: 1,
