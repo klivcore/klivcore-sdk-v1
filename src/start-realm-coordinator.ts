@@ -659,7 +659,7 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
   if (existing.every((value) => !value)) return undefined;
   if (!existing.every(Boolean)) throw new Error(`Gateway orphan sessions are incomplete: ${mount.key}`);
   if (mount.manifest.server === null) {
-    if (!await gatewaySessionsOwned(mount) || !await gatewayHealthy(mount)) throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
+    if (!await gatewaySessionsOwned(mount)) throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
     return mount;
   }
   const server = mount.manifest.processes.find((process) => process.role === mount.manifest.server!.process);
@@ -696,8 +696,8 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
     gatewayProcessEnvironment(recoveredBase),
   );
   const recovered = Object.freeze({ ...recoveredBase, port });
-  if (!await gatewaySessionsOwned(recovered) || !await gatewayHealthy(recovered)) {
-    throw new Error(`Gateway orphan identity or health is invalid: ${mount.key}`);
+  if (!await gatewaySessionsOwned(recovered)) {
+    throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
   }
   return recovered;
 }
