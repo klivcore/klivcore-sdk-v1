@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentMatches, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -597,9 +597,27 @@ async function inspectOwnedGatewaySession(
   entrypoint: string,
 ): Promise<Readonly<{ pane: ManagedProcessSnapshot; worker: ManagedProcessSnapshot; expectations: Awaited<ReturnType<typeof gatewayProcessExpectations>> }>> {
   const expectations = await gatewayProcessExpectations(mount, entrypoint);
-  const pane = await inspectCompatibleGatewayPane(session, expectations.pane, mount.serviceUid, mount.serviceGid);
-  const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
-  return Object.freeze({ pane, worker, expectations });
+  try {
+    const pane = await inspectCompatibleGatewayPane(session, expectations.pane, mount.serviceUid, mount.serviceGid);
+    const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
+    return Object.freeze({ pane, worker, expectations });
+  } catch (strictFailure) {
+    const pid = await tmuxPanePid(session);
+    const pane = await readManagedProcessSnapshot(pid);
+    if (!pane || !isExactManagedProcess(pane, { ...expectations.pane, pid, argv: pane.argv })) throw strictFailure;
+    const worker = await findExactManagedDescendant(pane.pid, expectations.worker);
+    if (!gatewayWorkerEnvironmentMatches(await readExactGatewayWorkerEnvironment(worker), gatewayProcessEnvironment(mount))) {
+      throw new Error(`refusing to reuse Gateway worker with an unverified environment: ${session}`, { cause: strictFailure });
+    }
+    return Object.freeze({
+      pane,
+      worker,
+      expectations: Object.freeze({
+        pane: Object.freeze({ ...expectations.pane, argv: pane.argv }),
+        worker: expectations.worker,
+      }),
+    });
+  }
 }
 
 async function gatewaySessionsOwned(mount: ActiveGatewayMount): Promise<boolean> {

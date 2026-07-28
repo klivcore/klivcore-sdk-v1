@@ -101,6 +101,21 @@ export function recoverGatewayPortFromWorkerEnvironment(
   return port;
 }
 
+export function gatewayWorkerEnvironmentMatches(text: string, expected: Readonly<Record<string, string>>): boolean {
+  if (!text.endsWith("\0")) return false;
+  const entries = text.slice(0, -1).split("\0");
+  if (entries.length !== Object.keys(expected).length) return false;
+  const values = new Map<string, string>();
+  for (const entry of entries) {
+    const separator = entry.indexOf("=");
+    if (separator < 1) return false;
+    const key = entry.slice(0, separator);
+    if (values.has(key)) return false;
+    values.set(key, entry.slice(separator + 1));
+  }
+  return Object.entries(expected).every(([key, value]) => values.get(key) === value);
+}
+
 export function gatewaySandboxIdentity(realmId: string, stateDir: string, key: string): string {
   return createHash("sha256").update(`${realmId}\0${resolve(stateDir)}\0${key}`).digest("hex").slice(0, 20);
 }
