@@ -2689,53 +2689,94 @@ var grandchildBench = Object.freeze({
 });
 var modularitySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="Native image element"><rect width="640" height="360" rx="28" fill="#0f172a"/><rect x="56" y="78" width="220" height="204" rx="20" fill="#164e63" stroke="#22d3ee" stroke-width="6"/><rect x="364" y="78" width="220" height="204" rx="20" fill="#14532d" stroke="#4ade80" stroke-width="6"/><path d="M276 180h88" stroke="#e2e8f0" stroke-width="8"/><text x="320" y="44" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#e2e8f0">Native image element</text><text x="166" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#cffafe">Workbench</text><text x="474" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#dcfce7">Realm</text></svg>
 `;
+var VAULT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
+var BENCH_PATH = /^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u;
 function parseWorkbenchGatewayConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
   const config = value;
-  if (Object.keys(config).sort().join("\x00") !== ["initialView", "vaultRoot", "workspaceName"].sort().join("\x00") || typeof config.vaultRoot !== "string" || !isAbsolute(config.vaultRoot) || typeof config.initialView !== "string" || !/^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u.test(config.initialView) || typeof config.workspaceName !== "string" || config.workspaceName.trim() === "" || config.workspaceName.length > 128) {
+  const keys = Object.keys(config).sort().join("\x00");
+  if (typeof config.workspaceName !== "string" || config.workspaceName.trim() === "" || config.workspaceName.length > 128) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
+  if (keys === ["initialView", "vaultRoot", "workspaceName"].sort().join("\x00")) {
+    if (typeof config.vaultRoot !== "string" || !isAbsolute(config.vaultRoot) || typeof config.initialView !== "string" || !BENCH_PATH.test(config.initialView)) {
+      throw new TypeError("Workbench Gateway config is invalid");
+    }
+    return Object.freeze({
+      initialView: Object.freeze({ path: config.initialView, vaultId: "main" }),
+      vaults: Object.freeze([Object.freeze({ id: "main", root: resolve2(config.vaultRoot) })]),
+      workspaceName: config.workspaceName
+    });
+  }
+  if (keys !== ["initialView", "vaults", "workspaceName"].sort().join("\x00") || !config.initialView || typeof config.initialView !== "object" || Array.isArray(config.initialView) || !Array.isArray(config.vaults) || config.vaults.length === 0 || config.vaults.length > 100) {
+    throw new TypeError("Workbench Gateway config is invalid");
+  }
+  const initialView = config.initialView;
+  if (Object.keys(initialView).sort().join("\x00") !== ["path", "vaultId"].sort().join("\x00") || typeof initialView.path !== "string" || !BENCH_PATH.test(initialView.path) || typeof initialView.vaultId !== "string" || !VAULT_ID.test(initialView.vaultId)) {
+    throw new TypeError("Workbench Gateway config is invalid");
+  }
+  const seen = new Set;
+  const vaults = config.vaults.map((value2) => {
+    if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
+      throw new TypeError("Workbench Gateway config is invalid");
+    const vault = value2;
+    if (Object.keys(vault).sort().join("\x00") !== ["id", "root"].sort().join("\x00") || typeof vault.id !== "string" || !VAULT_ID.test(vault.id) || seen.has(vault.id) || typeof vault.root !== "string" || !isAbsolute(vault.root)) {
+      throw new TypeError("Workbench Gateway config is invalid");
+    }
+    seen.add(vault.id);
+    return Object.freeze({ id: vault.id, root: resolve2(vault.root) });
+  });
+  if (!seen.has(initialView.vaultId))
+    throw new TypeError("Workbench Gateway config is invalid");
   return Object.freeze({
-    initialView: config.initialView,
-    vaultRoot: resolve2(config.vaultRoot),
+    initialView: Object.freeze({ path: initialView.path, vaultId: initialView.vaultId }),
+    vaults: Object.freeze(vaults),
     workspaceName: config.workspaceName
   });
 }
+function normalizeWorkbenchGatewayConfig(configured) {
+  return "vaultRoot" in configured ? parseWorkbenchGatewayConfig(configured) : configured;
+}
 async function createWorkbenchGatewayHandler(homePath, configured) {
   const home = resolve2(homePath);
-  const vault = configured ? resolve2(configured.vaultRoot) : resolve2(home, "vault");
   const cache = resolve2(home, "cache");
-  if (configured) {
-    const info = await lstat2(vault);
-    if (!info.isDirectory() || info.isSymbolicLink())
-      throw new TypeError("Workbench Gateway vault root is invalid");
+  const effectiveConfig = configured ? normalizeWorkbenchGatewayConfig(configured) : undefined;
+  const defaultVault = resolve2(home, "vault");
+  const vaults = effectiveConfig?.vaults ?? [{ id: "main", root: defaultVault }];
+  if (effectiveConfig) {
+    await Promise.all(vaults.map(async (vault) => {
+      const info = await lstat2(vault.root);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw new TypeError(`Workbench Gateway vault root is invalid: ${vault.id}`);
+    }));
   } else {
-    await mkdir3(vault, { recursive: true, mode: 448 });
+    await mkdir3(defaultVault, { recursive: true, mode: 448 });
   }
   await mkdir3(cache, { recursive: true, mode: 448 });
   await chmod(home, 448);
-  if (!configured) {
+  if (!effectiveConfig) {
     await Promise.all([
-      seed(resolve2(vault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
+      seed(resolve2(defaultVault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
 `),
-      seed(resolve2(vault, "notes/readme.md"), `# Acme Workbench
+      seed(resolve2(defaultVault, "notes/readme.md"), `# Acme Workbench
 
 This native text-file element is backed by the isolated Workbench Gateway vault.
 `),
-      seed(resolve2(vault, "assets/modularity.svg"), modularitySvg),
-      seed(resolve2(vault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
+      seed(resolve2(defaultVault, "assets/modularity.svg"), modularitySvg),
+      seed(resolve2(defaultVault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
 `),
-      seed(resolve2(vault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
+      seed(resolve2(defaultVault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
 `)
     ]);
   }
-  const effectiveBootstrap = configured ? {
+  const effectiveBootstrap = effectiveConfig ? {
     ...bootstrap,
-    initialView: { resource: { kind: "bench-file", path: configured.initialView, vaultId: "main" }, sourceId: "workbench-vault" },
-    workspace: { id: "workbench", name: configured.workspaceName }
+    initialView: { resource: { kind: "bench-file", path: effectiveConfig.initialView.path, vaultId: effectiveConfig.initialView.vaultId }, sourceId: "workbench-vault" },
+    sources: [{ ...bootstrap.sources[0], vaultIds: vaults.map((vault) => vault.id) }],
+    workspace: { id: "workbench", name: effectiveConfig.workspaceName }
   } : bootstrap;
-  const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: [{ id: "main", root: vault, cacheRoot: cache }] });
+  const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: vaults.map((vault) => ({ ...vault, cacheRoot: cache })) });
   return requestHandler(server);
 }
 function requestHandler(server) {

@@ -133,11 +133,33 @@ export async function reconcileRealmDirectory(
     ? (existing.realm as Record<string, unknown>).name as string
     : realmName(id);
   const stateDir = resolve(resolvedDirectory, typeof existing?.stateDir === "string" ? existing.stateDir : "./state");
+  const configuredVaults = Array.isArray(workbenchConfig.vaults) && workbenchConfig.vaults.length > 0
+    ? workbenchConfig.vaults : undefined;
   const legacyManagedVaultRoot = resolve(gatewayDurableHome(id, stateDir, "workbench", "workbench"), "vault");
   const configuredVaultRoot = typeof workbenchConfig.vaultRoot === "string" ? workbenchConfig.vaultRoot : undefined;
-  const defaultVaultRoot = configuredVaultRoot !== undefined && resolve(configuredVaultRoot) !== legacyManagedVaultRoot
+  const defaultVaultRoot = configuredVaults ? undefined : configuredVaultRoot !== undefined && resolve(configuredVaultRoot) !== legacyManagedVaultRoot
     ? configuredVaultRoot
     : await ensureDefaultVault(resolvedDirectory, id, configuredRealmName);
+  const configuredInitialView = workbenchConfig.initialView;
+  const firstVault = configuredVaults?.[0] && typeof configuredVaults[0] === "object" && !Array.isArray(configuredVaults[0])
+    ? configuredVaults[0] as Record<string, unknown> : undefined;
+  const workbenchGatewayConfig = configuredVaults ? {
+    ...workbenchConfig,
+    initialView: configuredInitialView && typeof configuredInitialView === "object" && !Array.isArray(configuredInitialView)
+      ? configuredInitialView
+      : {
+        path: typeof configuredInitialView === "string" && configuredInitialView !== "main.bench.json" ? configuredInitialView : "main.bench.hjson",
+        vaultId: typeof firstVault?.id === "string" ? firstVault.id : "main",
+      },
+    vaults: configuredVaults,
+    workspaceName: typeof workbenchConfig.workspaceName === "string" ? workbenchConfig.workspaceName : configuredRealmName,
+  } : {
+    ...workbenchConfig,
+    initialView: typeof configuredInitialView === "string" && configuredInitialView !== "main.bench.json"
+      ? configuredInitialView : "main.bench.hjson",
+    vaultRoot: defaultVaultRoot!,
+    workspaceName: typeof workbenchConfig.workspaceName === "string" ? workbenchConfig.workspaceName : configuredRealmName,
+  };
   gateways["resource-monitor"] = {
     ...resourceMonitor,
     source: gatewaySource(sdkRevision, "gateways/resource-monitor"),
@@ -150,13 +172,7 @@ export async function reconcileRealmDirectory(
     source: gatewaySource(sdkRevision, "gateways/workbench"),
     baseRoute: "/workbench",
     storageSubdir: "workbench",
-    config: {
-      ...workbenchConfig,
-      initialView: typeof workbenchConfig.initialView === "string" && workbenchConfig.initialView !== "main.bench.json"
-        ? workbenchConfig.initialView : "main.bench.hjson",
-      vaultRoot: defaultVaultRoot,
-      workspaceName: typeof workbenchConfig.workspaceName === "string" ? workbenchConfig.workspaceName : configuredRealmName,
-    },
+    config: workbenchGatewayConfig,
   };
   const config = existing ?? {
     schemaVersion: 1,
