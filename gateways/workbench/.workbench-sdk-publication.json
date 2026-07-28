@@ -13,32 +13,44 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 110814,
-      "sha256": "69bc3f10b2002525d73b12af7ff3f04a7633a0c5d2f61af07b6a05408e401f01",
+      "bytes": 115748,
+      "sha256": "86a754631df8ccba6187b74901e7715d648e1acc30bbe2fa1522c6663ef51b9d",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.css",
-      "bytes": 37479,
-      "sha256": "64ff91b80991a15ee6e8c0c780097c21f096f6629027548e543b9f588799182e",
+      "bytes": 37711,
+      "sha256": "02328176fb9d167f05e563b0c573922e82c3f0ec4d1443f723a94aea8e56a733",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1596231,
-      "sha256": "242075e81c65cc3101970973ea05b775b0207b14e951931868fe70735db312d6",
+      "bytes": 1603917,
+      "sha256": "74a28147dfd768b5434d7cbef92c832737703fad2ba415cbaa2720e65d2e083d",
       "mode": 420
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 1985,
-      "sha256": "87a529f3d64de1cfbccc51d052fc95af0910a484712ef87278199adcd4548002",
+      "bytes": 2771,
+      "sha256": "ceaa4d580b2b16af39a2f1ab560b5e92781f0325d7333883d60d710b71bc7dc5",
       "mode": 420
     },
     {
       "path": "package.json",
       "bytes": 108,
       "sha256": "7b6e40cc42fd6850147a2252643c1547225e500db8be5735593d2e8719933419",
+      "mode": 420
+    },
+    {
+      "path": "ui/debug-index.css",
+      "bytes": 37711,
+      "sha256": "02328176fb9d167f05e563b0c573922e82c3f0ec4d1443f723a94aea8e56a733",
+      "mode": 420
+    },
+    {
+      "path": "ui/debug-index.js",
+      "bytes": 532034,
+      "sha256": "187044f18a4097db6da97fcabdb551dcc56fe603b2a0cf6422ae24e036081f40",
       "mode": 420
     },
     {
@@ -49,8 +61,8 @@
     },
     {
       "path": "ui/debug-loader.js",
-      "bytes": 3905,
-      "sha256": "cc6c0efe7d603673a3db1ada36d2b1fca939b23fed831cf6085327d7a3033a59",
+      "bytes": 4274,
+      "sha256": "af73c9cef9f55bf74f7a2fcb408fc05c062c28e35bce9b430effd44f310abdac",
       "mode": 420
     },
     {

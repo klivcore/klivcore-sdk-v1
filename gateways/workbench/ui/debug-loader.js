@@ -1,5 +1,5 @@
 // packages/publish-sdk/src/gateway-debug-loader.ts
-var DEBUG_ROUTE = /(?:^|\/)debug\/([a-z0-9][a-z0-9-]{0,127})\/([a-z0-9][a-z0-9-]{0,127})$/u;
+var DEBUG_ROUTE = /(?:^|\/)debug\/([a-z0-9][a-z0-9-]{0,127})(?:\/([a-z0-9][a-z0-9-]{0,127}))?$/u;
 var MAX_JAVASCRIPT_BYTES = 16 * 1024 * 1024;
 var MAX_CSS_BYTES = 4 * 1024 * 1024;
 async function boundedText(response, maximum, label) {
@@ -50,7 +50,8 @@ async function mount(host) {
   if (!match)
     throw new Error("Workbench debug route is invalid");
   const [, categoryId, scenarioId] = match;
-  const componentHref = globalThis.location.pathname.slice(0, -scenarioId.length - 1);
+  const routeHref = globalThis.location.pathname;
+  const componentHref = scenarioId ? routeHref.slice(0, -scenarioId.length - 1) : routeHref.slice(0, -categoryId.length - 1);
   const componentName = categoryId.split("-").map((part) => part[0].toUpperCase() + part.slice(1)).join(" ");
   const status = host.root.ownerDocument.createElement("main");
   status.setAttribute("data-workbench-debug-loader", "loading");
@@ -76,9 +77,16 @@ async function mount(host) {
     host.root.append(style);
     moduleUrl = URL.createObjectURL(new Blob([javascript], { type: "text/javascript" }));
     const debugModule = await import(moduleUrl);
-    if (!debugModule || typeof debugModule.mountDebugScenario !== "function")
-      throw new Error("Workbench debug category is invalid");
-    const cleanup = await debugModule.mountDebugScenario(host, scenarioId, { componentHref, componentName });
+    let cleanup;
+    if (scenarioId) {
+      if (typeof debugModule.mountDebugScenario !== "function")
+        throw new Error("Workbench debug category is invalid");
+      cleanup = await debugModule.mountDebugScenario(host, scenarioId, { componentHref, componentName });
+    } else {
+      if (typeof debugModule.mountDebugCategory !== "function")
+        throw new Error("Workbench debug category is invalid");
+      cleanup = await debugModule.mountDebugCategory(host, { componentHref, componentName, routeHref });
+    }
     if (cleanup !== undefined && typeof cleanup !== "function")
       throw new Error("Workbench debug scenario returned an invalid cleanup");
     if (typeof cleanup === "function")

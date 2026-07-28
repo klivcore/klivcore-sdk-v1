@@ -25,6 +25,38 @@
       }
     },
     {
+      "id": "debug-index",
+      "path": "/debug",
+      "title": "Workbench debug scenarios",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [],
+      "component": {
+        "id": "workbench-debug-index",
+        "js": "ui/debug-index.js",
+        "css": "ui/debug-index.css"
+      }
+    },
+    {
+      "id": "debug-bench-viewport",
+      "path": "/debug/bench-viewport",
+      "title": "Workbench debug: Bench viewport",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
+    },
+    {
       "id": "debug-bench-viewport-rgb-squares",
       "path": "/debug/bench-viewport/rgb-squares",
       "title": "Workbench debug: RGB squares",

@@ -2890,10 +2890,87 @@ async function seed(path, content) {
   }
 }
 
-// packages/publish-sdk/src/gateway-debug-publication.ts
-var publishedWorkbenchDebugCategoryIds = Object.freeze([
-  "bench-viewport"
+// packages/react/src/debugContributions.ts
+var workbenchReactDebugContributions = Object.freeze([
+  Object.freeze({
+    debugId: "bench-viewport",
+    description: "Pan and zoom mock scenarios for tuning workbench viewport controls.",
+    name: "Bench viewport",
+    scenarioIds: Object.freeze(["rgb-squares", "textareas", "comments", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+  }),
+  Object.freeze({
+    debugId: "directory-scene",
+    description: "Recursive resource geometry, traversal identity, empty roots, and bounded wide-tree projection.",
+    name: "Directory scene",
+    scenarioIds: Object.freeze(["recursive-treemap", "repeated-traversal", "multi-root-fixture", "empty-root", "real-workspace", "multi-root-workspace", "wide-1000", "weighted-code-1000"])
+  }),
+  Object.freeze({
+    debugId: "edge",
+    description: "Focused scenarios for workbench edge handles, slots, routing, and editing.",
+    name: "Edges",
+    scenarioIds: Object.freeze(["labels", "slot-sides", "slot-indices", "nearest-and-groups", "raw-position", "mixed-graph"])
+  }),
+  Object.freeze({
+    debugId: "element-menu",
+    description: "Focused scenarios for the add-node menu component.",
+    name: "Element menu",
+    scenarioIds: Object.freeze(["default-types", "add-existing-nested-bench", "create-new-nested-bench"])
+  }),
+  Object.freeze({
+    debugId: "file-path-input",
+    description: "Reusable vault file path input and existing-file picker scenarios.",
+    name: "File path input",
+    scenarioIds: Object.freeze(["manual-entry", "bench-file-picker", "image-file-picker"])
+  }),
+  Object.freeze({
+    debugId: "physics-layout",
+    description: "Isolated container-aware layout physics scenarios with edge-force decomposition controls.",
+    name: "Physics layout",
+    scenarioIds: Object.freeze(["two-groups-one-edge", "two-groups-many-edges", "triangle-groups", "nested-lca", "packing-vs-anchor", "slot-point-forces", "oscillation-stress", "stress-random-100", "stress-random-250-nested", "stress-single-container-5k", "stress-many-containers-2k", "box2d-single-container-5k", "box2d-many-containers-2k", "stress-random-500-clusters", "stress-random-1k-flat", "stress-random-1k-six-layers", "stress-random-1k-dense", "stress-random-1k-overlap", "stress-random-2k-wide", "stress-random-5k-wide"])
+  }),
+  Object.freeze({
+    debugId: "preview",
+    description: "Focused scenarios for generated preview image capture.",
+    name: "Preview capture",
+    scenarioIds: Object.freeze(["dom-to-jpeg"])
+  }),
+  Object.freeze({
+    debugId: "test-file",
+    description: "Focused scenarios for text-file create, rename, validation, and content-save flows.",
+    name: "Text file",
+    scenarioIds: Object.freeze(["agent-line-highlights", "create-immediate-rename-content", "generated-name-unchanged", "escape-cancel-rename", "existing-target", "new-target-nested", "duplicate-same-path", "path-validation-errors", "path-conflicts", "missing-old-backing-file"])
+  }),
+  Object.freeze({
+    debugId: "voice-comment",
+    description: "Deterministic push-to-talk, frozen-anchor, retained-audio, retry, and cancellation behavior.",
+    name: "Voice comment",
+    scenarioIds: Object.freeze(["push-to-talk"])
+  }),
+  Object.freeze({
+    debugId: "workbench",
+    description: "Integrated workbench scenarios backed by real vault files and server APIs.",
+    name: "Workbench",
+    scenarioIds: Object.freeze(["bootstrap", "bootstrap-main", "main-bench", "nested-bench-basic", "nested-bench-alignment-measure", "nested-bench-spiral-alignment", "nested-bench-zoom-coverage-threshold", "nested-bench-runtime-child-coverage", "nested-bench-random-origin-stress", "nested-bench-return-focus", "nested-bench-empty-default-size", "nested-bench-small-default-size", "jpg-preview-alignment-rgb", "jpg-preview-alignment-rgb-wide", "jpg-preview-alignment-rgb-tall", "jpg-preview-alignment-rgb-offset", "nested-bench-duplicate-instances", "nested-bench-self-recursion", "nested-bench-mutual-recursion", "nested-bench-deep-stack"])
+  })
 ]);
+
+// packages/publish-sdk/src/gateway-debug-publication.ts
+var publishedScenarioIdsByCategory = Object.freeze({
+  "bench-viewport": Object.freeze(["rgb-squares"])
+});
+var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
+  const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);
+  if (!contribution || scenarioIds.some((scenarioId) => !contribution.scenarioIds.includes(scenarioId))) {
+    throw new Error(`published Workbench debug contribution is invalid: ${debugId}`);
+  }
+  return Object.freeze({
+    debugId,
+    description: contribution.description,
+    name: contribution.name,
+    scenarioIds
+  });
+}));
+var publishedWorkbenchDebugCategoryIds = Object.freeze(publishedWorkbenchDebugContributions.map((contribution) => contribution.debugId));
 
 // packages/publish-sdk/src/gateway-server.ts
 function requiredAbsolute(name) {
