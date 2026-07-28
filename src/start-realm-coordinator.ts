@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, cp, lstat, mkdir, open, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentMatches, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
+import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewayProcessSupervisorPaneGid, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentMatches, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, recoverGatewayPortFromWorkerEnvironment, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
   effectiveSshdUsesAuthorizedKeysFile,
@@ -233,8 +233,10 @@ async function inspectCompatibleGatewayPane(
 ): Promise<ManagedProcessSnapshot> {
   const pid = await tmuxPanePid(sessionName);
   const snapshot = await readManagedProcessSnapshot(pid);
+  const paneGid = snapshot && gatewayProcessSupervisorPaneGid(snapshot.argv, serviceUid, serviceGid);
   if (!snapshot
-    || !isExactManagedProcess(snapshot, { ...expected, pid: expected.pid ?? pid, argv: snapshot.argv })
+    || paneGid === undefined
+    || !isExactManagedProcess(snapshot, { ...expected, pid: expected.pid ?? pid, gid: paneGid, argv: snapshot.argv })
     || !gatewayProcessSupervisorArgvCompatible(snapshot.argv, expected.argv, serviceUid, serviceGid)) {
     throw new Error(`refusing to reuse tmux session with unverified process identity: ${sessionName}`);
   }
@@ -585,8 +587,10 @@ async function gatewayProcessExpectations(mount: ActiveGatewayMount, entrypoint:
   const bunPath = await ensureSandboxBun();
   const workerArgv = Object.freeze([bunPath, resolve(mount.packageRoot, entrypoint)]);
   const paneArgv = await gatewayProcessSupervisorArgvForHost(mount.serviceUid, mount.serviceGid, gatewayProcessEnvironment(mount), workerArgv);
+  const paneGid = gatewayProcessSupervisorPaneGid(paneArgv, mount.serviceUid, mount.serviceGid);
+  if (paneGid === undefined) throw new Error("Gateway supervisor identity is invalid");
   return Object.freeze({
-    pane: Object.freeze({ ...coordinatorIdentity(), gid: 0, argv: paneArgv }),
+    pane: Object.freeze({ ...coordinatorIdentity(), gid: paneGid, argv: paneArgv }),
     worker: Object.freeze({ uid: mount.serviceUid, gid: mount.serviceGid, argv: workerArgv }),
   });
 }

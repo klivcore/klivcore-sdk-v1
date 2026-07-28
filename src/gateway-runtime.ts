@@ -287,6 +287,18 @@ export function gatewayProcessSupervisorArgvCompatible(
   return actualTail.length === expectedTail.length && actualTail.every((value, index) => value === expectedTail[index]);
 }
 
+export function gatewayProcessSupervisorPaneGid(
+  actual: readonly string[],
+  uid: number,
+  gid: number,
+): number | undefined {
+  const portablePrefix = ["sudo", "-n", `--user=#${uid}`, `--group=#${gid}`, "--", "/usr/bin/env", "-i"];
+  if (actual.length > portablePrefix.length && portablePrefix.every((value, index) => actual[index] === value)) return gid;
+  const legacyPrefix = ["sudo", "-n", "--", "/usr/bin/setpriv", `--reuid=${uid}`, `--regid=${gid}`, "--clear-groups", "env", "-i"];
+  if (actual.length > legacyPrefix.length && legacyPrefix.every((value, index) => actual[index] === value)) return 0;
+  return undefined;
+}
+
 export async function readGatewayAsset(root: string, path: string, maximum = 1024 * 1024): Promise<string> {
   if (!safePath(path)) throw new Error("Gateway asset path is unsafe");
   const absoluteRoot = resolve(root);
