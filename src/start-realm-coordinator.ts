@@ -612,6 +612,29 @@ async function gatewaySessionsOwned(mount: ActiveGatewayMount): Promise<boolean>
   } catch { return false; }
 }
 
+async function tmuxSessionDead(session: string): Promise<boolean> {
+  if (!await tmuxExists(session)) return true;
+  const result = await tmux(["display-message", "-p", "-t", `=${session}:0.0`, "#{pane_dead}"]);
+  if (result.code !== 0) {
+    if (!await tmuxExists(session)) return true;
+    throw new Error(result.stderr.trim() || `failed to inspect tmux session: ${session}`);
+  }
+  const value = result.stdout.trim();
+  if (value !== "0" && value !== "1") throw new Error(`tmux session state is invalid: ${session}`);
+  return value === "1";
+}
+
+async function gatewaySessionsRecoverable(mount: ActiveGatewayMount): Promise<boolean> {
+  try {
+    for (const process of mount.manifest.processes) {
+      const session = mount.sessions[process.role];
+      if (!session || !await tmuxExists(session) || await tmuxSessionDead(session)) continue;
+      await inspectOwnedGatewaySession(session, mount, process.entrypoint);
+    }
+    return true;
+  } catch { return false; }
+}
+
 async function readExactGatewayWorkerEnvironment(worker: ManagedProcessSnapshot): Promise<string> {
   const result = await run(["sudo", "-n", "cat", `/proc/${worker.pid}/environ`]);
   if (result.code !== 0) throw new Error(result.stderr.trim() || "failed to read owned Gateway worker environment");
@@ -657,21 +680,19 @@ async function findOwnedGatewayWorkerFromImmutablePackage(
 async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<ActiveGatewayMount | undefined> {
   const existing = await Promise.all(mount.manifest.processes.map(async (process) => await tmuxExists(mount.sessions[process.role]!)));
   if (existing.every((value) => !value)) return undefined;
-  if (!existing.every(Boolean)) throw new Error(`Gateway orphan sessions are incomplete: ${mount.key}`);
-  if (mount.manifest.server === null) {
-    if (!await gatewaySessionsOwned(mount)) throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
-    return mount;
-  }
-  const server = mount.manifest.processes.find((process) => process.role === mount.manifest.server!.process);
-  if (!server) throw new Error(`Gateway server process is missing: ${mount.key}`);
-  const session = mount.sessions[server.role];
-  if (!session) throw new Error(`Gateway process session is missing: ${mount.key}/${server.role}`);
-  const panePid = await tmuxPanePid(session);
-  const pane = await readManagedProcessSnapshot(panePid);
-  const identity = coordinatorIdentity();
-  if (!pane || pane.uid !== identity.uid) throw new Error(`Gateway orphan supervisor identity is invalid: ${mount.key}`);
   const bunPath = await ensureSandboxBun();
-  const located = await findOwnedGatewayWorkerFromImmutablePackage(pane.pid, mount, server.entrypoint, bunPath);
+  let located: Readonly<{ worker: ManagedProcessSnapshot; packageRoot: string }> | undefined;
+  for (const process of mount.manifest.processes) {
+    const session = mount.sessions[process.role];
+    if (!session || !await tmuxExists(session) || await tmuxSessionDead(session)) continue;
+    const panePid = await tmuxPanePid(session);
+    const pane = await readManagedProcessSnapshot(panePid);
+    const identity = coordinatorIdentity();
+    if (!pane || pane.uid !== identity.uid) throw new Error(`Gateway orphan supervisor identity is invalid: ${mount.key}/${process.role}`);
+    located = await findOwnedGatewayWorkerFromImmutablePackage(pane.pid, mount, process.entrypoint, bunPath);
+    break;
+  }
+  if (!located) return mount;
   const packageDigest = await gatewayPackageDigest(located.packageRoot);
   const packageName = basename(located.packageRoot);
   const revision = packageName.slice(0, 64);
@@ -696,7 +717,7 @@ async function recoverOwnedGatewayOrphan(mount: ActiveGatewayMount): Promise<Act
     gatewayProcessEnvironment(recoveredBase),
   );
   const recovered = Object.freeze({ ...recoveredBase, port });
-  if (!await gatewaySessionsOwned(recovered)) {
+  if (!await gatewaySessionsRecoverable(recovered)) {
     throw new Error(`Gateway orphan identity is invalid: ${mount.key}`);
   }
   return recovered;
@@ -714,8 +735,9 @@ async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
     if (!session) { failures.push(new Error(`Gateway process session is missing: ${mount.key}/${process.role}`)); continue; }
     try {
       if (!await tmuxExists(session)) continue;
-      const owned = await inspectOwnedGatewaySession(session, mount, process.entrypoint);
       const label = `Gateway ${mount.key}/${process.role}`;
+      if (await tmuxSessionDead(session)) { await removeDeadTmuxSession(session, label); continue; }
+      const owned = await inspectOwnedGatewaySession(session, mount, process.entrypoint);
       await stopRevalidatedProcess(owned.worker, { ...owned.expectations.worker, pid: owned.worker.pid }, label);
       const deadline = Date.now() + 2_000;
       while (await tmuxExists(session) && Date.now() < deadline) await Bun.sleep(50);
