@@ -752,6 +752,11 @@ async function stopGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
   if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, `Gateway session cleanup was incomplete: ${mount.key}`);
 }
 
+async function stopRecoveredGatewaySessions(mount: ActiveGatewayMount): Promise<void> {
+  const recovered = await recoverOwnedGatewayOrphan(mount);
+  if (recovered) await stopGatewaySessions(recovered);
+}
+
 function gatewayProcessLogPath(mount: ActiveGatewayMount, role: string): string {
   return resolve(stateDir, "logs", "gateways", `${mount.key}-${role}-${mount.revision.slice(0, 12)}.log`);
 }
@@ -979,12 +984,13 @@ async function ensureGateways(): Promise<boolean> {
       sessions,
       manifest,
     });
-    const orphan = prior ? undefined : await recoverOwnedGatewayOrphan(unassigned);
+    const occupied = await recoverOwnedGatewayOrphan(unassigned);
+    const orphan = prior ? undefined : occupied;
     const candidate = Object.freeze({
       ...unassigned,
-      port: manifest.server === null ? null : prior?.port ?? orphan?.port ?? await allocateGatewayPort(),
+      port: manifest.server === null ? null : occupied?.port ?? prior?.port ?? await allocateGatewayPort(),
     });
-    const authority = prior ?? orphan;
+    const authority = occupied ?? prior;
     const reusable = authority?.revision === candidate.revision && authority.source === candidate.source
       && authority.packageDigest === candidate.packageDigest && authority.serviceUser === candidate.serviceUser
       && authority.serviceUid === candidate.serviceUid && authority.serviceGid === candidate.serviceGid
@@ -1005,16 +1011,13 @@ async function ensureGateways(): Promise<boolean> {
       continue;
     }
     console.log(`${prior ? "Updating" : orphan ? "Updating orphaned" : "Starting"} Gateway: ${key} (${revision.slice(0, 12)})`);
+    const runtime = occupied ?? prior;
     try {
-      if (prior) await stopGatewaySessions(prior);
-      else if (orphan) await stopGatewaySessions(orphan);
-      await stopGatewaySessions(candidate);
+      if (runtime) await stopGatewaySessions(runtime);
       await startGatewayMount(candidate);
     } catch (replacementError) {
       await failAfterRollbackOperations(replacementError, `Gateway replacement rollback was incomplete: ${key}`, [
-        async () => stopGatewaySessions(candidate),
-        ...(prior ? [async () => stopGatewaySessions(prior)] : []),
-        ...(orphan ? [async () => stopGatewaySessions(orphan)] : []),
+        async () => stopRecoveredGatewaySessions(candidate),
         ...(priorConfig !== undefined ? [async () => installGatewayConfigText(prior!.home, prior!.serviceUser, prior!.configPath, priorConfig)] : []),
         ...(prior ? [async () => startGatewayMount(prior)] : []),
         ...(orphan ? [async () => startGatewayMount(orphan)] : []),
