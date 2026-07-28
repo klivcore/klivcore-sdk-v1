@@ -2806,7 +2806,8 @@ async function openPublishedDebugAssets(debugAssetsPath, publishedDebugCategoryI
         let file = await open2(`/proc/self/fd/${root.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const info = await file.stat();
-          if (!info.isFile() || info.size > 16 * 1024 * 1024) {
+          const maximumBytes = extension === "js" ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
+          if (!info.isFile() || info.size > maximumBytes) {
             throw new TypeError(`Workbench Gateway debug asset is invalid: ${name}`);
           }
           opened.set(name, Object.freeze({
@@ -2859,7 +2860,11 @@ function requestHandler(server, debugAssets) {
       if (!asset)
         return new Response("Not found", { status: 404 });
       return new Response(await readPublishedDebugAsset(asset), {
-        headers: { "cache-control": "no-store", "content-type": asset.contentType }
+        headers: {
+          "cache-control": "no-store",
+          "content-type": asset.contentType,
+          "x-content-type-options": "nosniff"
+        }
       });
     }
     return server.fetch(request);

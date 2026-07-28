@@ -215,7 +215,7 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
   if (!exact(root, rootKeys)
     || root.schemaVersion !== 1 || root.contractVersion !== 1 || typeof root.id !== "string" || !idPattern.test(root.id)) throw new TypeError("Gateway package contract is invalid");
   const capabilities = strings(root.capabilities, capabilityPattern, 64);
-  if (!Array.isArray(root.routes) || root.routes.length < 1 || root.routes.length > 32) throw new TypeError("Gateway package contract is invalid");
+  if (!Array.isArray(root.routes) || root.routes.length < 1 || root.routes.length > 128) throw new TypeError("Gateway package contract is invalid");
   const routes = root.routes.map((raw) => {
     const route = record(raw);
     const component = record(route.component);

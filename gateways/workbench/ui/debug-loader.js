@@ -6,11 +6,40 @@ async function boundedText(response, maximum, label) {
   if (!response.ok)
     throw new Error(`${label} request failed (${response.status})`);
   const declared = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > maximum)
+  if (Number.isFinite(declared) && declared > maximum) {
+    await response.body?.cancel().catch(() => {
+      return;
+    });
     throw new Error(`${label} exceeds its byte limit`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > maximum)
-    throw new Error(`${label} exceeds its byte limit`);
+  }
+  if (!response.body)
+    return "";
+  const reader = response.body.getReader();
+  const chunks = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done)
+        break;
+      byteLength += value.byteLength;
+      if (byteLength > maximum) {
+        await reader.cancel().catch(() => {
+          return;
+        });
+        throw new Error(`${label} exceeds its byte limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 }
 async function mount(host) {
