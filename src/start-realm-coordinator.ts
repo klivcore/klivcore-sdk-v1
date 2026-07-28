@@ -533,10 +533,17 @@ async function gatewayHealthy(mount: ActiveGatewayMount): Promise<boolean> {
 async function waitForGateway(mount: ActiveGatewayMount): Promise<void> {
   const serverRole = mount.manifest.server?.process;
   if (!serverRole) return;
+  const serverProcess = mount.manifest.processes.find((process) => process.role === serverRole);
+  const serverSession = mount.sessions[serverRole];
+  if (!serverProcess || !serverSession) throw new Error(`Gateway server process is invalid: ${mount.key}`);
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    if (!await tmuxExists(mount.sessions[serverRole]!)) throw await gatewayStartupFailure(mount, serverRole);
-    if (await gatewayHealthy(mount)) return;
+    if (!await tmuxExists(serverSession)) throw await gatewayStartupFailure(mount, serverRole);
+    if (await gatewayHealthy(mount)) {
+      await inspectOwnedGatewaySession(serverSession, mount, serverProcess.entrypoint);
+      if (!await tmuxExists(serverSession)) throw await gatewayStartupFailure(mount, serverRole);
+      return;
+    }
     await Bun.sleep(250);
   }
   const output = await gatewayProcessLogTail(mount, serverRole);
@@ -1036,11 +1043,16 @@ async function ensureGateways(): Promise<boolean> {
     });
     const occupied = await recoverOwnedGatewayOrphan(unassigned);
     const orphan = prior ? undefined : occupied;
-    const candidate = Object.freeze({
+    let candidate = Object.freeze({
       ...unassigned,
       port: manifest.server === null ? null : occupied?.port ?? prior?.port ?? await allocateGatewayPort(),
     });
     const authority = occupied ?? prior;
+    const authoritySessionsOwned = authority ? await gatewaySessionsOwned(authority) : false;
+    candidate = Object.freeze({
+      ...candidate,
+      port: authority && candidate.port !== null && !authoritySessionsOwned ? await allocateGatewayPort() : candidate.port,
+    });
     const reusable = authority?.revision === candidate.revision && authority.source === candidate.source
       && authority.packageDigest === candidate.packageDigest && authority.serviceUser === candidate.serviceUser
       && authority.serviceUid === candidate.serviceUid && authority.serviceGid === candidate.serviceGid
@@ -1049,7 +1061,7 @@ async function ensureGateways(): Promise<boolean> {
       && authority.port === candidate.port
       && await gatewayPackageDigest(candidate.packageRoot) === candidate.packageDigest
       && JSON.stringify(authority.sessions) === JSON.stringify(candidate.sessions)
-      && await gatewaySessionsOwned(candidate)
+      && authoritySessionsOwned
       && await gatewayHealthy(candidate);
     if (reusable) {
       console.log(orphan
