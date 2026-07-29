@@ -1393,14 +1393,14 @@ var require_hjson = __commonJS((exports, module) => {
 });
 
 // packages/publish-sdk/src/gateway-server.ts
-import { readFile as readFile2 } from "fs/promises";
+import { readFile as readFile3 } from "fs/promises";
 import { resolve as resolve4 } from "path";
 
 // packages/publish-sdk/src/gateway-server-core.ts
 import { createHash as createHash3 } from "crypto";
 import { constants } from "fs";
-import { chmod, lstat as lstat2, mkdir as mkdir3, open as open2, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute2, resolve as resolve3 } from "path";
+import { chmod, lstat as lstat2, mkdir as mkdir4, open as open2, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "path";
 
 // packages/server/src/index.ts
 import { lstat, mkdir as mkdir2, open, readFile, readdir, rename, rm as rm2, stat, unlink, utimes, writeFile } from "fs/promises";
@@ -2651,8 +2651,11 @@ function isPathConflictError(error) {
 // packages/bench-gateway-server/src/live-components.ts
 import { createHash as createHash2 } from "crypto";
 import { watch } from "fs";
+import { mkdir as mkdir3, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
 var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
+var SHA256 = /^[a-f0-9]{64}$/u;
 var MAX_COMPONENTS = 64;
 var MAX_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
 var MAX_CSS_BYTES = 2 * 1024 * 1024;
@@ -2661,6 +2664,9 @@ var MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 var encoder = new TextEncoder;
 async function createLiveComponentGateway(options) {
   const apiBasePath = normalizeBasePath(options.apiBasePath ?? "/extensions/live-components");
+  if (!SHA256.test(options.authority.authorityFingerprint) || !REALM_ID.test(options.authority.benchGatewayId) || !REALM_ID.test(options.authority.realmId) || options.lineageFile !== undefined && !isAbsolute(options.lineageFile)) {
+    throw new TypeError("Live component authority or lineage path is invalid");
+  }
   if (!Array.isArray(options.registrations) || options.registrations.length === 0 || options.registrations.length > MAX_COMPONENTS) {
     throw new TypeError("Live component registrations are outside the supported bound");
   }
@@ -2677,21 +2683,24 @@ async function createLiveComponentGateway(options) {
   const watchers = [];
   const debounceTimers = new Map;
   let closed = false;
-  let sequence = 0;
+  const lineageFile = options.lineageFile ? resolve2(options.lineageFile) : undefined;
+  const persistedLineage = lineageFile ? await readLineage(lineageFile, options.authority) : null;
+  let sequence = persistedLineage?.sequence ?? 0;
+  let previousCatalogRevision = persistedLineage?.catalogRevision ?? null;
   let catalog = null;
   let rebuildQueue = Promise.resolve();
-  const publishCatalog = (changedTypeId) => {
-    const parentCatalogRevision = catalog?.catalogRevision ?? null;
+  const publishCatalog = async (changedTypeId) => {
+    const parentCatalogRevision = catalog?.catalogRevision ?? previousCatalogRevision;
     const components = [...active.values()].sort((left, right) => left.typeId.localeCompare(right.typeId));
     const activeArtifactHashes = new Set(components.flatMap((component) => [component.jsArtifactSha256, component.cssArtifactSha256].filter((value) => Boolean(value))));
-    sequence += 1;
+    const nextSequence = sequence + 1;
     const identity = sha256(encoder.encode(JSON.stringify(components.map((component) => [
       component.typeId,
       component.implementationRevision,
       component.jsArtifactSha256,
       component.cssArtifactSha256 ?? null
     ]))));
-    catalog = Object.freeze({
+    const nextCatalog = Object.freeze({
       apiVersion: "1.0.0",
       artifacts: Object.freeze([...immutableArtifacts.values()].filter((artifact) => activeArtifactHashes.has(artifact.sha256)).map((artifact) => Object.freeze({
         bytes: artifact.bytes.byteLength,
@@ -2701,7 +2710,7 @@ async function createLiveComponentGateway(options) {
         sha256: artifact.sha256
       }))),
       authority: options.authority,
-      catalogRevision: `live-${sequence}-${identity.slice(0, 24)}`,
+      catalogRevision: `live-${nextSequence}-${identity.slice(0, 24)}`,
       components: Object.freeze(components.map((component) => Object.freeze({
         ...component.cssArtifactSha256 ? { cssArtifactSha256: component.cssArtifactSha256 } : {},
         hostApiRange: "^1.0.0",
@@ -2714,8 +2723,13 @@ async function createLiveComponentGateway(options) {
       debug: Object.freeze([]),
       parentCatalogRevision,
       routes: Object.freeze([]),
-      sequence
+      sequence: nextSequence
     });
+    if (lineageFile)
+      await writeLineage(lineageFile, options.authority, nextSequence, nextCatalog.catalogRevision);
+    sequence = nextSequence;
+    catalog = nextCatalog;
+    previousCatalogRevision = nextCatalog.catalogRevision;
     const event = encoder.encode(`event: component-revision-activated
 data: ${JSON.stringify({
       catalogRevision: catalog.catalogRevision,
@@ -2761,10 +2775,25 @@ data: ${JSON.stringify({
     const previous = active.get(typeId);
     if (previous?.implementationRevision === built.implementationRevision)
       return;
-    for (const artifact of built.artifacts)
-      immutableArtifacts.set(`${artifact.sha256}.${artifact.kind}`, artifact);
+    const addedArtifactKeys = [];
+    for (const artifact of built.artifacts) {
+      const key = `${artifact.sha256}.${artifact.kind}`;
+      if (!immutableArtifacts.has(key))
+        addedArtifactKeys.push(key);
+      immutableArtifacts.set(key, artifact);
+    }
     active.set(typeId, built);
-    publishCatalog(typeId);
+    try {
+      await publishCatalog(typeId);
+    } catch (error) {
+      if (previous)
+        active.set(typeId, previous);
+      else
+        active.delete(typeId);
+      for (const key of addedArtifactKeys)
+        immutableArtifacts.delete(key);
+      throw error;
+    }
     const activeKeys = new Set([...active.values()].flatMap((component) => [
       `${component.jsArtifactSha256}.js`,
       ...component.cssArtifactSha256 ? [`${component.cssArtifactSha256}.css`] : []
@@ -2877,6 +2906,30 @@ data: ${JSON.stringify({
     },
     rebuild
   });
+}
+async function readLineage(path, authority) {
+  let raw;
+  try {
+    raw = await readFile2(path, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT")
+      return null;
+    throw error;
+  }
+  if (raw.length > 4096)
+    throw new TypeError("Live component lineage is invalid");
+  const value = JSON.parse(raw);
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join("\x00") !== ["authority", "catalogRevision", "sequence"].sort().join("\x00") || JSON.stringify(value.authority) !== JSON.stringify(authority) || typeof value.catalogRevision !== "string" || !/^live-[1-9][0-9]*-[a-f0-9]{24}$/u.test(value.catalogRevision) || !Number.isSafeInteger(value.sequence) || value.sequence < 1) {
+    throw new TypeError("Live component lineage is invalid");
+  }
+  return Object.freeze({ catalogRevision: value.catalogRevision, sequence: value.sequence });
+}
+async function writeLineage(path, authority, sequence, catalogRevision) {
+  await mkdir3(dirname3(path), { recursive: true, mode: 448 });
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile2(temporary, `${JSON.stringify({ authority, catalogRevision, sequence })}
+`, { mode: 384 });
+  await rename2(temporary, path);
 }
 async function buildReactComponent(registration) {
   const bunRuntime = globalThis.Bun;
@@ -3112,9 +3165,9 @@ async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPa
         throw new TypeError(`Workbench Gateway vault root is invalid: ${vault.id}`);
     }));
   } else {
-    await mkdir3(defaultVault, { recursive: true, mode: 448 });
+    await mkdir4(defaultVault, { recursive: true, mode: 448 });
   }
-  await mkdir3(cache, { recursive: true, mode: 448 });
+  await mkdir4(cache, { recursive: true, mode: 448 });
   await chmod(home, 448);
   if (!effectiveConfig) {
     await Promise.all([
@@ -3138,13 +3191,15 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
     workspace: { id: "workbench", name: effectiveConfig.workspaceName }
   } : bootstrap;
   const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: vaults.map((vault) => ({ ...vault, cacheRoot: cache })) });
-  const liveComponents = effectiveConfig?.liveComponents ? await createLiveComponentGateway({
+  const liveAuthorityFingerprint = effectiveConfig?.liveComponents ? createHash3("sha256").update(JSON.stringify(effectiveConfig.liveComponents)).digest("hex") : undefined;
+  const liveComponents = effectiveConfig?.liveComponents && liveAuthorityFingerprint ? await createLiveComponentGateway({
     apiBasePath: "/v1/components",
     authority: {
-      authorityFingerprint: createHash3("sha256").update(JSON.stringify(effectiveConfig.liveComponents)).digest("hex"),
+      authorityFingerprint: liveAuthorityFingerprint,
       benchGatewayId: "workbench",
       realmId: effectiveConfig.liveComponents.realmId
     },
+    lineageFile: join3(home, "live-components", `${liveAuthorityFingerprint}.json`),
     registrations: effectiveConfig.liveComponents.registrations
   }) : undefined;
   let debugAssets = new Map;
@@ -3269,9 +3324,9 @@ function requestHandler(server, debugAssets, liveComponents) {
   });
 }
 async function seed(path, content) {
-  await mkdir3(dirname4(path), { recursive: true, mode: 448 });
+  await mkdir4(dirname4(path), { recursive: true, mode: 448 });
   try {
-    await writeFile2(path, content, { flag: "wx", mode: 384 });
+    await writeFile3(path, content, { flag: "wx", mode: 384 });
   } catch (error) {
     if (error.code !== "EEXIST")
       throw error;
@@ -3375,7 +3430,7 @@ function requiredPort() {
 }
 var home = requiredAbsolute("KLIVCORE_GATEWAY_HOME");
 var configPath = requiredAbsolute("KLIVCORE_GATEWAY_CONFIG");
-var config = JSON.parse(await readFile2(configPath, "utf8"));
+var config = JSON.parse(await readFile3(configPath, "utf8"));
 var debugAssets = resolve4(import.meta.dir, "../debug/assets");
 var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config), debugAssets, publishedWorkbenchDebugCategoryIds);
 var server = Bun.serve({ hostname: "127.0.0.1", port: requiredPort(), fetch: handler });
