@@ -37819,7 +37819,7 @@ function createLiveComponentRuntime(options2) {
         setSnapshot(typeId, previous?.component ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: `Component type is not published: ${typeId}`, status: "error" });
         continue;
       }
-      if (previous?.component && previous.implementationRevision === descriptor.implementationRevision && !previous.error?.startsWith("Update stream unavailable:"))
+      if (previous?.component && previous.implementationRevision === descriptor.implementationRevision)
         continue;
       if (!previous?.component)
         setSnapshot(typeId, { status: "loading" });
@@ -37901,15 +37901,9 @@ function createLiveComponentRuntime(options2) {
 `);
           }
         }
-      } catch (error) {
+      } catch {
         if (closed || controller.signal.aborted)
           return;
-        const message = error instanceof Error ? error.message : String(error);
-        for (const typeId of requested) {
-          const previous = snapshots.get(typeId);
-          if (previous?.component)
-            setSnapshot(typeId, { ...previous, error: `Update stream unavailable: ${message}`, status: "stale" });
-        }
       } finally {
         if (eventAbort === controller)
           eventAbort = null;
