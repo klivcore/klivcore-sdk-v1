@@ -293,6 +293,40 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-directory-scene",
+      "path": "/debug/directory-scene",
+      "title": "Workbench debug: Directory scene",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-directory-scene",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
+    },
+    {
+      "id": "debug-directory-scene-recursive-treemap",
+      "path": "/debug/directory-scene/recursive-treemap",
+      "title": "Workbench debug: Recursive treemap",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-directory-scene-recursive-treemap",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {

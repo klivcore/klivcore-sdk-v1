@@ -12705,11 +12705,528 @@ var require_hjson = __commonJS((exports, module) => {
   });
 });
 
-// packages/publish-sdk/src/gateway-debug-bench-viewport.tsx
+// packages/publish-sdk/src/gateway-debug-directory-scene.tsx
 var import_client = __toESM(require_client(), 1);
 
-// packages/react/src/BenchViewport.debug.tsx
-var import_react10 = __toESM(require_react(), 1);
+// packages/plugin-directory/src/scene.ts
+async function loadDirectoryScene(request, listDirectory, options2 = {}) {
+  const signal = request.signal ?? new AbortController().signal;
+  signal.throwIfAborted();
+  const sourceId = normalizeIdentityPart(request.sourceId, "Directory source id");
+  const vaultId = normalizeIdentityPart(request.rootId ?? request.vaultId ?? "", "Directory root id");
+  const traversalPath = request.traversalPath.map((segment) => normalizeIdentityPart(segment, "Directory traversal segment"));
+  if (!traversalPath.length)
+    throw new Error("Directory traversal path must not be empty.");
+  const requestedPath = normalizeDirectoryPath(request.path);
+  const sceneId = createSceneId(sourceId, vaultId, requestedPath);
+  const fileLineCountRange = normalizeFileLineCountRange(options2.fileLineCountRange);
+  const limits = {
+    count: 1,
+    maxAppearances: normalizePositiveInteger(options2.maxAppearances, 5000, "Directory max appearances"),
+    maxDepth: normalizePositiveInteger(options2.maxDepth, 8, "Directory max depth")
+  };
+  const limiter = new DirectoryLoadLimiter(normalizePositiveInteger(options2.maxConcurrency, 8, "Directory max concurrency"));
+  const virtualGroupMaxChildren = normalizeVirtualGroupMaxChildren(options2.virtualGroupMaxChildren);
+  const root2 = await loadDirectoryNode(requestedPath, 0, sourceId, vaultId, signal, listDirectory, limits, limiter, fileLineCountRange);
+  const layout = normalizeTreemapLayout(options2.layout);
+  const rootResourceId = createResourceId("directory", sourceId, vaultId, requestedPath);
+  const rootAppearanceId = createAppearanceId(sceneId, serializeTraversalIdentity(traversalPath), rootResourceId);
+  let height = layout.height;
+  let width = layout.width;
+  while (true) {
+    const bounds = { height, width, x: 0, y: 0 };
+    const appearances = [{
+      appearanceId: rootAppearanceId,
+      entryType: "directory",
+      geometry: bounds,
+      loaded: true,
+      name: directoryBasename(requestedPath),
+      path: requestedPath,
+      resourceId: rootResourceId,
+      sceneId,
+      traversalPath
+    }];
+    const virtualGroups = [];
+    try {
+      if (root2.children.length)
+        layoutDirectoryEntries(root2.children, insetDirectoryBounds(bounds, layout.gap, layout.directoryHeaderHeight), {
+          appearances,
+          directoryPath: requestedPath,
+          directoryHeaderHeight: layout.directoryHeaderHeight,
+          gap: layout.gap,
+          parentAppearanceId: rootAppearanceId,
+          parentTraversalPath: traversalPath,
+          sceneId,
+          sourceId,
+          vaultId,
+          virtualGroupMaxChildren,
+          virtualGroupScopeId: rootAppearanceId,
+          virtualGroups
+        });
+      assertFiniteAppearanceGeometry(appearances);
+      assertValidVirtualGroups(virtualGroups, appearances, bounds);
+      return { appearances, bounds, scene: { kind: "directory", layoutMode: "recursive-flat-v1", sceneId, virtualGrouping: "bounded-v1" }, virtualGroups };
+    } catch (error) {
+      if (!(error instanceof DirectoryLayoutConstraintError))
+        throw error;
+      height *= 2;
+      width *= 2;
+      if (!Number.isFinite(height) || !Number.isFinite(width)) {
+        throw new Error("Directory treemap cannot preserve configured corridors within finite bounds.");
+      }
+    }
+  }
+}
+
+class DirectoryLayoutConstraintError extends Error {
+}
+
+class DirectoryLoadLimiter {
+  maximum;
+  active = 0;
+  failure;
+  pending = [];
+  constructor(maximum) {
+    this.maximum = maximum;
+  }
+  async run(operation) {
+    await this.acquire();
+    if (this.failure) {
+      this.release();
+      throw this.failure;
+    }
+    try {
+      return await operation();
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error("Directory scene loading failed.");
+      this.fail(failure);
+      throw failure;
+    } finally {
+      this.release();
+    }
+  }
+  fail(error) {
+    if (this.failure)
+      return;
+    this.failure = error;
+    for (const pending of this.pending.splice(0))
+      pending.reject(error);
+  }
+  acquire() {
+    if (this.failure)
+      return Promise.reject(this.failure);
+    if (this.active < this.maximum) {
+      this.active += 1;
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => this.pending.push({ reject, resolve }));
+  }
+  release() {
+    const next = this.pending.shift();
+    if (next && !this.failure)
+      next.resolve();
+    else
+      this.active -= 1;
+  }
+}
+async function loadDirectoryNode(path, depth, sourceId, vaultId, signal, listDirectory, limits, limiter, fileLineCountRange) {
+  try {
+    signal.throwIfAborted();
+    if (depth > limits.maxDepth)
+      throw new Error(`Directory scene exceeds maximum depth ${limits.maxDepth}.`);
+    const normalized = await limiter.run(async () => {
+      const listed = await listDirectory({ path, rootId: vaultId, signal, sourceId, vaultId });
+      signal.throwIfAborted();
+      const listedPath = normalizeDirectoryPath(listed.path);
+      if (listedPath !== path)
+        throw new Error("Directory response path does not match request.");
+      const seenNames = new Set;
+      const entries = listed.entries.map((entry) => {
+        const name = normalizeEntryName(entry.name);
+        if (seenNames.has(name))
+          throw new Error(`Duplicate Directory entry name: ${name}`);
+        if (entry.type !== "directory" && entry.type !== "file")
+          throw new Error(`Invalid Directory entry type: ${name}`);
+        const lineCount = entry.type === "file" ? normalizeFileLineCount(entry.lineCount, name) : undefined;
+        const revision = normalizeOptionalRevision(entry.revision, name);
+        seenNames.add(name);
+        return { entryType: entry.type, lineCount, name, path: joinDirectoryPath(path, name), revision };
+      });
+      entries.sort((left, right) => compareText(left.name, right.name));
+      limits.count += entries.length;
+      if (limits.count > limits.maxAppearances)
+        throw new Error(`Directory scene exceeds ${limits.maxAppearances} appearances.`);
+      return entries;
+    });
+    const children = await Promise.all(normalized.map(async (entry) => {
+      if (entry.entryType === "directory")
+        return loadDirectoryNode(entry.path, depth + 1, sourceId, vaultId, signal, listDirectory, limits, limiter, fileLineCountRange);
+      return {
+        children: [],
+        entryType: "file",
+        ...entry.lineCount !== undefined ? { lineCount: entry.lineCount } : {},
+        name: entry.name,
+        path: entry.path,
+        ...entry.revision ? { revision: entry.revision } : {},
+        weight: clamp(entry.lineCount ?? fileLineCountRange.min, fileLineCountRange.min, fileLineCountRange.max)
+      };
+    }));
+    return {
+      children,
+      entryType: "directory",
+      name: directoryBasename(path),
+      path,
+      weight: Math.max(1, children.reduce((total, child) => total + child.weight, 0))
+    };
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error("Directory scene loading failed.");
+    limiter.fail(failure);
+    throw failure;
+  }
+}
+function layoutDirectoryEntries(entries, bounds, context) {
+  const geometries = partitionTreemap(entries, bounds, context);
+  entries.forEach((entry) => {
+    const geometry = geometries.get(entry.path);
+    const traversalPath = [...context.parentTraversalPath, `${entry.entryType}:${entry.path}`];
+    const resourceId = createResourceId(entry.entryType, context.sourceId, context.vaultId, entry.path);
+    const appearanceId = createAppearanceId(context.sceneId, serializeTraversalIdentity(traversalPath), resourceId);
+    const appearance = {
+      appearanceId,
+      entryType: entry.entryType,
+      geometry,
+      ...entry.lineCount !== undefined ? { lineCount: entry.lineCount } : {},
+      loaded: true,
+      name: entry.name,
+      path: entry.path,
+      ...entry.revision ? { revision: entry.revision } : {},
+      resourceId,
+      sceneId: context.sceneId,
+      traversalPath,
+      ...context.parentAppearanceId ? { parentAppearanceId: context.parentAppearanceId } : {}
+    };
+    context.appearances.push(appearance);
+    if (!entry.children.length)
+      return;
+    const childBounds = insetDirectoryBounds(geometry, context.gap, context.directoryHeaderHeight);
+    layoutDirectoryEntries(entry.children, childBounds, {
+      ...context,
+      directoryPath: entry.path,
+      parentAppearanceId: appearanceId,
+      parentTraversalPath: traversalPath
+    });
+  });
+}
+var directoryTextFileWidth = 608;
+var directoryTextFileLineHeight = 20;
+function isDirectoryImageFilePath(path) {
+  return /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|webp)$/i.test(path);
+}
+function partitionTreemap(entries, bounds, context) {
+  const geometries = new Map;
+  const measured = entries.map((entry) => measureDirectoryEntry(entry, context.gap, context.directoryHeaderHeight, context.virtualGroupMaxChildren));
+  const packed = packDirectoryNodes(measured, bounds.width, context.gap, context.virtualGroupMaxChildren, context.virtualGroupScopeId, context.directoryPath);
+  if (packed.width > bounds.width || packed.height > bounds.height) {
+    throw new DirectoryLayoutConstraintError("Directory treemap bounds cannot preserve document geometry.");
+  }
+  for (const placement of packed.placements) {
+    flattenDirectoryPackingNode(placement.item, bounds.x + placement.x, bounds.y + placement.y, geometries, context);
+  }
+  return geometries;
+}
+function measureDirectoryEntry(entry, gap, directoryHeaderHeight, virtualGroupMaxChildren) {
+  if (entry.entryType === "file") {
+    return {
+      entry,
+      height: isDirectoryImageFilePath(entry.path) ? directoryTextFileWidth : entry.weight * directoryTextFileLineHeight,
+      width: directoryTextFileWidth
+    };
+  }
+  if (!entry.children.length) {
+    return { entry, height: Math.max(8, directoryHeaderHeight + gap * 2), width: directoryTextFileWidth };
+  }
+  const children = entry.children.map((child) => measureDirectoryEntry(child, gap, directoryHeaderHeight, virtualGroupMaxChildren));
+  const totalArea = children.reduce((sum, child) => sum + child.width * child.height, 0);
+  const widestChild = Math.max(...children.map((child) => child.width));
+  const targetWidth = Math.max(widestChild, Math.sqrt(totalArea * 1.6));
+  const packed = packDirectoryNodes(children, targetWidth, gap, virtualGroupMaxChildren, "measurement", entry.path);
+  return {
+    entry,
+    height: directoryHeaderHeight + gap * 2 + packed.height,
+    width: Math.max(directoryTextFileWidth, gap * 2 + packed.width)
+  };
+}
+function packDirectoryNodes(entries, maximumWidth, gap, virtualGroupMaxChildren, virtualGroupScopeId, directoryPath) {
+  let nodes = entries.map((entry) => ({ entry, height: entry.height, width: entry.width }));
+  let level = 0;
+  while (nodes.length > virtualGroupMaxChildren) {
+    const grouped = [];
+    for (let start = 0;start < nodes.length; start += virtualGroupMaxChildren) {
+      const children = nodes.slice(start, start + virtualGroupMaxChildren);
+      const totalArea = children.reduce((sum, child) => sum + child.width * child.height, 0);
+      const widestChild = Math.max(...children.map((child) => child.width));
+      const targetWidth = Math.max(widestChild, Math.sqrt(totalArea * 1.6));
+      const packed = packDirectoryEntries(children, targetWidth, gap);
+      const index2 = grouped.length;
+      grouped.push({
+        childPlacements: packed.placements.map((placement) => ({
+          ...placement,
+          x: placement.x + gap,
+          y: placement.y + gap
+        })),
+        height: packed.height + gap * 2,
+        level,
+        virtualGroupId: createVirtualGroupId(virtualGroupScopeId, directoryPath, level, index2),
+        width: packed.width + gap * 2
+      });
+    }
+    nodes = grouped;
+    level += 1;
+  }
+  return packDirectoryEntries(nodes, maximumWidth, gap);
+}
+function flattenDirectoryPackingNode(node, x, y, geometries, context) {
+  if (node.entry) {
+    geometries.set(node.entry.entry.path, { height: node.height, width: node.width, x, y });
+    return;
+  }
+  const childPlacements = node.childPlacements ?? [];
+  const childAppearanceIds = childPlacements.flatMap((placement) => {
+    const entry = placement.item.entry?.entry;
+    if (!entry)
+      return [];
+    const traversalPath = [...context.parentTraversalPath, `${entry.entryType}:${entry.path}`];
+    const resourceId = createResourceId(entry.entryType, context.sourceId, context.vaultId, entry.path);
+    return [createAppearanceId(context.sceneId, serializeTraversalIdentity(traversalPath), resourceId)];
+  });
+  const childVirtualGroupIds = childPlacements.flatMap((placement) => placement.item.virtualGroupId ? [placement.item.virtualGroupId] : []);
+  context.virtualGroups.push({
+    ...childAppearanceIds.length ? {
+      childAppearanceIds,
+      childVirtualGroupIds: [],
+      memberKind: "appearance"
+    } : {
+      childAppearanceIds: [],
+      childVirtualGroupIds,
+      memberKind: "virtual-group"
+    },
+    directoryPath: context.directoryPath,
+    geometry: { height: node.height, width: node.width, x, y },
+    level: node.level,
+    semanticParentAppearanceId: context.parentAppearanceId,
+    virtualGroupId: node.virtualGroupId
+  });
+  for (const placement of childPlacements) {
+    flattenDirectoryPackingNode(placement.item, x + placement.x, y + placement.y, geometries, context);
+  }
+}
+function packDirectoryEntries(entries, maximumWidth, gap) {
+  const placements = [];
+  let rowHeight = 0;
+  let usedHeight = 0;
+  let usedWidth = 0;
+  let x = 0;
+  for (const item of entries) {
+    if (x > 0 && x + item.width > maximumWidth) {
+      usedHeight += rowHeight + gap;
+      rowHeight = 0;
+      x = 0;
+    }
+    placements.push({ item, x, y: usedHeight });
+    usedWidth = Math.max(usedWidth, x + item.width);
+    rowHeight = Math.max(rowHeight, item.height);
+    x += item.width + gap;
+  }
+  return { height: entries.length ? usedHeight + rowHeight : 0, placements, width: usedWidth };
+}
+function insetDirectoryBounds(bounds, gap, headerHeight) {
+  const x = bounds.x + gap;
+  const y = bounds.y + headerHeight + gap;
+  return {
+    height: Math.max(0, bounds.height - headerHeight - gap * 2),
+    width: Math.max(0, bounds.width - gap * 2),
+    x,
+    y
+  };
+}
+function normalizePositiveInteger(value, fallback, label) {
+  const normalized = value ?? fallback;
+  if (!Number.isInteger(normalized) || normalized < 1)
+    throw new Error(`${label} must be a positive integer.`);
+  return normalized;
+}
+function normalizeVirtualGroupMaxChildren(value) {
+  const normalized = normalizePositiveInteger(value, 32, "Directory virtual group maximum children");
+  if (normalized < 2)
+    throw new Error("Directory virtual group maximum children must be at least 2.");
+  return normalized;
+}
+function normalizeFileLineCount(value, name) {
+  if (value === undefined)
+    return;
+  if (!Number.isInteger(value) || value < 0)
+    throw new Error(`Invalid Directory file line count: ${name}`);
+  return value;
+}
+function normalizeOptionalRevision(value, name) {
+  if (value === undefined)
+    return;
+  if (typeof value !== "string" || value.length === 0 || value.length > 256)
+    throw new Error(`Invalid Directory entry revision: ${name}`);
+  return value;
+}
+function normalizeFileLineCountRange(value) {
+  const min = normalizePositiveInteger(value?.min, 10, "Directory minimum file line count");
+  const max = normalizePositiveInteger(value?.max, 1000, "Directory maximum file line count");
+  if (max < min)
+    throw new Error("Directory maximum file line count must be greater than or equal to minimum.");
+  return { max, min };
+}
+function clamp(value, min, max) {
+  return Math.min(max, Math.max(min, value));
+}
+function normalizeTreemapLayout(value) {
+  const layout = { directoryHeaderHeight: 28, gap: 16, height: 720, width: 1280, ...value };
+  for (const [name, dimension] of Object.entries(layout)) {
+    if (!Number.isFinite(dimension) || dimension < 0 || (name === "height" || name === "width") && dimension === 0) {
+      throw new Error(`Invalid Directory treemap ${name}.`);
+    }
+  }
+  return layout;
+}
+function assertFiniteAppearanceGeometry(appearances) {
+  if (appearances.some((appearance) => Object.values(appearance.geometry).some((value) => !Number.isFinite(value)))) {
+    throw new Error("Directory treemap produced non-finite geometry.");
+  }
+  if (appearances.some((appearance) => appearance.geometry.width <= 0 || appearance.geometry.height <= 0)) {
+    throw new DirectoryLayoutConstraintError("Directory treemap produced non-positive geometry.");
+  }
+}
+function assertValidVirtualGroups(groups, appearances, sceneBounds) {
+  const appearancesById = new Map(appearances.map((appearance) => [appearance.appearanceId, appearance]));
+  const groupsById = new Map;
+  const virtualParentById = new Map;
+  for (const group of groups) {
+    if (groupsById.has(group.virtualGroupId) || appearancesById.has(group.virtualGroupId))
+      throw new Error("Directory virtual group identity collision.");
+    if (Object.values(group.geometry).some((value) => !Number.isFinite(value)))
+      throw new Error("Directory virtual group produced non-finite geometry.");
+    if (group.geometry.width <= 0 || group.geometry.height <= 0 || !geometryContains(sceneBounds, group.geometry)) {
+      throw new DirectoryLayoutConstraintError("Directory virtual group escaped scene bounds.");
+    }
+    const semanticParent = appearancesById.get(group.semanticParentAppearanceId);
+    if (!semanticParent || semanticParent.entryType !== "directory" || !geometryContains(semanticParent.geometry, group.geometry)) {
+      throw new Error("Directory virtual group has an invalid semantic parent.");
+    }
+    groupsById.set(group.virtualGroupId, group);
+  }
+  for (const group of groups) {
+    if (group.memberKind === "appearance") {
+      if (!group.childAppearanceIds.length || group.childVirtualGroupIds.length)
+        throw new Error("Directory virtual appearance group has invalid members.");
+      for (const appearanceId of group.childAppearanceIds) {
+        const appearance = appearancesById.get(appearanceId);
+        if (!appearance || appearance.parentAppearanceId !== group.semanticParentAppearanceId || !geometryContains(group.geometry, appearance.geometry)) {
+          throw new Error("Directory virtual group has an invalid appearance member.");
+        }
+      }
+      continue;
+    }
+    if (!group.childVirtualGroupIds.length || group.childAppearanceIds.length)
+      throw new Error("Directory virtual parent group has invalid members.");
+    for (const childId of group.childVirtualGroupIds) {
+      const child = groupsById.get(childId);
+      if (!child || child.semanticParentAppearanceId !== group.semanticParentAppearanceId || !geometryContains(group.geometry, child.geometry) || virtualParentById.has(childId)) {
+        throw new Error("Directory virtual group has an invalid virtual child.");
+      }
+      virtualParentById.set(childId, group.virtualGroupId);
+    }
+  }
+  const peerSets = new Map;
+  for (const group of groups) {
+    const peerKey = virtualParentById.get(group.virtualGroupId) ?? `semantic:${group.semanticParentAppearanceId}`;
+    const peers = peerSets.get(peerKey) ?? [];
+    if (peers.some((peer) => geometriesOverlap(peer.geometry, group.geometry)))
+      throw new Error("Directory virtual peer groups overlap.");
+    peers.push(group);
+    peerSets.set(peerKey, peers);
+  }
+  const visit = (id, active) => {
+    if (active.has(id))
+      throw new Error("Directory virtual group cycle detected.");
+    const group = groupsById.get(id);
+    if (!group || group.memberKind !== "virtual-group")
+      return;
+    const next = new Set(active).add(id);
+    for (const childId of group.childVirtualGroupIds)
+      visit(childId, next);
+  };
+  for (const group of groups)
+    visit(group.virtualGroupId, new Set);
+}
+function geometryContains(parent, child) {
+  return child.x >= parent.x && child.y >= parent.y && child.x + child.width <= parent.x + parent.width && child.y + child.height <= parent.y + parent.height;
+}
+function geometriesOverlap(left, right) {
+  return left.x < right.x + right.width && left.x + left.width > right.x && left.y < right.y + right.height && left.y + left.height > right.y;
+}
+function createSceneId(sourceId, vaultId, path) {
+  return `directory:${encodeIdentityPart(sourceId)}:${encodeIdentityPart(vaultId)}:${encodeIdentityPart(path)}`;
+}
+function createAppearanceId(sceneId, traversalId, path) {
+  return `appearance:${sceneId}:via:${traversalId}:${encodeIdentityPart(path)}`;
+}
+function createVirtualGroupId(scopeId, directoryPath, level, index2) {
+  return `virtual-group:${encodeIdentityPart(scopeId)}:${encodeIdentityPart(directoryPath)}:${level}:${index2}`;
+}
+function createResourceId(entryType, sourceId, vaultId, path) {
+  return `resource:${entryType}:${encodeIdentityPart(sourceId)}:${encodeIdentityPart(vaultId)}:${encodeIdentityPart(path)}`;
+}
+function compareText(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function directoryBasename(path) {
+  if (path === ".")
+    return ".";
+  const segments = path.split("/");
+  return segments[segments.length - 1];
+}
+function joinDirectoryPath(directory, name) {
+  return !directory || directory === "." ? name : `${directory.replace(/\/$/, "")}/${name}`;
+}
+function normalizeDirectoryPath(path) {
+  if (!path || path === ".")
+    return ".";
+  if (path.startsWith("/") || path.includes("\\"))
+    throw new Error(`Invalid Directory path: ${path}`);
+  const segments = path.split("/").map((segment) => normalizeIdentityPart(segment, "Directory path segment"));
+  if (segments.some((segment) => !segment || segment === "." || segment === ".."))
+    throw new Error(`Invalid Directory path: ${path}`);
+  return segments.join("/");
+}
+function normalizeEntryName(value) {
+  const name = normalizeIdentityPart(value, "Directory entry name");
+  if (name === "." || name === ".." || name.includes("/") || name.includes("\\"))
+    throw new Error(`Invalid Directory entry name: ${value}`);
+  return name;
+}
+function normalizeIdentityPart(value, label) {
+  const normalized = value.normalize("NFC");
+  if (!normalized || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized))
+    throw new Error(`${label} is invalid.`);
+  return normalized;
+}
+function serializeTraversalIdentity(segments) {
+  return `${segments.length}:${segments.map((segment) => {
+    const encoded = encodeIdentityPart(segment);
+    return `${encoded.length}:${encoded}`;
+  }).join("")}`;
+}
+function encodeIdentityPart(value) {
+  return encodeURIComponent(value);
+}
+// packages/react/src/DirectoryScene.debug.tsx
+var import_react9 = __toESM(require_react(), 1);
 
 // packages/react/src/BenchViewport.tsx
 var import_react8 = __toESM(require_react(), 1);
@@ -13666,38 +14183,8 @@ var benchElementType = {
 var import_react4 = __toESM(require_react(), 1);
 var jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
 var CommentCollaborationContext = import_react4.createContext(null);
-function CommentCollaborationProvider({ children, value }) {
-  return /* @__PURE__ */ jsx_runtime7.jsx(CommentCollaborationContext.Provider, {
-    value,
-    children
-  });
-}
 function useCommentCollaboration() {
   return import_react4.useContext(CommentCollaborationContext);
-}
-function deriveCommentCollaborationProjection(entries) {
-  const answeredRequestIds = new Set(entries.filter((entry) => entry.kind === "response").map((entry) => entry.response?.requestId).filter((requestId) => Boolean(requestId)));
-  const activeRequestEntry = [...entries].reverse().find((entry) => (entry.kind === "question" || entry.kind === "approval") && Boolean(entry.request) && !answeredRequestIds.has(entry.request.id));
-  const latest = entries.at(-1);
-  const phase = activeRequestEntry ? "needs-you" : latest?.kind === "result" ? "done" : "active";
-  const evidence = entries.flatMap((entry) => entry.evidence ?? []);
-  const agentSession = [...entries].reverse().find((entry) => entry.agentSession)?.agentSession;
-  const outcome = [...entries].reverse().find((entry) => entry.result)?.result;
-  const relatedThreadIds = [...new Set(entries.flatMap((entry) => entry.relatedThreadIds ?? []))];
-  return {
-    ...activeRequestEntry?.request ? {
-      activeRequest: { ...activeRequestEntry.request, kind: activeRequestEntry.kind }
-    } : {},
-    ...agentSession ? { agentSession } : {},
-    entries,
-    evidence,
-    evidenceCount: evidence.length,
-    ...latest?.body ? { latestUpdate: latest.body } : {},
-    nextActor: phase === "needs-you" ? "user" : phase === "done" ? null : "agent",
-    ...outcome ? { outcome } : {},
-    phase,
-    ...relatedThreadIds.length ? { relatedThreadIds } : {}
-  };
 }
 var commentCollaborationPhasePresentation = {
   active: { icon: "•", label: "Active", tone: "border-sky-300 bg-sky-500 text-sky-950" },
@@ -14050,7 +14537,7 @@ function getVaultRelativePathError(path) {
 
 // packages/react/src/elementTypes/DirectoryElement.tsx
 var jsx_runtime10 = __toESM(require_jsx_runtime(), 1);
-function normalizeDirectoryPath(path) {
+function normalizeDirectoryPath2(path) {
   return path.trim() || ".";
 }
 function getDirectoryProviderLabel(element) {
@@ -14084,7 +14571,7 @@ var directoryElementType = {
     const authorityLabel = `${providerLabel} / ${element.rootId}`;
     const labelScale = getDirectoryLabelScale(viewportZoom);
     const commitPath = (input) => {
-      const path = normalizeDirectoryPath(input.value);
+      const path = normalizeDirectoryPath2(input.value);
       input.value = path;
       if (path === element.path)
         return;
@@ -22777,8 +23264,8 @@ function solveIsland(Box2D2, worldRects, originalNodes, childrenByParent, island
       const position = body.GetPosition();
       const localX = position.get_x() * scale - rect.w / 2;
       const localY = position.get_y() * scale - rect.h / 2;
-      const nextX = parent ? clamp(localX, 24, Math.max(24, parent.w - rect.w - 24)) + parent.x : localX;
-      const nextY = parent ? clamp(localY, 24, Math.max(24, parent.h - rect.h - 24)) + parent.y : localY;
+      const nextX = parent ? clamp2(localX, 24, Math.max(24, parent.w - rect.w - 24)) + parent.x : localX;
+      const nextY = parent ? clamp2(localY, 24, Math.max(24, parent.h - rect.h - 24)) + parent.y : localY;
       const dx = nextX - rect.x;
       const dy = nextY - rect.y;
       rect.x = nextX;
@@ -22912,7 +23399,7 @@ function vectorBetween(from, to) {
 function center(rect) {
   return { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 };
 }
-function clamp(value, min, max) {
+function clamp2(value, min, max) {
   if (max < min)
     return (min + max) / 2;
   return Math.max(min, Math.min(max, value));
@@ -25342,16 +25829,16 @@ function getMinimapViewportIndicatorRect(viewport, viewportSize, sceneBounds, mi
   const rawTop = contentTop + (viewBounds.minY - sceneBounds.minY) * scale;
   const rawRight = contentLeft + (viewBounds.maxX - sceneBounds.minX) * scale;
   const rawBottom = contentTop + (viewBounds.maxY - sceneBounds.minY) * scale;
-  const clippedLeft = clamp2(rawLeft, 0, minimapSize.width);
-  const clippedTop = clamp2(rawTop, 0, minimapSize.height);
-  const clippedRight = clamp2(rawRight, 0, minimapSize.width);
-  const clippedBottom = clamp2(rawBottom, 0, minimapSize.height);
+  const clippedLeft = clamp3(rawLeft, 0, minimapSize.width);
+  const clippedTop = clamp3(rawTop, 0, minimapSize.height);
+  const clippedRight = clamp3(rawRight, 0, minimapSize.width);
+  const clippedBottom = clamp3(rawBottom, 0, minimapSize.height);
   const minWidth = Math.min(8, minimapSize.width);
   const minHeight = Math.min(8, minimapSize.height);
   const width = Math.max(minWidth, clippedRight - clippedLeft);
   const height = Math.max(minHeight, clippedBottom - clippedTop);
-  const left = clamp2(clippedLeft, 0, minimapSize.width - width);
-  const top = clamp2(clippedTop, 0, minimapSize.height - height);
+  const left = clamp3(clippedLeft, 0, minimapSize.width - width);
+  const top = clamp3(clippedTop, 0, minimapSize.height - height);
   return { contentHeight, contentLeft, contentTop, contentWidth, height, left, top, width };
 }
 function getZoomedBenchElementToOpen(elements, viewport, rect) {
@@ -29138,7 +29625,7 @@ function fitSizeToAspectRatio(maxWidth, maxHeight, aspectRatio) {
   }
   return { height: Math.round(maxWidth / aspectRatio), width: Math.round(maxWidth) };
 }
-function clamp2(value, min, max) {
+function clamp3(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 function sampleEvenly2(items, maxItems) {
@@ -29185,8 +29672,8 @@ function createTextFileAggregateFootprint(element, bounds, boundsWidth, boundsHe
   const lines = preview.lines.slice(0, 6);
   const tokens = lines.flatMap((line, lineIndex) => line.segments.slice(0, 4).flatMap((segment) => {
     const color = /^#[0-9a-f]{6}$/i.test(segment.color) ? segment.color : "#cbd5e1";
-    const start = clamp2(segment.start, 0, 80);
-    const length = clamp2(segment.length, 0.5, 80 - start);
+    const start = clamp3(segment.start, 0, 80);
+    const length = clamp3(segment.length, 0.5, 80 - start);
     const tokenX = x + width * (0.03 + start / 88);
     const tokenWidth = Math.min(x + width - tokenX, Math.max(0.12, width * length / 88));
     const tokenY = contentY + contentHeight * ((lineIndex + 0.65) / Math.max(1, lines.length));
@@ -29396,632 +29883,396 @@ function motionPanVelocity(deltaDegrees) {
   return Math.sign(deltaDegrees) * Math.min(amount * amount * 0.8, 900);
 }
 
-// packages/react/src/CommentCollaborationRuntime.tsx
-var import_react9 = __toESM(require_react(), 1);
-var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
-function CommentCollaborationPanel({ onNavigate }) {
-  const controller = useCommentCollaboration();
-  if (!controller)
-    return null;
-  const projections = controller.listProjections?.() ?? [];
-  const counts = countPhases(projections);
-  return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-    className: "flex h-full min-h-0 flex-col",
-    "data-comment-collaboration-panel": true,
-    children: [
-      /* @__PURE__ */ jsx_runtime20.jsxs("p", {
-        className: "border-b border-slate-800 px-3 py-2 text-[10px] text-slate-400",
-        children: [
-          counts["needs-you"],
-          " needs you · ",
-          counts.active,
-          " active · ",
-          counts.done,
-          " done",
-          controller.status === "failed" ? " · disconnected" : ""
-        ]
-      }),
-      /* @__PURE__ */ jsx_runtime20.jsx("div", {
-        className: "min-h-0 flex-1 overflow-y-auto p-2",
-        children: projections.length ? ["needs-you", "active", "done"].map((phase) => {
-          const comments = projections.filter((projection) => projection.phase === phase);
-          if (!comments.length)
-            return null;
-          return /* @__PURE__ */ jsx_runtime20.jsx(CommentPhaseGroup, {
-            comments,
-            onNavigate: (source) => onNavigate?.(source),
-            phase,
-            respond: (action) => void controller.act(action)
-          }, phase);
-        }) : /* @__PURE__ */ jsx_runtime20.jsx("p", {
-          className: "p-3 text-slate-400",
-          children: "No indexed comments yet."
-        })
-      })
-    ]
-  });
-}
-function CommentCollaborationAttentionBadge() {
-  const controller = useCommentCollaboration();
-  if (!controller)
-    return null;
-  const count = countPhases(controller.listProjections?.() ?? [])["needs-you"];
-  return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
-    children: [
-      count > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-        "aria-label": `${count} comments need you`,
-        className: "rounded-full bg-amber-300 px-1.5 text-[10px] font-black text-amber-950",
-        children: count
-      }) : null,
-      controller.status === "failed" ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-        className: "text-rose-300",
-        title: "Comments disconnected",
-        children: "×"
-      }) : null
-    ]
-  });
-}
-function CommentPhaseGroup({ comments, onNavigate, phase, respond }) {
-  const presentation = commentCollaborationPhasePresentation[phase];
-  return /* @__PURE__ */ jsx_runtime20.jsxs("section", {
-    className: "mb-2 last:mb-0",
-    "data-comment-collaboration-phase-group": phase,
-    children: [
-      /* @__PURE__ */ jsx_runtime20.jsxs("h3", {
-        className: "mb-1 px-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400",
-        children: [
-          presentation.label,
-          " · ",
-          comments.length
-        ]
-      }),
-      /* @__PURE__ */ jsx_runtime20.jsx("div", {
-        className: "space-y-1.5",
-        children: comments.map((projection) => {
-          const source = projection.source;
-          return /* @__PURE__ */ jsx_runtime20.jsxs("article", {
-            className: `rounded border border-slate-800 bg-slate-900/65 ${phase === "needs-you" ? "p-2" : "p-1.5"}`,
-            children: [
-              /* @__PURE__ */ jsx_runtime20.jsxs("button", {
-                className: "block w-full text-left",
-                onClick: () => onNavigate(source),
-                type: "button",
-                children: [
-                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                    className: `${phase === "needs-you" ? "line-clamp-2" : "truncate"} font-medium text-slate-100`,
-                    children: source.text
-                  }),
-                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                    className: "mt-0.5 truncate text-[10px] text-slate-500",
-                    children: source.benchPath
-                  })
-                ]
-              }),
-              projection.latestUpdate && !projection.activeRequest && (phase !== "done" || !projection.outcome) ? /* @__PURE__ */ jsx_runtime20.jsx("p", {
-                className: `${phase === "needs-you" ? "mt-2" : "mt-1 line-clamp-1 text-[10px]"} border-l border-slate-700 pl-2 text-slate-300`,
-                children: projection.latestUpdate
-              }) : null,
-              projection.agentSession && phase === "needs-you" ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                className: "mt-1 truncate text-[10px] text-slate-500",
-                title: `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`,
-                children: projection.agentSession.label ?? `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`
-              }) : null,
-              projection.activeRequest ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                className: "mt-2 rounded bg-amber-300/10 p-2 text-amber-50",
-                children: [
-                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                    children: projection.activeRequest.prompt ?? projection.activeRequest.proposal
-                  }),
-                  projection.activeRequest.scope ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                    className: "mt-1 text-[10px] text-slate-400",
-                    children: [
-                      "Scope: ",
-                      projection.activeRequest.scope
-                    ]
-                  }) : null,
-                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                    className: "mt-2 flex flex-wrap gap-1",
-                    children: projection.activeRequest.kind === "approval" ? /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
-                      children: [
-                        /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                          className: "rounded bg-emerald-500/20 px-2 py-1 text-emerald-100 hover:bg-emerald-500/30",
-                          onClick: () => respond({ commentId: source.commentId, decision: "approved", kind: "respond", requestId: projection.activeRequest.id, threadId: projection.threadId }),
-                          type: "button",
-                          children: "Approve"
-                        }),
-                        /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                          className: "rounded bg-rose-500/15 px-2 py-1 text-rose-100 hover:bg-rose-500/25",
-                          onClick: () => respond({ commentId: source.commentId, decision: "rejected", kind: "respond", requestId: projection.activeRequest.id, threadId: projection.threadId }),
-                          type: "button",
-                          children: "Reject"
-                        }),
-                        /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                          className: "rounded border border-slate-600 px-2 py-1 hover:bg-slate-800",
-                          onClick: () => respond({ commentId: source.commentId, decision: "changes-requested", kind: "respond", requestId: projection.activeRequest.id, threadId: projection.threadId }),
-                          type: "button",
-                          children: "Request changes"
-                        })
-                      ]
-                    }) : projection.activeRequest.choices?.map((choice) => /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "rounded border border-slate-600 px-2 py-1 hover:bg-slate-800",
-                      onClick: () => respond({ commentId: source.commentId, kind: "respond", requestId: projection.activeRequest.id, threadId: projection.threadId, value: choice.id }),
-                      type: "button",
-                      children: choice.label
-                    }, choice.id))
-                  })
-                ]
-              }) : null,
-              projection.outcome ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                className: "mt-1 line-clamp-2 text-[10px] text-slate-400",
-                children: [
-                  "Outcome · ",
-                  projection.outcome.status.replace("-", " "),
-                  " · ",
-                  projection.outcome.summary
-                ]
-              }) : null,
-              projection.evidence.length ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                className: "mt-1 flex flex-wrap gap-1",
-                children: projection.evidence.map((evidence) => /* @__PURE__ */ jsx_runtime20.jsx("a", {
-                  className: "text-cyan-300 hover:underline",
-                  href: evidence.uri,
-                  children: evidence.label
-                }, evidence.id))
-              }) : null
-            ]
-          }, projection.threadId ?? projection.commentId);
-        })
-      })
-    ]
-  });
-}
-function countPhases(projections) {
-  return projections.reduce((counts, projection) => ({ ...counts, [projection.phase]: counts[projection.phase] + 1 }), { active: 0, "needs-you": 0, done: 0 });
-}
-
 // packages/react/src/debugElementTypeRegistry.ts
 var debugElementTypeRegistry = createDefaultElementTypeRegistry();
 
-// packages/react/src/BenchViewport.debug.tsx
-var jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
-function createCommentCollaborationDebugFixture() {
-  return {
-    entriesByCommentId: new Map([
-      ["attached-comment", [
-        { actorId: "agent:comment-delegator", body: "I traced this to the comment presentation layer.", createdAt: "2026-07-21T12:00:00.000Z", id: "entry:attached:update", kind: "progress" },
-        {
-          actorId: "agent:comment-delegator",
-          body: "Approve the bounded comment popup change?",
-          createdAt: "2026-07-21T12:01:00.000Z",
-          id: "entry:attached:approval",
-          kind: "approval",
-          request: { id: "request:attached:approval", proposal: "Add the collapsed status icon and hover/focus popup", scope: "Workbench comment presentation only" }
-        }
-      ]],
-      ["floating-comment", [
-        { actorId: "agent:comment-delegator", body: "Checking how the popup behaves across nested comments and LOD.", createdAt: "2026-07-21T12:02:00.000Z", id: "entry:floating:update", kind: "progress" }
-      ]],
-      ["done-comment", [
-        { actorId: "agent:comment-delegator", body: "The original comment and its target remain unchanged.", createdAt: "2026-07-21T12:03:00.000Z", id: "entry:done:update", kind: "progress" },
-        { actorId: "agent:comment-delegator", body: "Verified the comment conversation projection.", createdAt: "2026-07-21T12:04:00.000Z", evidence: [{ id: "evidence:projection-tests", label: "Projection tests", uri: "test://comment-collaboration/passed" }], id: "entry:done:result", kind: "result", result: { status: "succeeded", summary: "The comment projection passed its focused tests." } }
-      ]]
-    ])
-  };
+// packages/react/src/directoryPreviewProjection.ts
+function projectDirectoryVirtualPreviewGroups(groups, appearances, transform) {
+  const scale = transform.scale ?? 1;
+  const childIdsByParent = new Map;
+  for (const appearance of appearances) {
+    if (!appearance.parentAppearanceId)
+      continue;
+    const childIds = childIdsByParent.get(appearance.parentAppearanceId) ?? [];
+    childIds.push(appearance.appearanceId);
+    childIdsByParent.set(appearance.parentAppearanceId, childIds);
+  }
+  const referencedGroupIds = new Set(groups.flatMap((group) => group.childVirtualGroupIds));
+  const rootGroupIdsBySemanticParent = new Map;
+  for (const group of groups) {
+    if (referencedGroupIds.has(group.virtualGroupId))
+      continue;
+    const groupIds = rootGroupIdsBySemanticParent.get(group.semanticParentAppearanceId) ?? [];
+    groupIds.push(group.virtualGroupId);
+    rootGroupIdsBySemanticParent.set(group.semanticParentAppearanceId, groupIds);
+  }
+  return groups.map((group) => {
+    const nestedGroupIds = group.childAppearanceIds.flatMap((appearanceId) => rootGroupIdsBySemanticParent.get(appearanceId) ?? []);
+    return {
+      childElementIds: group.childAppearanceIds.flatMap((appearanceId) => collectDirectoryAppearanceIds(appearanceId, childIdsByParent)),
+      childGroupIds: [...new Set([...group.childVirtualGroupIds, ...nestedGroupIds])],
+      height: group.geometry.height * scale,
+      id: group.virtualGroupId,
+      level: group.level,
+      width: group.geometry.width * scale,
+      x: group.geometry.x * scale + transform.x,
+      y: group.geometry.y * scale + transform.y
+    };
+  });
 }
+function collectDirectoryAppearanceIds(appearanceId, childIdsByParent) {
+  return [appearanceId, ...(childIdsByParent.get(appearanceId) ?? []).flatMap((childId) => collectDirectoryAppearanceIds(childId, childIdsByParent))];
+}
+
+// packages/react/src/directoryFilePresentation.ts
+function isDirectoryTextFilePath(path) {
+  return /\.(?:c|cc|cpp|css|csv|go|h|hjson|html|java|js|json|jsx|md|mjs|py|rs|sh|sql|toml|ts|tsx|txt|xml|yaml|yml)$/i.test(path);
+}
+
+// packages/react/src/DirectoryScene.debug.tsx
+var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
+var recursiveFixture = {
+  ".": [
+    { name: "docs", type: "directory" },
+    { name: "src", type: "directory" },
+    { name: "README.md", type: "file" }
+  ],
+  docs: [{ name: "architecture.md", type: "file" }, { name: "plans", type: "directory" }],
+  "docs/plans": [{ name: "directory-v1.md", type: "file" }],
+  src: [{ name: "client", type: "directory" }, { name: "index.ts", type: "file" }],
+  "src/client": [{ name: "DirectoryScene.tsx", type: "file" }, { name: "scene.test.ts", type: "file" }]
+};
+var wideFixture = {
+  ".": Array.from({ length: 1000 }, (_, index2) => ({ name: `file-${String(index2).padStart(4, "0")}.ts`, type: "file" }))
+};
 var scenarioRegistrations = [
   {
-    id: "rgb-squares",
-    name: "RGB squares",
-    description: "Three fixed squares for practicing viewport pan and zoom controls.",
-    create: () => ({
-      id: "rgb-squares",
-      name: "RGB squares",
-      description: "Three fixed squares for practicing viewport pan and zoom controls.",
-      elements: [
-        { id: "red", color: "red", x: -500, y: -250, size: 180 },
-        { id: "blue", color: "blue", x: 320, y: -120, size: 180 },
-        { id: "green", color: "green", x: -80, y: 420, size: 180 }
-      ]
-    })
+    config: { fixture: recursiveFixture, options: { layout: { directoryHeaderHeight: 30, gap: 20, height: 900, width: 1400 } } },
+    description: "Recursive deterministic world-coordinate hierarchy with visible directory corridors.",
+    id: "recursive-treemap",
+    name: "Recursive treemap"
   },
   {
-    id: "textareas",
-    name: "Textareas",
-    description: "Three HTML textareas for testing interactive elements inside the viewport.",
-    create: () => ({
-      id: "textareas",
-      name: "Textareas",
-      description: "Three HTML textareas for testing interactive elements inside the viewport.",
-      elements: [
-        {
-          id: "idea",
-          kind: "textarea",
-          value: "Idea",
-          x: -560,
-          y: -240,
-          width: 320,
-          height: 220
-        },
-        {
-          id: "notes",
-          kind: "textarea",
-          value: "Notes",
-          x: 120,
-          y: -80,
-          width: 340,
-          height: 240
-        },
-        {
-          id: "prompt",
-          kind: "textarea",
-          value: "Prompt",
-          x: -160,
-          y: 380,
-          width: 360,
-          height: 220
-        }
-      ]
-    })
+    config: {
+      fixture: recursiveFixture,
+      mounts: [
+        { offsetX: 0, offsetY: 0, traversalPath: ["bench:left", "directory:."] },
+        { offsetX: 1700, offsetY: 0, traversalPath: ["bench:right", "directory:."] }
+      ],
+      options: { layout: { directoryHeaderHeight: 30, gap: 20, height: 900, width: 1400 } }
+    },
+    description: "One canonical tree mounted twice with traversal-qualified appearance identities.",
+    id: "repeated-traversal",
+    name: "Repeated traversal"
   },
   {
-    id: "comments",
-    name: "Comments",
-    description: "Human comment elements attached to text nodes and free-floating on the canvas.",
-    create: () => ({
-      id: "comments",
-      name: "Comments",
-      description: "Human comment elements attached to text nodes and free-floating on the canvas.",
-      elements: [
-        {
-          id: "target-text",
-          kind: "textarea",
-          value: "Agent output is verbose and advisory.",
-          x: -240,
-          y: -80,
-          width: 360,
-          height: 120
-        },
-        {
-          id: "attached-comment",
-          kind: "comment",
-          parentId: "target-text",
-          value: "Human input wins here. Keep this crisp.",
-          x: 384,
-          y: -16,
-          width: 320,
-          height: 120
-        },
-        {
-          id: "floating-comment",
-          kind: "comment",
-          value: "Free-floating comments still work like text cards.",
-          x: -160,
-          y: 160,
-          width: 340,
-          height: 112
-        },
-        {
-          id: "done-comment",
-          kind: "comment",
-          value: "Completed comments remain visible with their evidence.",
-          x: 260,
-          y: 180,
-          width: 340,
-          height: 112
-        },
-        {
-          actorKind: "ai-agent",
-          createdAt: "2026-07-21T00:46:45.000Z",
-          details: { actions: [], metadata: [], title: "Comment delegator normal session" },
-          id: "actor:comment-delegator",
-          kind: "actor",
-          label: "Comment delegator",
-          size: 72,
-          x: 720,
-          y: 60
-        }
-      ]
-    })
+    config: {
+      fixture: recursiveFixture,
+      mounts: [
+        { label: "Fixture vault", offsetX: 0, offsetY: 0, rootId: "fixture-vault", traversalPath: ["bench:vault", "directory:."] },
+        { label: "Fixture Workbench", offsetX: 1700, offsetY: 0, rootId: "fixture-workbench", traversalPath: ["bench:workbench", "directory:."] },
+        { label: "Fixture App", offsetX: 3400, offsetY: 0, rootId: "fixture-app", traversalPath: ["bench:app", "directory:."] }
+      ],
+      options: { layout: { directoryHeaderHeight: 30, gap: 20, height: 900, width: 1400 } }
+    },
+    description: "Three root-qualified Directory components using one provider with collision-free resource identities.",
+    id: "multi-root-fixture",
+    name: "Multi-root fixture"
   },
   {
-    id: "agent-quick-access",
-    name: "Agent quick access",
-    description: "One Agent actor for verifying that the minimap button opens the same actor popup as the canvas actor.",
-    create: () => ({
-      id: "agent-quick-access",
-      name: "Agent quick access",
-      description: "One Agent actor for verifying that the minimap button opens the same actor popup as the canvas actor.",
-      elements: [{
-        actorKind: "ai-agent",
-        createdAt: "2026-07-21T00:46:45.000Z",
-        details: { actions: [], metadata: [], title: "Agent quick-access verification" },
-        id: "actor:quick-access",
-        kind: "actor",
-        label: "Agent",
-        size: 72,
-        x: 0,
-        y: 0
-      }]
-    })
+    config: { fixture: { ".": [] }, options: { layout: { height: 500, width: 800 } } },
+    description: "An empty directory remains a visible root resource appearance.",
+    id: "empty-root",
+    name: "Empty root"
   },
   {
-    id: "comment-parenting",
-    name: "Comment parenting",
-    description: "Drag one comment over any node type to verify ID-based parent attachment.",
-    create: createCommentParentingScenario
+    config: {
+      liveVaultId: "main",
+      options: {
+        fileLineCountRange: { max: 1000, min: 10 },
+        layout: { directoryHeaderHeight: 30, gap: 20, height: 1000, width: 1600 },
+        maxAppearances: 5000,
+        maxConcurrency: 8,
+        maxDepth: 16
+      }
+    },
+    description: "The configured main workspace projected from real vault files and server-reported line counts.",
+    id: "real-workspace",
+    name: "Real workspace"
   },
   {
-    id: "lod-validation",
-    name: "LOD validation",
-    description: "Predictable diagonal/corner layout for checking that zoom changes fidelity, not content.",
-    create: createLodValidationScenario
+    config: {
+      liveVaultId: "main",
+      mounts: [
+        { label: "Vault", offsetX: 0, offsetY: 0, rootId: "main", scale: 1 / 64, traversalPath: ["bench:vault", "directory:."] },
+        { label: "Klivcore Workbench", offsetX: 2000, offsetY: 0, rootId: "klivcore-workbench", scale: 1 / 64, traversalPath: ["bench:workbench", "directory:."] },
+        { label: "Klivcore App", offsetX: 4000, offsetY: 0, rootId: "klivcore-app", scale: 1 / 64, traversalPath: ["bench:app", "directory:."] }
+      ],
+      options: {
+        fileLineCountRange: { max: 1000, min: 10 },
+        layout: { directoryHeaderHeight: 30, gap: 20, height: 1000, width: 1600 },
+        maxAppearances: 5000,
+        maxConcurrency: 8,
+        maxDepth: 16
+      }
+    },
+    description: "The vault, Workbench repository, and App repository projected as separate real resource roots.",
+    id: "multi-root-workspace",
+    name: "Multi-root workspace"
   },
-  createStressScenarioRegistration(1000, "squares"),
-  createStressScenarioRegistration(1e4, "squares"),
-  createStressScenarioRegistration(1e5, "squares"),
-  createStressScenarioRegistration(1e6, "squares"),
-  createStressScenarioRegistration(1000, "textareas"),
-  createStressScenarioRegistration(1e4, "textareas"),
-  createStressScenarioRegistration(1e5, "textareas"),
-  createStressScenarioRegistration(1e6, "textareas")
+  {
+    config: {
+      fixture: wideFixture,
+      options: { layout: { directoryHeaderHeight: 28, gap: 8, height: 4000, width: 6000 }, maxAppearances: 1001 },
+      stressTest: true
+    },
+    description: "One thousand deterministic file appearances using the production treemap algorithm.",
+    id: "wide-1000",
+    name: "Wide 1,000"
+  },
+  {
+    config: {
+      options: {
+        fileLineCountRange: { max: 1000, min: 10 },
+        layout: { directoryHeaderHeight: 28, gap: 6, height: 8000, width: 12000 },
+        maxAppearances: 1001
+      },
+      realisticCodeFileCount: 1000,
+      stressTest: true
+    },
+    description: "One thousand deterministic code-like files with realistic varied lengths and 10–1000 line area clamping.",
+    id: "weighted-code-1000",
+    name: "Weighted code 1,000"
+  }
 ];
-var benchViewportDebugComponent = {
-  id: "bench-viewport",
-  name: "Bench viewport",
-  description: "Pan and zoom mock scenarios for tuning workbench viewport controls.",
-  scenarios: scenarioRegistrations.map(({ id, name, description }) => ({ id, name, description })),
+var directorySceneDebugComponent = {
+  id: "directory-scene",
+  name: "Directory scene",
+  description: "Recursive resource geometry, traversal identity, empty roots, and bounded wide-tree projection.",
+  scenarios: scenarioRegistrations.map(({ description, id, name }) => ({ description, id, name })),
   renderScenario(scenarioId, context) {
-    const scenario = scenarioRegistrations.find((candidate) => candidate.id === scenarioId)?.create();
-    if (!scenario) {
-      return /* @__PURE__ */ jsx_runtime21.jsx(DebugMissingScenario, {
-        componentHref: context.componentHref,
-        componentName: context.componentName,
-        scenarioId
+    const registration = scenarioRegistrations.find((candidate) => candidate.id === scenarioId);
+    if (!registration)
+      return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        role: "alert",
+        children: [
+          "Unknown Directory scene scenario: ",
+          scenarioId
+        ]
       });
-    }
-    const actorPanel = scenarioId === "agent-quick-access" ? {
-      primaryTabLabel: "Chat",
-      quickAccessLabel: "Agent",
-      renderPrimaryTab: (actor) => /* @__PURE__ */ jsx_runtime21.jsx("div", {
-        "data-agent-quick-access-primary": true,
-        children: actor.label
-      })
-    } : undefined;
-    if (scenarioId === "comments")
-      return /* @__PURE__ */ jsx_runtime21.jsx(CommentCollaborationDebugView, {
-        context,
-        scenario
-      });
-    return /* @__PURE__ */ jsx_runtime21.jsx(BenchViewport, {
-      actorPanel,
-      backHref: context.componentHref,
-      backLabel: `${context.componentName} scenarios`,
-      elementTypeRegistry: debugElementTypeRegistry,
-      scenario
+    return /* @__PURE__ */ jsx_runtime20.jsx(DirectoryDebugScenario, {
+      context,
+      registration
     });
   }
 };
-function CommentCollaborationDebugView({ context, scenario }) {
-  const [entriesByCommentId, setEntriesByCommentId] = import_react10.useState(() => createCommentCollaborationDebugFixture().entriesByCommentId);
-  const [focusElementId, setFocusElementId] = import_react10.useState();
-  const act = (action) => {
-    setEntriesByCommentId((current) => {
-      const entries = current.get(action.commentId);
-      if (!entries)
-        return current;
-      const next = new Map(current);
-      const at = new Date().toISOString();
-      const decision = action.decision ?? action.value ?? "answered";
-      const responseValue = action.decision === "approved" ? "approve" : action.decision === "rejected" ? "reject" : action.decision === "changes-requested" ? "request-changes" : "answer";
-      next.set(action.commentId, [
-        ...entries,
-        { actorId: "user:debug", body: decision, createdAt: at, id: `response:${entries.length}`, kind: "response", response: { requestId: action.requestId, value: responseValue } },
-        { actorId: "agent:comment-delegator", body: action.decision === "approved" ? "Approved. Continuing through the normal delegator session." : "Response received. Revising the next action.", createdAt: at, id: `update:${entries.length + 1}`, kind: "progress" }
-      ]);
-      return next;
+async function createDirectoryDebugScenario(registration) {
+  const mounts = registration.config.mounts ?? [{ offsetX: 0, offsetY: 0, traversalPath: ["bench:debug", "directory:."] }];
+  const listDirectory = createDebugDirectoryList(registration.config);
+  const results = await Promise.all(mounts.map((mount) => loadDirectoryScene({
+    path: ".",
+    sourceId: "debug-files",
+    traversalPath: mount.traversalPath,
+    rootId: mount.rootId ?? registration.config.liveVaultId ?? "fixture"
+  }, listDirectory, registration.config.options)));
+  const elements = results.flatMap((result, index2) => result.appearances.map((appearance) => appearanceElement(appearance, mounts[index2], registration.config)));
+  const previewGroups = results.flatMap((result, index2) => directoryPreviewGroups(result, mounts[index2]));
+  return {
+    description: registration.description,
+    elements,
+    id: registration.id,
+    name: registration.name,
+    ...previewGroups.length ? { previewGroups } : {},
+    ...registration.config.stressTest ? { stressTest: true } : {}
+  };
+}
+function directoryPreviewGroups(result, mount) {
+  return projectDirectoryVirtualPreviewGroups(result.virtualGroups, result.appearances, { scale: mount.scale, x: mount.offsetX, y: mount.offsetY });
+}
+function createDebugDirectoryList(config) {
+  if (config.liveVaultId)
+    return async ({ path, rootId }) => loadLiveDirectory(rootId, path);
+  const realisticCodeFileCount = config.realisticCodeFileCount;
+  if (realisticCodeFileCount !== undefined)
+    return async ({ path }) => ({
+      entries: path === "." ? Array.from({ length: realisticCodeFileCount }, (_, index2) => {
+        const content = createRealisticCodeContent(index2, realisticCodeLineCount(index2));
+        return {
+          lineCount: countLogicalLines(content),
+          name: `feature-${String(index2).padStart(4, "0")}.ts`,
+          type: "file"
+        };
+      }) : [],
+      path
     });
+  return async ({ path }) => ({ entries: config.fixture?.[path] ?? [], path });
+}
+async function loadLiveDirectory(rootId, path) {
+  const response = await fetch(`/api/workbench/roots/${encodeURIComponent(rootId)}/files?path=${encodeURIComponent(path || ".")}&lineCounts=true`);
+  const body = await response.json();
+  if (!response.ok || !isRecord(body) || typeof body.path !== "string" || !Array.isArray(body.files))
+    throw new Error("Invalid Directory scene response.");
+  const entries = body.files.map((value) => {
+    if (!isRecord(value) || typeof value.name !== "string" || value.name.length === 0 || value.type !== "directory" && value.type !== "file") {
+      throw new Error("Invalid Directory scene response.");
+    }
+    if (typeof value.revision !== "string" || value.revision.length === 0 || value.revision.length > 256)
+      throw new Error("Invalid Directory scene response.");
+    if (value.lineCount !== undefined && (value.type !== "file" || !Number.isInteger(value.lineCount) || value.lineCount < 0)) {
+      throw new Error("Invalid Directory scene response.");
+    }
+    if (value.type === "directory")
+      return { name: value.name, revision: value.revision, type: "directory" };
+    return { ...value.lineCount !== undefined ? { lineCount: value.lineCount } : {}, name: value.name, revision: value.revision, type: "file" };
+  });
+  return { entries, path: body.path };
+}
+async function loadLiveTextFile(rootId, path) {
+  const response = await fetch(`/api/workbench/roots/${encodeURIComponent(rootId)}/file?path=${encodeURIComponent(path)}`);
+  const body = await response.json();
+  if (!response.ok || !isRecord(body) || typeof body.content !== "string")
+    throw new Error("Invalid text-file response.");
+  return body.content;
+}
+function createRealisticCodeContent(fileIndex, lineCount) {
+  const lines = [
+    `export type Feature${fileIndex}State = { enabled: boolean; value: number };`,
+    "",
+    `export function createFeature${fileIndex}(seed: number) {`,
+    `  const state: Feature${fileIndex}State = { enabled: seed % 2 === 0, value: seed };`
+  ];
+  while (lines.length < lineCount) {
+    const lineIndex = lines.length;
+    const variant = lineIndex % 6;
+    lines.push(variant === 0 ? `  const value${lineIndex} = state.value + ${lineIndex};` : variant === 1 ? `  if (value${lineIndex - 1} % 3 === 0) state.enabled = !state.enabled;` : variant === 2 ? `  state.value = Math.max(state.value, value${lineIndex - 2});` : variant === 3 ? `  // Preserve deterministic feature branch ${fileIndex}-${lineIndex}.` : variant === 4 ? `  const label${lineIndex} = \`feature-${fileIndex}-${lineIndex}\`;` : `  void label${lineIndex - 1};`);
+  }
+  if (lineCount > 5)
+    lines[lineCount - 2] = "  return state;";
+  if (lineCount > 4)
+    lines[lineCount - 1] = "}";
+  return lines.slice(0, lineCount).join(`
+`);
+}
+function realisticCodeLineCount(index2) {
+  if (index2 % 113 === 0)
+    return 1500 + index2 % 700;
+  if (index2 % 47 === 0)
+    return 1 + index2 % 9;
+  const random = deterministicUnit(index2 + 1);
+  return 5 + Math.floor(random * random * 1395);
+}
+function deterministicUnit(seed) {
+  let value = seed | 0;
+  value = Math.imul(value ^ value >>> 16, 73244475);
+  value = Math.imul(value ^ value >>> 16, 73244475);
+  value ^= value >>> 16;
+  return (value >>> 0) / 4294967296;
+}
+function countLogicalLines(content) {
+  return content.length === 0 ? 0 : content.split(`
+`).length;
+}
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+function DirectoryDebugScenario({ context, registration }) {
+  const [state, setState] = import_react9.useState({});
+  import_react9.useEffect(() => {
+    let active = true;
+    createDirectoryDebugScenario(registration).then((scenario) => {
+      if (active)
+        setState({ scenario });
+    }, (error) => {
+      if (active)
+        setState({ error: error instanceof Error ? error.message : "Directory scene unavailable" });
+    });
+    return () => {
+      active = false;
+    };
+  }, [registration]);
+  if (state.error)
+    return /* @__PURE__ */ jsx_runtime20.jsx("div", {
+      className: "min-h-screen bg-slate-950 p-4 text-sm text-red-200",
+      role: "alert",
+      children: "Directory scene unavailable"
+    });
+  if (!state.scenario)
+    return /* @__PURE__ */ jsx_runtime20.jsx("div", {
+      className: "min-h-screen bg-slate-950"
+    });
+  return /* @__PURE__ */ jsx_runtime20.jsx(BenchViewport, {
+    backHref: context.componentHref,
+    backLabel: `${context.componentName} scenarios`,
+    elementTypeRegistry: debugElementTypeRegistry,
+    scenario: state.scenario
+  });
+}
+function appearanceElement(appearance, mount, config) {
+  const rootId = mount.rootId ?? config.liveVaultId;
+  const scale = mount.scale ?? 1;
+  const geometry = {
+    height: appearance.geometry.height * scale,
+    preserveGeometry: true,
+    width: appearance.geometry.width * scale,
+    x: appearance.geometry.x * scale + mount.offsetX,
+    y: appearance.geometry.y * scale + mount.offsetY
   };
-  const getProjection = (commentId) => {
-    const entries = entriesByCommentId.get(commentId);
-    const comment = scenario.elements.find((element) => element.id === commentId && element.kind === "comment");
-    if (!entries || !comment || comment.kind !== "comment")
-      return;
+  if (appearance.entryType === "directory") {
+    return { ...geometry, id: appearance.appearanceId, kind: "group", label: appearance.path === "." && mount.label ? mount.label : `${appearance.name}/`, ...rootId ? { vaultId: rootId } : {} };
+  }
+  if (isDirectoryImageFilePath(appearance.path)) {
+    const imageRootId = rootId ?? "fixture";
     return {
-      ...deriveCommentCollaborationProjection(entries),
-      agentSession: { label: "Comment delegator", sessionId: "session:comment-delegator", sourceId: "hermes" },
-      changedRevision: entries.length,
-      commentId,
-      ...commentId === "floating-comment" ? { relatedThreadIds: ["comment-thread:debug-attached-comment"] } : {},
-      source: {
-        authorityEpoch: "debug-v1",
-        benchPath: "debug/comments.bench.hjson",
-        commentId,
-        height: comment.height,
-        ...comment.parentId ? { parentId: comment.parentId } : {},
-        realmId: "debug",
-        rootId: "debug",
-        sourceId: "debug-fixture",
-        sourceRevision: "fixture:v1",
-        text: comment.value,
-        width: comment.width,
-        x: comment.x,
-        y: comment.y
-      },
-      threadId: `comment-thread:debug-${commentId}`
-    };
-  };
-  const listProjections = () => [...entriesByCommentId.keys()].flatMap((commentId) => {
-    const projection = getProjection(commentId);
-    return projection ? [projection] : [];
-  });
-  return /* @__PURE__ */ jsx_runtime21.jsx(CommentCollaborationProvider, {
-    value: { act, getProjection, listProjections, status: "connected" },
-    children: /* @__PURE__ */ jsx_runtime21.jsx(BenchViewport, {
-      actorPanel: { primaryTabLabel: "Chat", quickAccessLabel: "Agent", renderPrimaryTab: () => /* @__PURE__ */ jsx_runtime21.jsx("div", {
-        children: "Normal Agent session"
-      }) },
-      applicationPanels: [{
-        content: /* @__PURE__ */ jsx_runtime21.jsx(CommentCollaborationPanel, {
-          onNavigate: (source) => setFocusElementId(source.commentId)
-        }),
-        id: "comments",
-        label: "Comments",
-        quickAccessAdornment: /* @__PURE__ */ jsx_runtime21.jsx(CommentCollaborationAttentionBadge, {}),
-        quickAccessLabel: "Comments"
-      }],
-      backHref: context.componentHref,
-      backLabel: `${context.componentName} scenarios`,
-      elementTypeRegistry: debugElementTypeRegistry,
-      focusElementId,
-      onFocusElementApplied: () => setFocusElementId(undefined),
-      scenario
-    })
-  });
-}
-function createCommentParentingScenario() {
-  return {
-    id: "comment-parenting",
-    name: "Comment parenting",
-    description: "Drag one comment over any node type to verify ID-based parent attachment.",
-    elements: [
-      { id: "parenting-comment", kind: "comment", value: "Drag this comment by its node header.", x: -560, y: -60, width: 280, height: 96 },
-      { id: "parenting-text", kind: "textarea", value: "Text", x: -160, y: -240, width: 240, height: 80 },
-      { id: "parenting-image", kind: "image", src: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='240' height='120'%3E%3Crect width='240' height='120' fill='%230ea5e9'/%3E%3C/svg%3E", x: 160, y: -240, width: 240, height: 120 },
-      { id: "parenting-rect", kind: "rect", color: "#a855f7", x: 480, y: -240, width: 240, height: 120 },
-      { id: "parenting-group", kind: "group", label: "Group", x: -160, y: 40, width: 240, height: 140 },
-      { id: "parenting-bench", kind: "bench", label: "Bench", path: "./parenting-target.bench.hjson", x: 160, y: 40, width: 240, height: 140 },
-      { id: "parenting-layout", kind: "physics-layout", label: "Layout", x: 480, y: 40, width: 240, height: 140 },
-      { id: "parenting-text-file", kind: "text-file", label: "./parenting-target.md", path: "./parenting-target.md", value: "Text file", x: 160, y: 260, width: 300, height: 160 },
-      { id: "parenting-square", kind: "square", color: "green", x: 560, y: 280, size: 120 }
-    ]
-  };
-}
-function createLodValidationScenario() {
-  const elements = [];
-  const colors = ["red", "blue", "green"];
-  for (let row = -4;row <= 4; row += 1) {
-    for (let column = -4;column <= 4; column += 1) {
-      const diagonal = row === column;
-      const antiDiagonal = row === -column;
-      const color = diagonal ? "red" : antiDiagonal ? "blue" : colors[Math.abs(row + column) % colors.length];
-      const size = diagonal || antiDiagonal ? 92 : 48;
-      elements.push({
-        id: `lod-grid-${column}-${row}`,
-        kind: "square",
-        color,
-        x: column * 160 - size / 2,
-        y: row * 160 - size / 2,
-        size
-      });
-    }
-  }
-  elements.push({ id: "lod-corner-nw", kind: "square", color: "red", x: -720, y: -720, size: 120 }, { id: "lod-corner-ne", kind: "square", color: "blue", x: 600, y: -720, size: 120 }, { id: "lod-corner-sw", kind: "square", color: "green", x: -720, y: 600, size: 120 }, { id: "lod-corner-se", kind: "square", color: "red", x: 600, y: 600, size: 120 });
-  return {
-    id: "lod-validation",
-    name: "LOD validation",
-    description: "Predictable diagonal/corner layout for checking that zoom changes fidelity, not content.",
-    elements
-  };
-}
-function createStressScenarioRegistration(count, elementKind) {
-  const compactCount = count >= 1e6 ? "1m" : count >= 1000 ? `${count / 1000}k` : `${count}`;
-  const isTextareaStress = elementKind === "textareas";
-  const id = isTextareaStress ? `stress-textareas-${compactCount}` : `stress-${compactCount}`;
-  const name = isTextareaStress ? `Stress textareas ${compactCount}` : `Stress ${compactCount}`;
-  const description = isTextareaStress ? `${count.toLocaleString()} random textarea elements spread across a large world.` : `${count.toLocaleString()} random square elements spread across a large world.`;
-  return {
-    id,
-    name,
-    description,
-    create: () => createStressScenario(count, compactCount, elementKind)
-  };
-}
-function createStressScenario(count, compactCount, elementKind) {
-  const random = seededRandom(count + (elementKind === "textareas" ? 31337 : 0));
-  const worldSize = count >= 1e6 ? 120000 : count >= 1e5 ? 60000 : count >= 1e4 ? 30000 : 12000;
-  const colors = ["red", "blue", "green"];
-  const elements = new Array(count);
-  const isTextareaStress = elementKind === "textareas";
-  for (let index2 = 0;index2 < count; index2 += 1) {
-    const x = Math.floor(random() * worldSize - worldSize / 2);
-    const y = Math.floor(random() * worldSize - worldSize / 2);
-    if (isTextareaStress) {
-      const width = 220 + Math.floor(random() * 260);
-      const height = 140 + Math.floor(random() * 220);
-      elements[index2] = {
-        id: `stress-textareas-${compactCount}-${index2}`,
-        kind: "textarea",
-        value: createStressTextareaValue(index2, compactCount),
-        x,
-        y,
-        width,
-        height
-      };
-      continue;
-    }
-    const size = 24 + Math.floor(random() * 72);
-    elements[index2] = {
-      id: `stress-${compactCount}-${index2}`,
-      color: colors[Math.floor(random() * colors.length)],
-      x,
-      y,
-      size
+      ...geometry,
+      id: appearance.appearanceId,
+      kind: "image",
+      loadAtReadableScale: true,
+      path: appearance.path,
+      ...appearance.revision ? { resourceRevision: appearance.revision } : {},
+      src: `/api/workbench/roots/${encodeURIComponent(imageRootId)}/file?path=${encodeURIComponent(appearance.path)}&raw=1`,
+      ...rootId ? { rootId, vaultId: rootId } : {}
     };
   }
-  const id = isTextareaStress ? `stress-textareas-${compactCount}` : `stress-${compactCount}`;
-  const name = isTextareaStress ? `Stress textareas ${compactCount}` : `Stress ${compactCount}`;
-  const description = isTextareaStress ? `${count.toLocaleString()} random textarea elements spread across a ${worldSize.toLocaleString()}px world.` : `${count.toLocaleString()} random square elements spread across a ${worldSize.toLocaleString()}px world.`;
+  if (isDirectoryTextFilePath(appearance.path)) {
+    return {
+      ...geometry,
+      id: appearance.appearanceId,
+      kind: "text-file",
+      label: appearance.name,
+      lineCount: appearance.lineCount,
+      loadContent: cachedTextContentLoader(() => loadDebugTextFileContent(config, rootId, appearance.path)),
+      path: appearance.path,
+      readOnly: true,
+      ...appearance.revision ? { resourceRevision: appearance.revision } : {},
+      value: "",
+      ...rootId ? { rootId, vaultId: rootId } : {}
+    };
+  }
   return {
-    id,
-    name,
-    description,
-    stressTest: true,
-    elements
+    ...geometry,
+    id: appearance.appearanceId,
+    kind: "text-file",
+    label: appearance.name,
+    lineCount: appearance.lineCount,
+    path: appearance.path,
+    readOnly: true,
+    value: ""
   };
 }
-function createStressTextareaValue(index2, compactCount) {
-  const topic = ["plan", "prompt", "note", "task", "idea", "trace"][index2 % 6];
-  return `${topic} ${index2 + 1}
-${compactCount} textarea stress item
-Tiny editable canvas text.`;
+function loadDebugTextFileContent(config, rootId, path) {
+  if (config.liveVaultId && rootId)
+    return loadLiveTextFile(rootId, path);
+  const generatedIndex = Number.parseInt(path.match(/(?:feature|file)-(\d+)\.ts$/)?.[1] ?? "", 10);
+  if (Number.isInteger(generatedIndex))
+    return Promise.resolve(createRealisticCodeContent(generatedIndex, realisticCodeLineCount(generatedIndex)));
+  const fileName = path.slice(path.lastIndexOf("/") + 1);
+  return Promise.resolve(path.endsWith(".md") ? `# ${fileName}
+` : `// ${path}
+`);
 }
-function seededRandom(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state = state * 1664525 + 1013904223 >>> 0;
-    return state / 4294967296;
-  };
-}
-function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
-  return /* @__PURE__ */ jsx_runtime21.jsx("main", {
-    className: "min-h-screen bg-slate-950 px-6 py-10 text-slate-100",
-    children: /* @__PURE__ */ jsx_runtime21.jsxs("section", {
-      className: "mx-auto flex max-w-4xl flex-col gap-4",
-      children: [
-        /* @__PURE__ */ jsx_runtime21.jsxs("a", {
-          className: "text-sm text-cyan-300 hover:text-cyan-200",
-          href: componentHref,
-          children: [
-            "← ",
-            componentName,
-            " scenarios"
-          ]
-        }),
-        /* @__PURE__ */ jsx_runtime21.jsx("h1", {
-          className: "text-3xl font-black",
-          children: "Scenario not found"
-        }),
-        /* @__PURE__ */ jsx_runtime21.jsxs("p", {
-          className: "text-slate-300",
-          children: [
-            "No bench viewport scenario is registered as “",
-            scenarioId,
-            "”."
-          ]
-        })
-      ]
-    })
-  });
+function cachedTextContentLoader(load) {
+  let result;
+  return () => result ??= load();
 }
 
 // packages/react/src/debugContributions.ts
@@ -30107,12 +30358,12 @@ var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishe
 }));
 var publishedWorkbenchDebugCategoryIds = Object.freeze(publishedWorkbenchDebugContributions.map((contribution) => contribution.debugId));
 
-// packages/publish-sdk/src/gateway-debug-bench-viewport.tsx
-var jsx_runtime22 = __toESM(require_jsx_runtime(), 1);
-var publishedBenchViewportScenarioIds = new Set(publishedWorkbenchDebugContributions.find((contribution) => contribution.debugId === "bench-viewport")?.scenarioIds ?? []);
+// packages/publish-sdk/src/gateway-debug-directory-scene.tsx
+var jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
+var publishedDirectorySceneScenarioIds = new Set(publishedWorkbenchDebugContributions.find((contribution) => contribution.debugId === "directory-scene")?.scenarioIds ?? []);
 function mountDebugReact(host, content, createDebugRoot) {
   const container = host.root.ownerDocument.createElement("div");
-  container.setAttribute("data-workbench-debug-category", "bench-viewport");
+  container.setAttribute("data-workbench-debug-category", "directory-scene");
   host.root.append(container);
   let root2;
   try {
@@ -30136,47 +30387,47 @@ function mountDebugReact(host, content, createDebugRoot) {
   };
 }
 function mountDebugCategory(host, context, createDebugRoot = import_client.createRoot) {
-  const scenarios = benchViewportDebugComponent.scenarios.filter((scenario) => publishedBenchViewportScenarioIds.has(scenario.id));
-  return mountDebugReact(host, /* @__PURE__ */ jsx_runtime22.jsx("main", {
+  const scenarios = directorySceneDebugComponent.scenarios.filter((scenario) => publishedDirectorySceneScenarioIds.has(scenario.id));
+  return mountDebugReact(host, /* @__PURE__ */ jsx_runtime21.jsx("main", {
     className: "min-h-screen bg-slate-950 px-6 py-10 text-slate-100",
-    children: /* @__PURE__ */ jsx_runtime22.jsxs("section", {
+    children: /* @__PURE__ */ jsx_runtime21.jsxs("section", {
       className: "mx-auto max-w-5xl space-y-8",
       children: [
-        /* @__PURE__ */ jsx_runtime22.jsx("a", {
+        /* @__PURE__ */ jsx_runtime21.jsx("a", {
           className: "text-sm text-cyan-300 hover:text-cyan-200",
           href: context.componentHref,
           children: "← Workbench debug scenarios"
         }),
-        /* @__PURE__ */ jsx_runtime22.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime21.jsxs("div", {
           children: [
-            /* @__PURE__ */ jsx_runtime22.jsx("p", {
+            /* @__PURE__ */ jsx_runtime21.jsx("p", {
               className: "text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300",
               children: "Workbench debug"
             }),
-            /* @__PURE__ */ jsx_runtime22.jsxs("h1", {
+            /* @__PURE__ */ jsx_runtime21.jsxs("h1", {
               className: "mt-3 text-4xl font-black",
               children: [
-                benchViewportDebugComponent.name,
+                directorySceneDebugComponent.name,
                 " scenarios"
               ]
             }),
-            /* @__PURE__ */ jsx_runtime22.jsx("p", {
+            /* @__PURE__ */ jsx_runtime21.jsx("p", {
               className: "mt-3 text-slate-300",
-              children: benchViewportDebugComponent.description
+              children: directorySceneDebugComponent.description
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime22.jsx("div", {
+        /* @__PURE__ */ jsx_runtime21.jsx("div", {
           className: "grid gap-4 md:grid-cols-2",
-          children: scenarios.map((scenario) => /* @__PURE__ */ jsx_runtime22.jsxs("a", {
+          children: scenarios.map((scenario) => /* @__PURE__ */ jsx_runtime21.jsxs("a", {
             className: "rounded-xl border border-slate-700 bg-slate-900 p-5 hover:border-cyan-400",
             href: `${context.routeHref}/${scenario.id}`,
             children: [
-              /* @__PURE__ */ jsx_runtime22.jsx("h2", {
+              /* @__PURE__ */ jsx_runtime21.jsx("h2", {
                 className: "text-lg font-bold text-white",
                 children: scenario.name
               }),
-              /* @__PURE__ */ jsx_runtime22.jsx("p", {
+              /* @__PURE__ */ jsx_runtime21.jsx("p", {
                 className: "mt-2 text-sm text-slate-300",
                 children: scenario.description
               })
@@ -30188,9 +30439,12 @@ function mountDebugCategory(host, context, createDebugRoot = import_client.creat
   }), createDebugRoot);
 }
 function mountDebugScenario(host, scenarioId, context, createDebugRoot = import_client.createRoot) {
-  return mountDebugReact(host, benchViewportDebugComponent.renderScenario(scenarioId, {
+  if (!publishedDirectorySceneScenarioIds.has(scenarioId)) {
+    throw new Error(`unpublished Workbench debug scenario: directory-scene/${scenarioId}`);
+  }
+  return mountDebugReact(host, directorySceneDebugComponent.renderScenario(scenarioId, {
     ...context,
-    componentName: benchViewportDebugComponent.name
+    componentName: directorySceneDebugComponent.name
   }), createDebugRoot);
 }
 export {
