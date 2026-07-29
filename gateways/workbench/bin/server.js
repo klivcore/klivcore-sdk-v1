@@ -1401,7 +1401,7 @@ import { constants } from "fs";
 import { chmod, lstat as lstat2, mkdir as mkdir3, open as open2, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
 
-// ../../repos/klivcore-workbench/packages/server/src/index.ts
+// packages/server/src/index.ts
 import { lstat, mkdir as mkdir2, open, readFile, readdir, rename, rm as rm2, stat, unlink, utimes, writeFile } from "fs/promises";
 import { realpathSync } from "fs";
 import { createHash, randomUUID } from "crypto";
@@ -1409,7 +1409,7 @@ import { execFile } from "child_process";
 import { homedir } from "os";
 import { basename as basename2, dirname as dirname2, extname, join as join2, relative, resolve, sep } from "path";
 import { promisify } from "util";
-// ../../repos/klivcore-workbench/packages/core/src/benchMerge.ts
+// packages/core/src/benchMerge.ts
 var missing = Symbol("missing");
 function mergeBenchDocuments(base, desired, current) {
   const conflicts = [];
@@ -1579,7 +1579,7 @@ function equalValue(left, right) {
 function isRecord(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-// ../../repos/klivcore-workbench/packages/core/src/benchDocumentFormat.ts
+// packages/core/src/benchDocumentFormat.ts
 var import_hjson = __toESM(require_hjson(), 1);
 function getBenchDocumentFormat(path) {
   const normalized = path.trim().toLowerCase();
@@ -1718,7 +1718,7 @@ function rejectUnsupportedBenchValues(value, path, seen = new WeakSet, trace = "
 function isRecord2(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
-// ../../repos/klivcore-workbench/packages/core/src/fileWriteLock.ts
+// packages/core/src/fileWriteLock.ts
 import { mkdir, rm } from "fs/promises";
 import { basename, dirname, join } from "path";
 async function withFileWriteLock(path, action, options = {}) {
@@ -1750,7 +1750,7 @@ function isAlreadyExistsError(error) {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "EEXIST");
 }
 
-// ../../repos/klivcore-workbench/packages/server/src/index.ts
+// packages/server/src/index.ts
 function createWorkbenchServer(config) {
   const apiBasePath = normalizeApiBasePath(config.apiBasePath ?? "/api/workbench");
   const configuredRoots = [
@@ -2890,13 +2890,13 @@ async function seed(path, content) {
   }
 }
 
-// ../../repos/klivcore-workbench/packages/react/src/debugContributions.ts
+// packages/react/src/debugContributions.ts
 var workbenchReactDebugContributions = Object.freeze([
   Object.freeze({
     debugId: "bench-viewport",
     description: "Pan and zoom mock scenarios for tuning workbench viewport controls.",
     name: "Bench viewport",
-    scenarioIds: Object.freeze(["rgb-squares", "textareas", "comments", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+    scenarioIds: Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
   }),
   Object.freeze({
     debugId: "directory-scene",
@@ -2956,8 +2956,7 @@ var workbenchReactDebugContributions = Object.freeze([
 
 // packages/publish-sdk/src/gateway-debug-publication.ts
 var publishedScenarioIdsByCategory = Object.freeze({
-  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "comments", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"]),
-  "directory-scene": Object.freeze(["recursive-treemap", "repeated-traversal"])
+  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
 });
 var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
   const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);

@@ -1573,145 +1573,6 @@ function isAlreadyExistsError(error) {
 
 // scripts/benchEdit.ts
 import { createHash } from "crypto";
-// ../../repos/klivcore-workbench/packages/core/src/benchMerge.ts
-var missing2 = Symbol("missing");
-// ../../repos/klivcore-workbench/packages/core/src/benchDocumentFormat.ts
-var import_hjson2 = __toESM(require_hjson(), 1);
-function getBenchDocumentFormat2(path) {
-  const normalized = path.trim().toLowerCase();
-  if (normalized.endsWith(".bench.hjson"))
-    return "hjson";
-  if (normalized.endsWith(".bench.json"))
-    return "json";
-  return null;
-}
-function parseHjsonValue2(content) {
-  return import_hjson2.default.parse(content, { keepWsc: true });
-}
-function parseBenchDocument2(content, path) {
-  const format = getBenchDocumentFormat2(path);
-  const parsed = format === "hjson" ? parseHjsonValue2(content) : JSON.parse(content);
-  if (!isRecord2(parsed))
-    throw new Error(`Bench document must be an object: ${path}`);
-  rejectUnsupportedBenchValues2(parsed, path);
-  return parsed;
-}
-function stringifyBenchDocument2(bench, path) {
-  const format = getBenchDocumentFormat2(path);
-  if (format === "hjson") {
-    rejectUnsupportedBenchValues2(bench, path);
-    return `${stringifyHjsonBenchValue2(bench, 0)}
-`;
-  }
-  return `${JSON.stringify(bench, null, 2)}
-`;
-}
-function stringifyHjsonBenchValue2(value, depth) {
-  const indent = "  ".repeat(depth);
-  const childIndent = "  ".repeat(depth + 1);
-  if (value === null)
-    return "null";
-  if (typeof value === "string")
-    return quoteHjsonString2(value);
-  if (typeof value === "number" || typeof value === "boolean")
-    return JSON.stringify(value);
-  if (Array.isArray(value)) {
-    if (!value.length)
-      return "[]";
-    return `[
-${value.map((child, index) => withHjsonComments2(value, index, indentFirstLine2(addTrailingComma2(stringifyHjsonBenchValue2(child, depth + 1)), childIndent), childIndent)).join(`
-`)}
-${indent}]`;
-  }
-  if (isRecord2(value)) {
-    const entries = Object.entries(value);
-    if (!entries.length)
-      return "{}";
-    return `{
-${entries.map(([key, child]) => {
-      const rendered = stringifyHjsonBenchValue2(child, depth + 1);
-      const lines = rendered.split(`
-`);
-      const firstLine = `${childIndent}${formatHjsonKey2(key)}: ${lines[0]}`;
-      return withHjsonComments2(value, key, addTrailingComma2([firstLine, ...lines.slice(1)].join(`
-`)), childIndent);
-    }).join(`
-`)}
-${indent}}`;
-  }
-  throw new Error(`Unsupported value in bench document: ${String(value)}`);
-}
-function indentFirstLine2(value, indent) {
-  const lines = value.split(`
-`);
-  return [indent + lines[0], ...lines.slice(1)].join(`
-`);
-}
-function addTrailingComma2(value) {
-  const lines = value.split(`
-`);
-  lines[lines.length - 1] = `${lines[lines.length - 1]},`;
-  return lines.join(`
-`);
-}
-function formatHjsonKey2(key) {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && !hjsonReservedKeys2.has(key) ? key : JSON.stringify(key);
-}
-function quoteHjsonString2(value) {
-  const hasSignificantIndentation = value.split(`
-`).some((line) => /^[\t ]/.test(line));
-  if (value.includes(`
-`) && !value.includes("'''") && !hasSignificantIndentation)
-    return `'''
-${value}
-'''`;
-  return JSON.stringify(value);
-}
-var hjsonReservedKeys2 = new Set(["true", "false", "null"]);
-function withHjsonComments2(container, key, rendered, indent) {
-  const comments = Object.getOwnPropertyDescriptor(container, "__COMMENTS__")?.value;
-  const pair = typeof key === "number" ? comments?.a?.[key] : comments?.c?.[key];
-  const leading = pair?.[0]?.split(`
-`).map((line) => line.trim()).filter(Boolean).map((line) => `${indent}${line}`) ?? [];
-  const trailing = pair?.[1]?.trim();
-  if (trailing) {
-    const renderedLines = rendered.split(`
-`);
-    renderedLines[renderedLines.length - 1] = `${renderedLines[renderedLines.length - 1]} ${trailing}`;
-    rendered = renderedLines.join(`
-`);
-  }
-  return leading.length ? `${leading.join(`
-`)}
-${rendered}` : rendered;
-}
-function rejectUnsupportedBenchValues2(value, path, seen = new WeakSet, trace = "$") {
-  if (typeof value === "number" && !Number.isFinite(value))
-    throw new Error(`Unsupported non-finite number in bench document ${path} at ${trace}`);
-  if (typeof value === "undefined")
-    throw new Error(`Unsupported undefined in bench document ${path} at ${trace}`);
-  if (!value || typeof value !== "object")
-    return;
-  if (seen.has(value))
-    throw new Error(`Unsupported circular reference in bench document ${path} at ${trace}`);
-  seen.add(value);
-  if (Array.isArray(value)) {
-    for (let index = 0;index < value.length; index += 1) {
-      if (!(index in value))
-        throw new Error(`Unsupported sparse array in bench document ${path} at ${trace}[${index}]`);
-      rejectUnsupportedBenchValues2(value[index], path, seen, `${trace}[${index}]`);
-    }
-    return;
-  }
-  if (Object.getPrototypeOf(value) !== Object.prototype)
-    throw new Error(`Unsupported non-plain object in bench document ${path} at ${trace}`);
-  for (const [key, child] of Object.entries(value))
-    rejectUnsupportedBenchValues2(child, path, seen, `${trace}.${key}`);
-}
-function isRecord2(value) {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-// scripts/benchEdit.ts
 function parseBenchEditOperations(value) {
   if (!Array.isArray(value))
     throw new Error("operations must be an array");
@@ -1757,9 +1618,9 @@ function editBenchText(input) {
   if (input.expectedSha256 && input.expectedSha256.toLowerCase() !== beforeSha256) {
     throw new Error(`Bench hash mismatch for ${input.path}: expected ${input.expectedSha256.toLowerCase()}, found ${beforeSha256}`);
   }
-  const original = parseBenchDocument2(input.content, input.path);
+  const original = parseBenchDocument(input.content, input.path);
   const document = applyBenchOperations(original, input.operations);
-  const content = stringifyBenchDocument2(document, input.path);
+  const content = stringifyBenchDocument(document, input.path);
   return {
     afterSha256: sha256(content),
     beforeSha256,
@@ -1818,7 +1679,7 @@ function validateRecordArray(value, name, errors) {
     return [];
   }
   return value.flatMap((item, index) => {
-    if (!isRecord3(item)) {
+    if (!isRecord2(item)) {
       errors.push(`Bench ${name}[${index}] must be an object`);
       return [];
     }
@@ -1828,7 +1689,7 @@ function validateRecordArray(value, name, errors) {
 function asRecordArray(value, name) {
   if (value === undefined)
     return [];
-  if (!Array.isArray(value) || value.some((item) => !isRecord3(item)))
+  if (!Array.isArray(value) || value.some((item) => !isRecord2(item)))
     throw new Error(`Bench ${name} must be an array of objects`);
   return value;
 }
@@ -1847,7 +1708,7 @@ function collectIds(records, kind, errors) {
 }
 function parseBenchEditOperation(value, index) {
   const prefix = `operations[${index}]`;
-  if (!isRecord3(value))
+  if (!isRecord2(value))
     throw new Error(`${prefix} must be an object`);
   if (typeof value.op !== "string")
     throw new Error(`${prefix}.op must be a string`);
@@ -1912,7 +1773,7 @@ function parseUpdate(value, prefix, forbiddenKeys) {
   };
 }
 function requireRecord(value, path) {
-  if (!isRecord3(value))
+  if (!isRecord2(value))
     throw new Error(`${path} must be an object`);
   for (const key of Object.keys(value)) {
     if (isDangerousKey(key))
@@ -1965,7 +1826,7 @@ function findParentCycles(elements) {
   return errors;
 }
 function validateEdgeEndpoint(value, side, edgeId, elementIds, errors) {
-  if (!isRecord3(value)) {
+  if (!isRecord2(value)) {
     errors.push(`Edge ${edgeId} has invalid ${side} endpoint`);
     return;
   }
@@ -2021,7 +1882,7 @@ function removeElement(bench, id, cascade) {
   bench.edges = edges.filter((edge) => !endpointReferencesAny(edge.from, removed) && !endpointReferencesAny(edge.to, removed));
 }
 function endpointReferencesAny(value, ids) {
-  return isRecord3(value) && (typeof value.elementId === "string" && ids.has(value.elementId) || typeof value.parentId === "string" && ids.has(value.parentId));
+  return isRecord2(value) && (typeof value.elementId === "string" && ids.has(value.elementId) || typeof value.parentId === "string" && ids.has(value.parentId));
 }
 function applyPatch(record, patch, unset) {
   if (patch)
@@ -2050,7 +1911,7 @@ function sha256(content) {
 function unique(values) {
   return [...new Set(values)];
 }
-function isRecord3(value) {
+function isRecord2(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -2173,7 +2034,7 @@ async function createCommand(file, parsed) {
     throw new Error("create requires --document <json-file|->");
   const text = documentPath === "-" ? await Bun.stdin.text() : await readFile(resolve(documentPath), "utf8");
   const document = JSON.parse(text);
-  if (!isRecord4(document))
+  if (!isRecord3(document))
     throw new Error("Create document must be a JSON object");
   const root = resolveRoot(file, parsed);
   const errors = [
@@ -2188,7 +2049,7 @@ async function createCommand(file, parsed) {
   try {
     await atomicCreate(file, content);
   } catch (error) {
-    if (isRecord4(error) && error.code === "EEXIST")
+    if (isRecord3(error) && error.code === "EEXIST")
       throw new Error(`Bench already exists: ${file}`);
     throw error;
   }
@@ -2262,7 +2123,7 @@ function parseArguments(args) {
 async function readOperations(path) {
   const text = path === "-" ? await Bun.stdin.text() : await readFile(resolve(path), "utf8");
   const parsed = parseHjsonValue(text);
-  const operations = Array.isArray(parsed) ? parsed : isRecord4(parsed) ? parsed.operations : undefined;
+  const operations = Array.isArray(parsed) ? parsed : isRecord3(parsed) ? parsed.operations : undefined;
   if (!Array.isArray(operations))
     throw new Error("Operations input must be an array or an object containing an operations array");
   return parseBenchEditOperations(operations);
@@ -2367,7 +2228,7 @@ async function unifiedDiff(path, before, after) {
   }
 }
 function records(value) {
-  return Array.isArray(value) ? value.filter(isRecord4) : [];
+  return Array.isArray(value) ? value.filter(isRecord3) : [];
 }
 function flagString(parsed, name) {
   const value = parsed.flags.get(name);
@@ -2393,6 +2254,6 @@ ${result.diff}`);
 function sha2562(content) {
   return createHash2("sha256").update(content).digest("hex");
 }
-function isRecord4(value) {
+function isRecord3(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

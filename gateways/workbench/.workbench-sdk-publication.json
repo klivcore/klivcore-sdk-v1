@@ -7,14 +7,14 @@
   "files": [
     {
       "path": "bin/bench.js",
-      "bytes": 84911,
-      "sha256": "26f3e378d6197b4c5cfe052cc13603f3ecef1877ba8a9f49f2af0a6c9c99e867",
+      "bytes": 79786,
+      "sha256": "dd23ff7e26cab952a4eac8983eaf86ce983a532c00b442f86f8c3f38170a2236",
       "mode": 420
     },
     {
       "path": "bin/server.js",
-      "bytes": 116251,
-      "sha256": "297543bef2aa2f40a5fe60c6fab55b8a739e1ceea05628d71d7dca5f351e0536",
+      "bytes": 115960,
+      "sha256": "a07c714398e6909dbe5dbf0977f15f3eeabc4f3ffad4f6cbde0c2e39e295839e",
       "mode": 420
     },
     {
@@ -25,26 +25,14 @@
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1607481,
-      "sha256": "191e20b5771887155bd63277d4208a67e5db28fc3db87a5196ae27903b7086a6",
-      "mode": 420
-    },
-    {
-      "path": "debug/assets/directory-scene.css",
-      "bytes": 37805,
-      "sha256": "7696c41677927a769eaee55b619681e1939cdd8e48f4167dc79d995a10d59097",
-      "mode": 420
-    },
-    {
-      "path": "debug/assets/directory-scene.js",
-      "bytes": 1618249,
-      "sha256": "1f7c8bda2522aefaaaf3f47beb7381f56f38a3eeb627be122d1fcbdd30cc2330",
+      "bytes": 1588056,
+      "sha256": "107969ff4c4fb108c240fda0fd2f1d17b1f14cccb6a0ba7a0522ad7432516dee",
       "mode": 420
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 10276,
-      "sha256": "d0f96c6044f04da2bb8f55f55f4208afce4db9cd08c0d2c1ee9abbb06545179f",
+      "bytes": 8431,
+      "sha256": "6b4bcfc4db79fc8e67cd9fa4adbb393a3df9eb2e36a5ecea3e0b79d5d1ebbb44",
       "mode": 420
     },
     {
@@ -61,8 +49,8 @@
     },
     {
       "path": "ui/debug-index.js",
-      "bytes": 532382,
-      "sha256": "79012b1a06a8a2f10c4841dff515aa49e374d1d55c956fcba0a71086da030107",
+      "bytes": 532246,
+      "sha256": "291b255f3c1208769e31700db21653749b4c0f7a3833802a9382bb1ff1966bd9",
       "mode": 420
     },
     {
@@ -85,8 +73,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 1932072,
-      "sha256": "f9113f234ba41b19026a59a6fd602bf8bc281adb78420133fa056e5a2d37bac0",
+      "bytes": 1930878,
+      "sha256": "2d68cae83f471f4ade80d2153aee2408d45841a4d34521e32a80950e9fdfa9d4",
       "mode": 420
     }
   ]

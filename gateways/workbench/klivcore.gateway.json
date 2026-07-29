@@ -91,23 +91,6 @@
       }
     },
     {
-      "id": "debug-bench-viewport-comments",
-      "path": "/debug/bench-viewport/comments",
-      "title": "Workbench debug: Comments",
-      "requiredCapabilities": [
-        "workbench:read",
-        "workbench:write"
-      ],
-      "services": [
-        "api"
-      ],
-      "component": {
-        "id": "workbench-debug-bench-viewport-comments",
-        "js": "ui/debug-loader.js",
-        "css": "ui/debug-loader.css"
-      }
-    },
-    {
       "id": "debug-bench-viewport-agent-quick-access",
       "path": "/debug/bench-viewport/agent-quick-access",
       "title": "Workbench debug: Agent quick access",
@@ -290,57 +273,6 @@
       ],
       "component": {
         "id": "workbench-debug-bench-viewport-stress-textareas-1m",
-        "js": "ui/debug-loader.js",
-        "css": "ui/debug-loader.css"
-      }
-    },
-    {
-      "id": "debug-directory-scene",
-      "path": "/debug/directory-scene",
-      "title": "Workbench debug: Directory scene",
-      "requiredCapabilities": [
-        "workbench:read",
-        "workbench:write"
-      ],
-      "services": [
-        "api"
-      ],
-      "component": {
-        "id": "workbench-debug-directory-scene",
-        "js": "ui/debug-loader.js",
-        "css": "ui/debug-loader.css"
-      }
-    },
-    {
-      "id": "debug-directory-scene-recursive-treemap",
-      "path": "/debug/directory-scene/recursive-treemap",
-      "title": "Workbench debug: Recursive treemap",
-      "requiredCapabilities": [
-        "workbench:read",
-        "workbench:write"
-      ],
-      "services": [
-        "api"
-      ],
-      "component": {
-        "id": "workbench-debug-directory-scene-recursive-treemap",
-        "js": "ui/debug-loader.js",
-        "css": "ui/debug-loader.css"
-      }
-    },
-    {
-      "id": "debug-directory-scene-repeated-traversal",
-      "path": "/debug/directory-scene/repeated-traversal",
-      "title": "Workbench debug: Repeated traversal",
-      "requiredCapabilities": [
-        "workbench:read",
-        "workbench:write"
-      ],
-      "services": [
-        "api"
-      ],
-      "component": {
-        "id": "workbench-debug-directory-scene-repeated-traversal",
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
