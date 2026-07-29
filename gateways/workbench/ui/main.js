@@ -37985,13 +37985,17 @@ function parseLiveElementComponent(input, descriptor) {
   }
   return Object.freeze({ implementationRevision: candidate.implementationRevision, render: candidate.render, typeId: candidate.typeId });
 }
+function createJsxRuntimeBridge(runtime, developmentRuntime) {
+  const jsxDEV = typeof developmentRuntime.jsxDEV === "function" ? developmentRuntime.jsxDEV : (type, props, key) => runtime.jsx(type, props, key);
+  return Object.freeze({ Fragment: runtime.Fragment, jsx: runtime.jsx, jsxDEV, jsxs: runtime.jsxs });
+}
 function installReactBridge() {
   const root2 = globalThis;
   const key = Symbol.for("klivcore.workbench.react");
   const current = root2[key];
   if (current?.React && current.React !== React3)
     throw new Error("Workbench React singleton bridge already belongs to another runtime");
-  root2[key] = Object.freeze({ React: React3, jsxRuntime: Object.freeze({ ...jsxRuntime, jsxDEV: jsxDevRuntime.jsxDEV }) });
+  root2[key] = Object.freeze({ React: React3, jsxRuntime: createJsxRuntimeBridge(jsxRuntime, jsxDevRuntime) });
 }
 async function evaluateComponentModule(bytes) {
   let binary = "";
