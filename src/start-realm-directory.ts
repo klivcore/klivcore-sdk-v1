@@ -43,14 +43,20 @@ function gatewaySource(revision: string, path: string): string {
   return `git+${SDK_REPOSITORY}#${revision}::${path}`;
 }
 
-async function ensurePrivateDirectory(path: string): Promise<void> {
+async function ensurePrivateDirectory(
+  path: string,
+  options: Readonly<{ preserveGroupTraversal?: boolean }> = {},
+): Promise<void> {
   await mkdir(path, { recursive: true, mode: 0o700 });
   const info = await lstat(path);
   const uid = process.getuid?.();
   if (!info.isDirectory() || info.isSymbolicLink() || (uid !== undefined && info.uid !== uid)) {
     throw new Error(`Realm root must be an owned non-symlink directory: ${path}`);
   }
-  if (process.platform !== "win32") await chmod(path, 0o700);
+  if (process.platform !== "win32") {
+    const groupTraversal = options.preserveGroupTraversal ? info.mode & 0o010 : 0;
+    await chmod(path, 0o700 | groupTraversal);
+  }
 }
 
 async function readExistingConfig(path: string): Promise<Record<string, unknown> | undefined> {
@@ -117,7 +123,7 @@ export async function reconcileRealmDirectory(
   if (!REALM_ID.test(id)) throw new TypeError("Realm directory name must be a valid Realm ID");
   const user = options.user ?? process.env.USER;
   if (!user || !USER.test(user)) throw new Error("A valid current user is required to configure Realm Desktop access");
-  await ensurePrivateDirectory(resolvedDirectory);
+  await ensurePrivateDirectory(resolvedDirectory, { preserveGroupTraversal: true });
   const configPath = join(resolvedDirectory, CONFIG_NAME);
   const existing = await readExistingConfig(configPath);
   const gateways = existing?.gateways && typeof existing.gateways === "object" && !Array.isArray(existing.gateways)
