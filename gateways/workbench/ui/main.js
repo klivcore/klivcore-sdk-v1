@@ -37788,6 +37788,7 @@ function createLiveComponentRuntime(options2) {
     if (closed)
       return;
     const response = await options2.fetcher.call(globalThis, new URL("catalog", apiBase), {
+      cache: "no-store",
       headers: { accept: "application/json" },
       redirect: "error",
       signal: lifecycleAbort.signal
