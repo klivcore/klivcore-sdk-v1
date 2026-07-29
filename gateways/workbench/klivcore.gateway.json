@@ -276,6 +276,23 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-bench-viewport-stress-textareas-1m",
+      "path": "/debug/bench-viewport/stress-textareas-1m",
+      "title": "Workbench debug: Stress textareas 1m",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-stress-textareas-1m",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {

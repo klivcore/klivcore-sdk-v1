@@ -11049,7 +11049,7 @@ var workbenchReactDebugContributions = Object.freeze([
 
 // packages/publish-sdk/src/gateway-debug-publication.ts
 var publishedScenarioIdsByCategory = Object.freeze({
-  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "comments", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k"])
+  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "comments", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
 });
 var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
   const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);
