@@ -3230,6 +3230,12 @@ function requestHandler(server, debugAssets, liveComponents) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health" && !url.search)
       return Response.json({ status: "ok", gateway: "workbench-v1" });
+    const serviceArtifact = /^\/v1\/components\/artifacts\/([a-f0-9]{64}\.(?:js|css))$/u.exec(url.pathname);
+    if (liveComponents && serviceArtifact && !url.search) {
+      const canonicalUrl = new URL(request.url);
+      canonicalUrl.pathname = `/extensions/artifacts/${serviceArtifact[1]}`;
+      return liveComponents.fetch(new Request(canonicalUrl, request));
+    }
     if (liveComponents && (url.pathname.startsWith("/v1/components/") || url.pathname.startsWith("/extensions/artifacts/"))) {
       return liveComponents.fetch(request);
     }

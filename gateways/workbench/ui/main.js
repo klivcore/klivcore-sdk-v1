@@ -38088,7 +38088,8 @@ function createWorkbenchServiceFetcher(service, baseHref = globalThis.location?.
       body: input.method === "GET" || input.method === "HEAD" ? undefined : input.body,
       signal: input.signal
     } : undefined);
-    return service.request(`${target.pathname}${target.search}`, requestInit);
+    const servicePath = isImmutableArtifact ? target.pathname.replace("/extensions/artifacts/", "/v1/components/artifacts/") : `${target.pathname}${target.search}`;
+    return service.request(servicePath, requestInit);
   };
 }
 
