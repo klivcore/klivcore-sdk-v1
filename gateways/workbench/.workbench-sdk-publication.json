@@ -13,8 +13,8 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 133265,
-      "sha256": "f4b17910c74b496aebf13e93a019f3da68b3465cc6efa7db6bb80a501a43d726",
+      "bytes": 133535,
+      "sha256": "690ab63bb681739fec78650b53a696be2828f90e68a537290b28e4939f9c91a8",
       "mode": 420
     },
     {
@@ -73,8 +73,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 1970907,
-      "sha256": "0f71def64420803b67c94f41f8437c3a34451afa60af2b7d8d0c3c1a0de8253b",
+      "bytes": 1971261,
+      "sha256": "ae22040c21f3a676cccbc279dbbd7963c0071e5aad007867fb82c7864cd85a79",
       "mode": 420
     }
   ]

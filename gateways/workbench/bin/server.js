@@ -2653,10 +2653,11 @@ import { createHash as createHash2 } from "crypto";
 import { watch } from "fs";
 import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
 var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
-var MAX_COMPONENTS = 256;
-var MAX_JAVASCRIPT_BYTES = 16 * 1024 * 1024;
-var MAX_CSS_BYTES = 4 * 1024 * 1024;
-var MAX_RETAINED_ARTIFACTS = 1024;
+var MAX_COMPONENTS = 64;
+var MAX_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
+var MAX_CSS_BYTES = 2 * 1024 * 1024;
+var MAX_RETAINED_ARTIFACTS = 128;
+var MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 var encoder = new TextEncoder;
 async function createLiveComponentGateway(options) {
   const apiBasePath = normalizeBasePath(options.apiBasePath ?? "/extensions/live-components");
@@ -2768,11 +2769,14 @@ data: ${JSON.stringify({
       `${component.jsArtifactSha256}.js`,
       ...component.cssArtifactSha256 ? [`${component.cssArtifactSha256}.css`] : []
     ]));
-    for (const key of immutableArtifacts.keys()) {
-      if (immutableArtifacts.size <= MAX_RETAINED_ARTIFACTS)
+    let retainedBytes = [...immutableArtifacts.values()].reduce((total, artifact) => total + artifact.bytes.byteLength, 0);
+    for (const [key, artifact] of immutableArtifacts) {
+      if (immutableArtifacts.size <= MAX_RETAINED_ARTIFACTS && retainedBytes <= MAX_RETAINED_BYTES)
         break;
-      if (!activeKeys.has(key))
+      if (!activeKeys.has(key)) {
         immutableArtifacts.delete(key);
+        retainedBytes -= artifact.bytes.byteLength;
+      }
     }
   };
   const rebuild = (typeId) => {
@@ -3077,7 +3081,7 @@ function parseLiveComponents(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
   const candidate = value;
-  if (Object.keys(candidate).sort().join("\x00") !== ["realmId", "registrations"].sort().join("\x00") || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId) || !Array.isArray(candidate.registrations) || candidate.registrations.length === 0 || candidate.registrations.length > 256) {
+  if (Object.keys(candidate).sort().join("\x00") !== ["realmId", "registrations"].sort().join("\x00") || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId) || !Array.isArray(candidate.registrations) || candidate.registrations.length === 0 || candidate.registrations.length > 64) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
   const seen = new Set;

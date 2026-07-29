@@ -37790,6 +37790,8 @@ function createLiveComponentRuntime(options2) {
     });
     if (response.status !== 200 || response.redirected)
       throw new Error(`Live component catalog requires status 200, received ${response.status}`);
+    if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
+      throw new Error("Live component catalog has an invalid content type");
     const nextCatalog = parseWorkbenchExtensionCatalog(await readBoundedJson(response, MAX_CATALOG_BYTES));
     if (catalog) {
       if (JSON.stringify(nextCatalog.authority) !== JSON.stringify(catalog.authority))
@@ -37857,6 +37859,8 @@ function createLiveComponentRuntime(options2) {
         });
         if (response.status !== 200 || !response.body)
           throw new Error(`Live component event stream requires status 200, received ${response.status}`);
+        if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
+          throw new Error("Live component event stream has an invalid content type");
         const reader = response.body.getReader();
         const decoder = new TextDecoder;
         let pending = "";
