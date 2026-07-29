@@ -37733,10 +37733,14 @@ function createLiveComponentRuntime(options2) {
   const evaluate = options2.evaluate ?? evaluateComponentModule;
   const baseUrl = options2.baseUrl ?? globalThis.location?.href ?? "http://localhost/";
   const apiBase = new URL(options2.apiBasePath.replace(/\/$/, "") + "/", baseUrl);
+  const reconcileIntervalMs = options2.reconcileIntervalMs ?? 2000;
+  if (!Number.isFinite(reconcileIntervalMs) || reconcileIntervalMs < 10)
+    throw new TypeError("Live component reconciliation interval is invalid");
   const lifecycleAbort = new AbortController;
   let catalog = null;
   let closed = false;
   let eventAbort = null;
+  let reconcileTimer = null;
   let started = false;
   let refreshQueue = Promise.resolve();
   const notify = () => {
@@ -37833,6 +37837,16 @@ function createLiveComponentRuntime(options2) {
     });
     return operation;
   };
+  const startReconciliation = () => {
+    if (reconcileTimer !== null)
+      return;
+    reconcileTimer = setInterval(() => {
+      if (!closed)
+        refresh().catch(() => {
+          return;
+        });
+    }, reconcileIntervalMs);
+  };
   const markBuildFailure = (event) => {
     const dataLine = event.split(`
 `).find((line) => line.startsWith("data:"));
@@ -37912,6 +37926,9 @@ function createLiveComponentRuntime(options2) {
       closed = true;
       lifecycleAbort.abort();
       eventAbort?.abort();
+      if (reconcileTimer !== null)
+        clearInterval(reconcileTimer);
+      reconcileTimer = null;
       listeners.clear();
     },
     ensure(typeId) {
@@ -37922,8 +37939,10 @@ function createLiveComponentRuntime(options2) {
       if (!started) {
         started = true;
         refresh().then(() => {
-          if (!closed)
-            return connectEvents();
+          if (closed)
+            return;
+          startReconciliation();
+          return connectEvents();
         }).catch((error) => {
           const message = error instanceof Error ? error.message : String(error);
           for (const requestedTypeId of requested)
