@@ -10983,7 +10983,7 @@ var require_jsx_runtime = __commonJS((exports, module) => {
 // packages/publish-sdk/src/gateway-debug-index.tsx
 var import_client = __toESM(require_client(), 1);
 
-// packages/react/src/debugContributions.ts
+// ../../repos/klivcore-workbench/packages/react/src/debugContributions.ts
 var workbenchReactDebugContributions = Object.freeze([
   Object.freeze({
     debugId: "bench-viewport",
