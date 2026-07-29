@@ -38089,7 +38089,20 @@ function createWorkbenchServiceFetcher(service, baseHref = globalThis.location?.
       signal: input.signal
     } : undefined);
     const servicePath = isImmutableArtifact ? target.pathname.replace("/extensions/artifacts/", "/v1/components/artifacts/") : `${target.pathname}${target.search}`;
-    return service.request(servicePath, requestInit);
+    const response = await service.request(servicePath, requestInit);
+    if (isImmutableArtifact) {
+      const logicalResponse = new Response(response.body, {
+        headers: response.headers,
+        status: response.status,
+        statusText: response.statusText
+      });
+      Object.defineProperties(logicalResponse, {
+        redirected: { configurable: true, value: response.redirected },
+        url: { configurable: true, value: target.href }
+      });
+      return logicalResponse;
+    }
+    return response;
   };
 }
 
