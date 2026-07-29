@@ -37840,7 +37840,7 @@ function createLiveComponentRuntime(options2) {
       return;
     try {
       const data = JSON.parse(dataLine.slice(5));
-      if (typeof data.componentTypeId !== "string")
+      if (typeof data.componentTypeId !== "string" || !requested.has(data.componentTypeId))
         return;
       const previous = snapshots.get(data.componentTypeId);
       const error = typeof data.message === "string" ? data.message : "Candidate build failed.";

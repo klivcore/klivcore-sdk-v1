@@ -2919,7 +2919,7 @@ async function readLineage(path, authority) {
   if (raw.length > 4096)
     throw new TypeError("Live component lineage is invalid");
   const value = JSON.parse(raw);
-  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join("\x00") !== ["authority", "catalogRevision", "sequence"].sort().join("\x00") || JSON.stringify(value.authority) !== JSON.stringify(authority) || typeof value.catalogRevision !== "string" || !/^live-[1-9][0-9]*-[a-f0-9]{24}$/u.test(value.catalogRevision) || !Number.isSafeInteger(value.sequence) || value.sequence < 1) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join("\x00") !== ["authority", "catalogRevision", "sequence"].sort().join("\x00") || JSON.stringify(value.authority) !== JSON.stringify(authority) || typeof value.catalogRevision !== "string" || !/^live-[1-9][0-9]*-[a-f0-9]{24}$/u.test(value.catalogRevision) || !Number.isSafeInteger(value.sequence) || value.sequence < 1 || !value.catalogRevision.startsWith(`live-${value.sequence}-`)) {
     throw new TypeError("Live component lineage is invalid");
   }
   return Object.freeze({ catalogRevision: value.catalogRevision, sequence: value.sequence });
