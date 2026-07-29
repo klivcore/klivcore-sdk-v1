@@ -313,6 +313,14 @@
       {
         "method": "GET",
         "pathPrefix": "/v1/debug/assets"
+      },
+      {
+        "method": "GET",
+        "pathPrefix": "/v1/components"
+      },
+      {
+        "method": "GET",
+        "pathPrefix": "/extensions/artifacts"
       }
     ],
     "healthPath": "/health"

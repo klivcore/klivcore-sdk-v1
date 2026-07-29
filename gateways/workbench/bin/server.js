@@ -1394,12 +1394,13 @@ var require_hjson = __commonJS((exports, module) => {
 
 // packages/publish-sdk/src/gateway-server.ts
 import { readFile as readFile2 } from "fs/promises";
-import { resolve as resolve3 } from "path";
+import { resolve as resolve4 } from "path";
 
 // packages/publish-sdk/src/gateway-server-core.ts
+import { createHash as createHash3 } from "crypto";
 import { constants } from "fs";
 import { chmod, lstat as lstat2, mkdir as mkdir3, open as open2, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
+import { dirname as dirname4, isAbsolute as isAbsolute2, resolve as resolve3 } from "path";
 
 // packages/server/src/index.ts
 import { lstat, mkdir as mkdir2, open, readFile, readdir, rename, rm as rm2, stat, unlink, utimes, writeFile } from "fs/promises";
@@ -2647,6 +2648,335 @@ function isPathConflictError(error) {
   return typeof error === "object" && error !== null && "code" in error && (error.code === "EISDIR" || error.code === "ENOTDIR");
 }
 
+// packages/bench-gateway-server/src/live-components.ts
+import { createHash as createHash2 } from "crypto";
+import { watch } from "fs";
+import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
+var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var MAX_COMPONENTS = 256;
+var MAX_JAVASCRIPT_BYTES = 16 * 1024 * 1024;
+var MAX_CSS_BYTES = 4 * 1024 * 1024;
+var MAX_RETAINED_ARTIFACTS = 1024;
+var encoder = new TextEncoder;
+async function createLiveComponentGateway(options) {
+  const apiBasePath = normalizeBasePath(options.apiBasePath ?? "/extensions/live-components");
+  if (!Array.isArray(options.registrations) || options.registrations.length === 0 || options.registrations.length > MAX_COMPONENTS) {
+    throw new TypeError("Live component registrations are outside the supported bound");
+  }
+  const registrations = new Map;
+  for (const candidate of options.registrations) {
+    if (!TYPE_ID.test(candidate.typeId) || registrations.has(candidate.typeId) || !isAbsolute(candidate.entry)) {
+      throw new TypeError("Live component registration is invalid");
+    }
+    registrations.set(candidate.typeId, Object.freeze({ entry: resolve2(candidate.entry), typeId: candidate.typeId }));
+  }
+  const active = new Map;
+  const immutableArtifacts = new Map;
+  const subscribers = new Set;
+  const watchers = [];
+  const debounceTimers = new Map;
+  let closed = false;
+  let sequence = 0;
+  let catalog = null;
+  let rebuildQueue = Promise.resolve();
+  const publishCatalog = (changedTypeId) => {
+    const parentCatalogRevision = catalog?.catalogRevision ?? null;
+    const components = [...active.values()].sort((left, right) => left.typeId.localeCompare(right.typeId));
+    const activeArtifactHashes = new Set(components.flatMap((component) => [component.jsArtifactSha256, component.cssArtifactSha256].filter((value) => Boolean(value))));
+    sequence += 1;
+    const identity = sha256(encoder.encode(JSON.stringify(components.map((component) => [
+      component.typeId,
+      component.implementationRevision,
+      component.jsArtifactSha256,
+      component.cssArtifactSha256 ?? null
+    ]))));
+    catalog = Object.freeze({
+      apiVersion: "1.0.0",
+      artifacts: Object.freeze([...immutableArtifacts.values()].filter((artifact) => activeArtifactHashes.has(artifact.sha256)).map((artifact) => Object.freeze({
+        bytes: artifact.bytes.byteLength,
+        contentType: artifact.kind === "js" ? "text/javascript" : "text/css",
+        kind: artifact.kind,
+        path: `/extensions/artifacts/${artifact.sha256}.${artifact.kind}`,
+        sha256: artifact.sha256
+      }))),
+      authority: options.authority,
+      catalogRevision: `live-${sequence}-${identity.slice(0, 24)}`,
+      components: Object.freeze(components.map((component) => Object.freeze({
+        ...component.cssArtifactSha256 ? { cssArtifactSha256: component.cssArtifactSha256 } : {},
+        hostApiRange: "^1.0.0",
+        implementationRevision: component.implementationRevision,
+        jsArtifactSha256: component.jsArtifactSha256,
+        schemaVersion: 1,
+        sourceRevision: component.sourceRevision,
+        typeId: component.typeId
+      }))),
+      debug: Object.freeze([]),
+      parentCatalogRevision,
+      routes: Object.freeze([]),
+      sequence
+    });
+    const event = encoder.encode(`event: component-revision-activated
+data: ${JSON.stringify({
+      catalogRevision: catalog.catalogRevision,
+      componentTypeId: changedTypeId,
+      implementationRevision: active.get(changedTypeId)?.implementationRevision,
+      sequence,
+      type: "component-revision-activated"
+    })}
+
+`);
+    for (const subscriber of [...subscribers]) {
+      try {
+        subscriber.enqueue(event);
+      } catch {
+        subscribers.delete(subscriber);
+      }
+    }
+  };
+  const publishBuildFailure = (componentTypeId) => {
+    const event = encoder.encode(`event: component-build-failed
+data: ${JSON.stringify({
+      componentTypeId,
+      message: "Candidate build failed; showing the last known good revision.",
+      type: "component-build-failed"
+    })}
+
+`);
+    for (const subscriber of [...subscribers]) {
+      try {
+        subscriber.enqueue(event);
+      } catch {
+        subscribers.delete(subscriber);
+      }
+    }
+  };
+  const rebuildNow = async (typeId) => {
+    if (closed)
+      throw new Error("Live component Gateway is closed");
+    const registration = registrations.get(typeId);
+    if (!registration)
+      throw new TypeError(`Unknown live component: ${typeId}`);
+    const built = await buildReactComponent(registration);
+    const previous = active.get(typeId);
+    if (previous?.implementationRevision === built.implementationRevision)
+      return;
+    for (const artifact of built.artifacts)
+      immutableArtifacts.set(`${artifact.sha256}.${artifact.kind}`, artifact);
+    active.set(typeId, built);
+    publishCatalog(typeId);
+    const activeKeys = new Set([...active.values()].flatMap((component) => [
+      `${component.jsArtifactSha256}.js`,
+      ...component.cssArtifactSha256 ? [`${component.cssArtifactSha256}.css`] : []
+    ]));
+    for (const key of immutableArtifacts.keys()) {
+      if (immutableArtifacts.size <= MAX_RETAINED_ARTIFACTS)
+        break;
+      if (!activeKeys.has(key))
+        immutableArtifacts.delete(key);
+    }
+  };
+  const rebuild = (typeId) => {
+    const operation = rebuildQueue.then(() => rebuildNow(typeId)).catch((error) => {
+      publishBuildFailure(typeId);
+      throw error;
+    });
+    rebuildQueue = operation.catch(() => {
+      return;
+    });
+    return operation;
+  };
+  for (const typeId of registrations.keys())
+    await rebuild(typeId);
+  if (options.watch !== false) {
+    for (const registration of registrations.values()) {
+      const watcher = watch(dirname3(registration.entry), { persistent: false }, () => {
+        const timer = debounceTimers.get(registration.typeId);
+        if (timer)
+          clearTimeout(timer);
+        debounceTimers.set(registration.typeId, setTimeout(() => {
+          debounceTimers.delete(registration.typeId);
+          rebuild(registration.typeId).catch(() => {
+            return;
+          });
+        }, 40));
+      });
+      watchers.push(watcher);
+    }
+  }
+  return Object.freeze({
+    async close() {
+      if (closed)
+        return;
+      closed = true;
+      for (const timer of debounceTimers.values())
+        clearTimeout(timer);
+      debounceTimers.clear();
+      for (const watcher of watchers)
+        watcher.close();
+      for (const subscriber of subscribers) {
+        try {
+          subscriber.close();
+        } catch {}
+      }
+      subscribers.clear();
+      await rebuildQueue;
+    },
+    async fetch(request) {
+      if (closed)
+        return new Response("Gateway closed", { status: 503 });
+      const url = new URL(request.url);
+      if (url.search || url.hash)
+        return new Response(null, { status: 400 });
+      if (request.method !== "GET" && request.method !== "HEAD")
+        return new Response(null, { headers: { allow: "GET, HEAD" }, status: 405 });
+      if (url.pathname === `${apiBasePath}/catalog`) {
+        const bytes = encoder.encode(JSON.stringify(catalog));
+        return new Response(request.method === "HEAD" ? null : bytes, { headers: {
+          "cache-control": "no-store",
+          "content-length": String(bytes.byteLength),
+          "content-type": "application/json; charset=utf-8",
+          "x-content-type-options": "nosniff"
+        } });
+      }
+      if (url.pathname === `${apiBasePath}/events`) {
+        if (request.method === "HEAD")
+          return new Response(null, { headers: eventHeaders() });
+        let subscriber;
+        const stream = new ReadableStream({
+          start(controller) {
+            subscriber = controller;
+            subscribers.add(controller);
+            controller.enqueue(encoder.encode(`: connected
+
+`));
+          },
+          cancel() {
+            if (subscriber)
+              subscribers.delete(subscriber);
+          }
+        });
+        return new Response(stream, { headers: eventHeaders() });
+      }
+      const match = /^\/extensions\/artifacts\/([a-f0-9]{64})\.(js|css)$/.exec(url.pathname);
+      if (!match)
+        return new Response(null, { status: 404 });
+      const artifact = immutableArtifacts.get(`${match[1]}.${match[2]}`);
+      if (!artifact)
+        return new Response(null, { status: 404 });
+      return new Response(request.method === "HEAD" ? null : exactArrayBuffer(artifact.bytes), { headers: {
+        "cache-control": "public, max-age=31536000, immutable",
+        "content-length": String(artifact.bytes.byteLength),
+        "content-type": artifact.kind === "js" ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8",
+        etag: `"${artifact.sha256}"`,
+        "x-content-type-options": "nosniff"
+      } });
+    },
+    rebuild
+  });
+}
+async function buildReactComponent(registration) {
+  const bunRuntime = globalThis.Bun;
+  if (!bunRuntime)
+    throw new Error("Live component builds require the Bun runtime");
+  const result = await bunRuntime.build({
+    entrypoints: ["klivcore:component-entry"],
+    format: "esm",
+    minify: false,
+    plugins: [componentBuildPlugin(registration)],
+    splitting: false,
+    target: "browser",
+    write: false
+  });
+  if (!result.success)
+    throw new AggregateError(result.logs, `Live component build failed: ${registration.typeId}`);
+  const javascript = result.outputs.find((output) => output.kind === "entry-point");
+  if (!javascript)
+    throw new Error(`Live component build produced no JavaScript: ${registration.typeId}`);
+  const css = result.outputs.find((output) => output.path.endsWith(".css"));
+  const rawJs = new Uint8Array(await javascript.arrayBuffer());
+  const rawCss = css ? new Uint8Array(await css.arrayBuffer()) : null;
+  const jsSha = sha256(rawJs);
+  const cssSha = rawCss ? sha256(rawCss) : undefined;
+  const implementationRevision = sha256(encoder.encode(`${jsSha}:${cssSha ?? ""}`));
+  const revisionedJs = encoder.encode(new TextDecoder().decode(rawJs).replaceAll("__KLIVCORE_IMPLEMENTATION_REVISION__", implementationRevision));
+  const manifest = `/*klivcore-manifest:${JSON.stringify({ components: [{ implementationRevision, renderMode: "element", typeId: registration.typeId }] })}*/
+`;
+  const jsBytes = concat(encoder.encode(manifest), revisionedJs);
+  if (jsBytes.byteLength > MAX_JAVASCRIPT_BYTES || (rawCss?.byteLength ?? 0) > MAX_CSS_BYTES) {
+    throw new Error(`Live component build exceeded the artifact size limit: ${registration.typeId}`);
+  }
+  const finalJsSha = sha256(jsBytes);
+  const artifacts = [{ bytes: jsBytes, kind: "js", sha256: finalJsSha }];
+  if (rawCss && cssSha)
+    artifacts.push({ bytes: rawCss, kind: "css", sha256: cssSha });
+  return Object.freeze({
+    artifacts: Object.freeze(artifacts),
+    ...cssSha ? { cssArtifactSha256: cssSha } : {},
+    implementationRevision,
+    jsArtifactSha256: finalJsSha,
+    sourceRevision: implementationRevision,
+    typeId: registration.typeId
+  });
+}
+function componentBuildPlugin(registration) {
+  return {
+    name: "klivcore-live-component",
+    setup(builder) {
+      builder.onResolve({ filter: /^klivcore:component-entry$/ }, () => ({ namespace: "klivcore-entry", path: registration.typeId }));
+      builder.onLoad({ filter: /.*/, namespace: "klivcore-entry" }, () => ({
+        contents: `import Component from ${JSON.stringify(registration.entry)};
+export const components = Object.freeze([Object.freeze({ implementationRevision: "__KLIVCORE_IMPLEMENTATION_REVISION__", renderMode: "element", typeId: ${JSON.stringify(registration.typeId)}, render(host, resolved) { return host.createElement(Component, resolved); } })]);
+`,
+        loader: "js"
+      }));
+      builder.onResolve({ filter: /^react$/ }, () => ({ namespace: "klivcore-react", path: "react" }));
+      builder.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ namespace: "klivcore-react", path: "jsx-runtime" }));
+      builder.onResolve({ filter: /^react\/jsx-dev-runtime$/ }, () => ({ namespace: "klivcore-react", path: "jsx-runtime" }));
+      builder.onLoad({ filter: /^react$/, namespace: "klivcore-react" }, () => ({ contents: reactBridgeSource(), loader: "js" }));
+      builder.onLoad({ filter: /^jsx-runtime$/, namespace: "klivcore-react" }, () => ({ contents: jsxBridgeSource(), loader: "js" }));
+    }
+  };
+}
+function reactBridgeSource() {
+  const names = ["Activity", "Children", "Component", "Fragment", "Profiler", "PureComponent", "StrictMode", "Suspense", "act", "cache", "cacheSignal", "captureOwnerStack", "cloneElement", "createContext", "createElement", "createRef", "experimental_useEffectEvent", "forwardRef", "isValidElement", "lazy", "memo", "startTransition", "unstable_useCacheRefresh", "use", "useActionState", "useCallback", "useContext", "useDebugValue", "useDeferredValue", "useEffect", "useEffectEvent", "useId", "useImperativeHandle", "useInsertionEffect", "useLayoutEffect", "useMemo", "useOptimistic", "useReducer", "useRef", "useState", "useSyncExternalStore", "useTransition", "version"];
+  return `const React = globalThis[Symbol.for("klivcore.workbench.react")].React;
+export default React;
+${names.map((name) => `export const ${name} = React.${name};`).join(`
+`)}
+`;
+}
+function jsxBridgeSource() {
+  return `const runtime = globalThis[Symbol.for("klivcore.workbench.react")].jsxRuntime;
+export const Fragment = runtime.Fragment;
+export const jsx = runtime.jsx;
+export const jsxs = runtime.jsxs;
+export const jsxDEV = runtime.jsxDEV;
+`;
+}
+function sha256(bytes) {
+  return createHash2("sha256").update(bytes).digest("hex");
+}
+function concat(left, right) {
+  const output = new Uint8Array(left.byteLength + right.byteLength);
+  output.set(left);
+  output.set(right, left.byteLength);
+  return output;
+}
+function exactArrayBuffer(bytes) {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+}
+function normalizeBasePath(value) {
+  if (!value.startsWith("/") || value.includes("?") || value.includes("#") || value.includes("\\") || value.includes("//"))
+    throw new TypeError("Live component API base path is invalid");
+  return value.length > 1 ? value.replace(/\/$/, "") : "";
+}
+function eventHeaders() {
+  return { "cache-control": "no-cache, no-transform", connection: "keep-alive", "content-type": "text/event-stream; charset=utf-8", "x-accel-buffering": "no" };
+}
+// packages/bench-gateway-server/src/index.ts
+var MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+var MAX_ARTIFACT_BYTES = 16 * 1024 * 1024;
+
 // packages/publish-sdk/src/gateway-server-core.ts
 var bootstrap = {
   authority: {
@@ -2692,6 +3022,8 @@ var modularitySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 36
 `;
 var VAULT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
 var BENCH_PATH = /^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u;
+var COMPONENT_REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
+var COMPONENT_TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
 function parseWorkbenchGatewayConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
@@ -2701,16 +3033,17 @@ function parseWorkbenchGatewayConfig(value) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
   if (keys === ["initialView", "vaultRoot", "workspaceName"].sort().join("\x00")) {
-    if (typeof config.vaultRoot !== "string" || !isAbsolute(config.vaultRoot) || typeof config.initialView !== "string" || !BENCH_PATH.test(config.initialView)) {
+    if (typeof config.vaultRoot !== "string" || !isAbsolute2(config.vaultRoot) || typeof config.initialView !== "string" || !BENCH_PATH.test(config.initialView)) {
       throw new TypeError("Workbench Gateway config is invalid");
     }
     return Object.freeze({
       initialView: Object.freeze({ path: config.initialView, vaultId: "main" }),
-      vaults: Object.freeze([Object.freeze({ id: "main", root: resolve2(config.vaultRoot) })]),
+      vaults: Object.freeze([Object.freeze({ id: "main", root: resolve3(config.vaultRoot) })]),
       workspaceName: config.workspaceName
     });
   }
-  if (keys !== ["initialView", "vaults", "workspaceName"].sort().join("\x00") || !config.initialView || typeof config.initialView !== "object" || Array.isArray(config.initialView) || !Array.isArray(config.vaults) || config.vaults.length === 0 || config.vaults.length > 100) {
+  const expectedKeys = ["initialView", "vaults", "workspaceName", ...config.liveComponents === undefined ? [] : ["liveComponents"]].sort().join("\x00");
+  if (keys !== expectedKeys || !config.initialView || typeof config.initialView !== "object" || Array.isArray(config.initialView) || !Array.isArray(config.vaults) || config.vaults.length === 0 || config.vaults.length > 100) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
   const initialView = config.initialView;
@@ -2722,28 +3055,51 @@ function parseWorkbenchGatewayConfig(value) {
     if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
       throw new TypeError("Workbench Gateway config is invalid");
     const vault = value2;
-    if (Object.keys(vault).sort().join("\x00") !== ["id", "root"].sort().join("\x00") || typeof vault.id !== "string" || !VAULT_ID.test(vault.id) || seen.has(vault.id) || typeof vault.root !== "string" || !isAbsolute(vault.root)) {
+    if (Object.keys(vault).sort().join("\x00") !== ["id", "root"].sort().join("\x00") || typeof vault.id !== "string" || !VAULT_ID.test(vault.id) || seen.has(vault.id) || typeof vault.root !== "string" || !isAbsolute2(vault.root)) {
       throw new TypeError("Workbench Gateway config is invalid");
     }
     seen.add(vault.id);
-    return Object.freeze({ id: vault.id, root: resolve2(vault.root) });
+    return Object.freeze({ id: vault.id, root: resolve3(vault.root) });
   });
   if (!seen.has(initialView.vaultId))
     throw new TypeError("Workbench Gateway config is invalid");
+  const liveComponents = parseLiveComponents(config.liveComponents);
   return Object.freeze({
     initialView: Object.freeze({ path: initialView.path, vaultId: initialView.vaultId }),
+    ...liveComponents ? { liveComponents } : {},
     vaults: Object.freeze(vaults),
     workspaceName: config.workspaceName
   });
+}
+function parseLiveComponents(value) {
+  if (value === undefined)
+    return;
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new TypeError("Workbench Gateway config is invalid");
+  const candidate = value;
+  if (Object.keys(candidate).sort().join("\x00") !== ["realmId", "registrations"].sort().join("\x00") || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId) || !Array.isArray(candidate.registrations) || candidate.registrations.length === 0 || candidate.registrations.length > 256) {
+    throw new TypeError("Workbench Gateway config is invalid");
+  }
+  const seen = new Set;
+  const registrations = candidate.registrations.map((value2) => {
+    if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
+      throw new TypeError("Workbench Gateway config is invalid");
+    const registration = value2;
+    if (Object.keys(registration).sort().join("\x00") !== ["entry", "typeId"].sort().join("\x00") || typeof registration.entry !== "string" || !isAbsolute2(registration.entry) || typeof registration.typeId !== "string" || !COMPONENT_TYPE_ID.test(registration.typeId) || !registration.typeId.startsWith(`${candidate.realmId}:`) || seen.has(registration.typeId))
+      throw new TypeError("Workbench Gateway config is invalid");
+    seen.add(registration.typeId);
+    return Object.freeze({ entry: resolve3(registration.entry), typeId: registration.typeId });
+  });
+  return Object.freeze({ realmId: candidate.realmId, registrations: Object.freeze(registrations) });
 }
 function normalizeWorkbenchGatewayConfig(configured) {
   return "vaultRoot" in configured ? parseWorkbenchGatewayConfig(configured) : configured;
 }
 async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPath, publishedDebugCategoryIds = []) {
-  const home = resolve2(homePath);
-  const cache = resolve2(home, "cache");
+  const home = resolve3(homePath);
+  const cache = resolve3(home, "cache");
   const effectiveConfig = configured ? normalizeWorkbenchGatewayConfig(configured) : undefined;
-  const defaultVault = resolve2(home, "vault");
+  const defaultVault = resolve3(home, "vault");
   const vaults = effectiveConfig?.vaults ?? [{ id: "main", root: defaultVault }];
   if (effectiveConfig) {
     await Promise.all(vaults.map(async (vault) => {
@@ -2758,16 +3114,16 @@ async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPa
   await chmod(home, 448);
   if (!effectiveConfig) {
     await Promise.all([
-      seed(resolve2(defaultVault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
+      seed(resolve3(defaultVault, "main.bench.json"), `${JSON.stringify(mainBench, null, 2)}
 `),
-      seed(resolve2(defaultVault, "notes/readme.md"), `# Acme Workbench
+      seed(resolve3(defaultVault, "notes/readme.md"), `# Acme Workbench
 
 This native text-file element is backed by the isolated Workbench Gateway vault.
 `),
-      seed(resolve2(defaultVault, "assets/modularity.svg"), modularitySvg),
-      seed(resolve2(defaultVault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
+      seed(resolve3(defaultVault, "assets/modularity.svg"), modularitySvg),
+      seed(resolve3(defaultVault, "nested/child.bench.json"), `${JSON.stringify(childBench, null, 2)}
 `),
-      seed(resolve2(defaultVault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
+      seed(resolve3(defaultVault, "nested/grandchild.bench.json"), `${JSON.stringify(grandchildBench, null, 2)}
 `)
     ]);
   }
@@ -2778,11 +3134,27 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
     workspace: { id: "workbench", name: effectiveConfig.workspaceName }
   } : bootstrap;
   const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: vaults.map((vault) => ({ ...vault, cacheRoot: cache })) });
+  const liveComponents = effectiveConfig?.liveComponents ? await createLiveComponentGateway({
+    apiBasePath: "/v1/components",
+    authority: {
+      authorityFingerprint: createHash3("sha256").update(JSON.stringify(effectiveConfig.liveComponents)).digest("hex"),
+      benchGatewayId: "workbench",
+      realmId: effectiveConfig.liveComponents.realmId
+    },
+    registrations: effectiveConfig.liveComponents.registrations
+  }) : undefined;
   let debugAssets = new Map;
-  if (debugAssetsPath) {
-    debugAssets = await openPublishedDebugAssets(resolve2(debugAssetsPath), publishedDebugCategoryIds);
+  try {
+    if (debugAssetsPath) {
+      debugAssets = await openPublishedDebugAssets(resolve3(debugAssetsPath), publishedDebugCategoryIds);
+    }
+    return requestHandler(server, debugAssets, liveComponents);
+  } catch (error) {
+    await liveComponents?.close().catch(() => {
+      return;
+    });
+    throw error;
   }
-  return requestHandler(server, debugAssets);
 }
 async function openPublishedDebugAssets(debugAssetsPath, publishedDebugCategoryIds) {
   const opened = new Map;
@@ -2846,7 +3218,7 @@ async function readPublishedDebugAsset(asset) {
   }
   return buffer;
 }
-function requestHandler(server, debugAssets) {
+function requestHandler(server, debugAssets, liveComponents) {
   let closed = false;
   const handler = async (request) => {
     if (closed)
@@ -2854,6 +3226,9 @@ function requestHandler(server, debugAssets) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health" && !url.search)
       return Response.json({ status: "ok", gateway: "workbench-v1" });
+    if (liveComponents && (url.pathname.startsWith("/v1/components/") || url.pathname.startsWith("/extensions/artifacts/"))) {
+      return liveComponents.fetch(request);
+    }
     const debugMatch = request.method === "GET" && !url.search ? /^\/v1\/debug\/assets\/([a-z0-9][a-z0-9-]{0,127})\.(js|css)$/u.exec(url.pathname) : null;
     if (debugMatch) {
       const asset = debugAssets.get(`${debugMatch[1]}.${debugMatch[2]}`);
@@ -2874,14 +3249,17 @@ function requestHandler(server, debugAssets) {
       if (closed)
         return;
       closed = true;
-      await Promise.all([...debugAssets.values()].map(({ file }) => file.close().catch(() => {
-        return;
-      })));
+      await Promise.all([
+        liveComponents?.close(),
+        ...[...debugAssets.values()].map(({ file }) => file.close().catch(() => {
+          return;
+        }))
+      ]);
     }
   });
 }
 async function seed(path, content) {
-  await mkdir3(dirname3(path), { recursive: true, mode: 448 });
+  await mkdir3(dirname4(path), { recursive: true, mode: 448 });
   try {
     await writeFile2(path, content, { flag: "wx", mode: 384 });
   } catch (error) {
@@ -2975,9 +3353,9 @@ var publishedWorkbenchDebugCategoryIds = Object.freeze(publishedWorkbenchDebugCo
 // packages/publish-sdk/src/gateway-server.ts
 function requiredAbsolute(name) {
   const value = process.env[name];
-  if (!value || !resolve3(value).startsWith("/"))
+  if (!value || !resolve4(value).startsWith("/"))
     throw new Error(`${name} must be absolute`);
-  return resolve3(value);
+  return resolve4(value);
 }
 function requiredPort() {
   const value = process.env.KLIVCORE_GATEWAY_PORT;
@@ -2988,7 +3366,7 @@ function requiredPort() {
 var home = requiredAbsolute("KLIVCORE_GATEWAY_HOME");
 var configPath = requiredAbsolute("KLIVCORE_GATEWAY_CONFIG");
 var config = JSON.parse(await readFile2(configPath, "utf8"));
-var debugAssets = resolve3(import.meta.dir, "../debug/assets");
+var debugAssets = resolve4(import.meta.dir, "../debug/assets");
 var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config), debugAssets, publishedWorkbenchDebugCategoryIds);
 var server = Bun.serve({ hostname: "127.0.0.1", port: requiredPort(), fetch: handler });
 console.log(`Canonical Workbench Gateway ready on http://127.0.0.1:${server.port}`);

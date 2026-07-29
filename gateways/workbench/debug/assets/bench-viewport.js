@@ -12709,7 +12709,7 @@ var require_hjson = __commonJS((exports, module) => {
 var import_client = __toESM(require_client(), 1);
 
 // packages/react/src/BenchViewport.tsx
-var import_react8 = __toESM(require_react(), 1);
+var import_react9 = __toESM(require_react(), 1);
 
 // packages/react/src/ElementAddMenu.tsx
 var jsx_runtime = __toESM(require_jsx_runtime(), 1);
@@ -14382,8 +14382,133 @@ var imageElementType = {
   }
 };
 
-// packages/react/src/elementTypes/PhysicsLayoutElement.tsx
+// packages/react/src/elementTypes/LiveComponentElement.tsx
 var import_react6 = __toESM(require_react(), 1);
+var import_react_dom = __toESM(require_react_dom(), 1);
+var jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
+var LiveComponentRuntimeContext = import_react6.createContext(null);
+var liveComponentElementType = {
+  getHeight: (element) => element.height,
+  getPreviewStyle: () => ({ color: "#475569", radius: 5 }),
+  getWidth: (element) => element.width,
+  kind: "component",
+  label: "Component",
+  render: (props) => /* @__PURE__ */ jsx_runtime13.jsx(LiveComponentElement, {
+    ...props
+  }),
+  renderPlaceholder: (element, context) => /* @__PURE__ */ jsx_runtime13.jsx(NodePlaceholder, {
+    backgroundImage: context.lodPreviewImage,
+    element,
+    viewportZoom: context.viewportZoom
+  })
+};
+function LiveComponentElement(props) {
+  const runtime = import_react6.useContext(LiveComponentRuntimeContext);
+  const snapshot = import_react6.useSyncExternalStore(runtime ? runtime.subscribe : emptySubscribe, () => runtime?.getSnapshot(props.element.componentTypeId) ?? missingRuntime, () => missingRuntime);
+  import_react6.useEffect(() => {
+    runtime?.ensure(props.element.componentTypeId);
+  }, [props.element.componentTypeId, runtime]);
+  const error = snapshot.status === "stale" ? `Showing last known good revision. ${snapshot.error ?? "The candidate revision failed."}` : null;
+  return /* @__PURE__ */ jsx_runtime13.jsx(NodeWrapper, {
+    activeEdgeHandleSide: props.activeEdgeHandleSide,
+    bodyClassName: "h-full",
+    contentOverflowClassName: "overflow-hidden",
+    edgeHandles: props.edgeHandles,
+    element: props.element,
+    error,
+    isSelected: props.isSelected,
+    onElementChange: props.onElementChange,
+    onElementDelete: props.onElementDelete,
+    onElementHandlePointerDown: props.onElementHandlePointerDown,
+    onElementMoveStart: props.onElementMoveStart,
+    onElementSelect: props.onElementSelect,
+    selectedCount: props.selectedCount,
+    title: props.element.componentTypeId,
+    viewportZoom: props.viewportZoom,
+    children: /* @__PURE__ */ jsx_runtime13.jsx(ComponentSurface, {
+      element: props.element,
+      isSelected: props.isSelected,
+      snapshot
+    })
+  });
+}
+function ComponentSurface({ element, isSelected, snapshot }) {
+  if (!snapshot.component) {
+    return /* @__PURE__ */ jsx_runtime13.jsx("div", {
+      className: "flex h-full items-center justify-center bg-slate-950 px-4 text-center text-xs text-slate-400",
+      "data-live-component-status": snapshot.status,
+      children: snapshot.status === "loading" ? "Loading component…" : snapshot.error ?? `Component unavailable: ${element.componentTypeId}`
+    });
+  }
+  return /* @__PURE__ */ jsx_runtime13.jsx(ShadowComponent, {
+    element,
+    isSelected,
+    snapshot
+  }, snapshot.implementationRevision);
+}
+function ShadowComponent({ element, isSelected, snapshot }) {
+  const [shadowRoot, setShadowRoot] = import_react6.useState(null);
+  const component = snapshot.component;
+  if (!component)
+    return null;
+  return /* @__PURE__ */ jsx_runtime13.jsx("div", {
+    className: "h-full w-full",
+    "data-live-component-revision": snapshot.implementationRevision,
+    ref: (host) => {
+      if (!host)
+        return;
+      setShadowRoot(host.shadowRoot ?? host.attachShadow({ delegatesFocus: true, mode: "open" }));
+    },
+    children: shadowRoot ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime13.jsxs(RuntimeErrorBoundary, {
+      revision: snapshot.implementationRevision,
+      children: [
+        snapshot.cssText ? /* @__PURE__ */ jsx_runtime13.jsx("style", {
+          children: snapshot.cssText
+        }) : null,
+        component.render({ createElement: import_react6.createElement }, {
+          componentTypeId: element.componentTypeId,
+          data: element.data,
+          elementId: element.id,
+          isSelected,
+          readOnly: false
+        })
+      ]
+    }), shadowRoot) : null
+  });
+}
+
+class RuntimeErrorBoundary extends import_react6.Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(_error, _info) {}
+  componentDidUpdate(previous) {
+    if (previous.revision !== this.props.revision && this.state.error)
+      this.setState({ error: null });
+  }
+  render() {
+    if (this.state.error)
+      return /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+        "data-live-component-status": "runtime-error",
+        style: { background: "#450a0a", boxSizing: "border-box", color: "#fecaca", height: "100%", overflow: "auto", padding: 12 },
+        children: [
+          "Component runtime failed: ",
+          this.state.error.message
+        ]
+      });
+    return this.props.children;
+  }
+}
+var missingRuntime = Object.freeze({ error: "Live component runtime is not configured", status: "error" });
+function emptySubscribe() {
+  return () => {
+    return;
+  };
+}
+
+// packages/react/src/elementTypes/PhysicsLayoutElement.tsx
+var import_react7 = __toESM(require_react(), 1);
 
 // packages/react/src/benchPhysicsLayout.ts
 function benchViewportToPhysicsState(elements, edges = []) {
@@ -22886,7 +23011,7 @@ function clamp(value, min, max) {
 }
 
 // packages/react/src/elementTypes/PhysicsLayoutElement.tsx
-var jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime14 = __toESM(require_jsx_runtime(), 1);
 var liveTickMs = 16;
 var physicsLayoutElementType = {
   kind: "physics-layout",
@@ -22912,12 +23037,12 @@ var physicsLayoutElementType = {
     return element.width;
   },
   render(props) {
-    return /* @__PURE__ */ jsx_runtime13.jsx(PhysicsLayoutCard, {
+    return /* @__PURE__ */ jsx_runtime14.jsx(PhysicsLayoutCard, {
       ...props
     });
   },
   renderPlaceholder(element, { viewportZoom }) {
-    return /* @__PURE__ */ jsx_runtime13.jsx(NodePlaceholder, {
+    return /* @__PURE__ */ jsx_runtime14.jsx(NodePlaceholder, {
       className: "rounded-sm border border-violet-300/55 bg-violet-950/25",
       element,
       viewportZoom
@@ -22925,25 +23050,25 @@ var physicsLayoutElementType = {
   }
 };
 function PhysicsLayoutCard({ activeEdgeHandleSide, edgeHandles, edges, element, elements, isGroupDropTarget, isSelected, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementSelect, onElementsReplace, selectedCount, viewportZoom }) {
-  const [running, setRunning] = import_react6.useState(false);
-  const [busy, setBusy] = import_react6.useState(false);
-  const [tick, setTick] = import_react6.useState(0);
-  const [moved, setMoved] = import_react6.useState(0);
-  const [error, setError] = import_react6.useState(null);
-  const elementsRef = import_react6.useRef(elements);
-  const edgesRef = import_react6.useRef(edges);
-  const runningRef = import_react6.useRef(running);
-  const busyRef = import_react6.useRef(false);
-  import_react6.useEffect(() => {
+  const [running, setRunning] = import_react7.useState(false);
+  const [busy, setBusy] = import_react7.useState(false);
+  const [tick, setTick] = import_react7.useState(0);
+  const [moved, setMoved] = import_react7.useState(0);
+  const [error, setError] = import_react7.useState(null);
+  const elementsRef = import_react7.useRef(elements);
+  const edgesRef = import_react7.useRef(edges);
+  const runningRef = import_react7.useRef(running);
+  const busyRef = import_react7.useRef(false);
+  import_react7.useEffect(() => {
     elementsRef.current = elements;
   }, [elements]);
-  import_react6.useEffect(() => {
+  import_react7.useEffect(() => {
     edgesRef.current = edges;
   }, [edges]);
-  import_react6.useEffect(() => {
+  import_react7.useEffect(() => {
     runningRef.current = running;
   }, [running]);
-  import_react6.useEffect(() => {
+  import_react7.useEffect(() => {
     if (!running)
       return;
     let cancelled = false;
@@ -22991,7 +23116,7 @@ function PhysicsLayoutCard({ activeEdgeHandleSide, edgeHandles, edges, element, 
     return new Promise((resolve2) => window.setTimeout(() => window.requestAnimationFrame(() => resolve2()), liveTickMs));
   }
   const title = element.label ?? "Physics layout";
-  return /* @__PURE__ */ jsx_runtime13.jsx(NodeWrapper, {
+  return /* @__PURE__ */ jsx_runtime14.jsx(NodeWrapper, {
     activeEdgeHandleSide,
     bodyClassName: "bg-violet-950/20",
     edgeHandles,
@@ -23008,45 +23133,45 @@ function PhysicsLayoutCard({ activeEdgeHandleSide, edgeHandles, edges, element, 
     title,
     viewportZoom,
     wrapperClassName: `border-violet-300/55 bg-violet-950/20 text-violet-50 shadow-[inset_0_0_0_1px_rgba(168,85,247,0.18)] ${isGroupDropTarget ? "border-emerald-300/95 bg-emerald-400/10 ring-2 ring-emerald-300" : ""}`,
-    children: /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+    children: /* @__PURE__ */ jsx_runtime14.jsxs("div", {
       className: "flex h-full flex-col gap-2 p-3 text-xs text-violet-50/85",
       onPointerDown: (event) => event.stopPropagation(),
       children: [
-        /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime14.jsxs("div", {
           className: "flex items-center gap-2",
           children: [
-            /* @__PURE__ */ jsx_runtime13.jsx("button", {
+            /* @__PURE__ */ jsx_runtime14.jsx("button", {
               className: "rounded border border-violet-300/35 bg-violet-300 px-2 py-1 font-bold text-slate-950 disabled:opacity-50",
               disabled: busy && !running,
               onClick: () => setRunning((current) => !current),
               type: "button",
               children: running ? "Pause" : "Run"
             }),
-            /* @__PURE__ */ jsx_runtime13.jsx("button", {
+            /* @__PURE__ */ jsx_runtime14.jsx("button", {
               className: "rounded border border-violet-300/25 bg-slate-950/35 px-2 py-1 text-violet-100 disabled:opacity-50",
               disabled: busy || running,
               onClick: () => void runLiveStep(),
               type: "button",
               children: "Step"
             }),
-            /* @__PURE__ */ jsx_runtime13.jsx("span", {
+            /* @__PURE__ */ jsx_runtime14.jsx("span", {
               className: "rounded-full border border-violet-300/25 bg-slate-950/35 px-2 py-0.5 text-violet-100/80",
               children: running ? "Live" : "Off"
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime14.jsxs("div", {
           className: "flex gap-3 text-[11px] text-violet-100/70",
           children: [
-            /* @__PURE__ */ jsx_runtime13.jsx("span", {
+            /* @__PURE__ */ jsx_runtime14.jsx("span", {
               children: tick
             }),
-            /* @__PURE__ */ jsx_runtime13.jsx("span", {
+            /* @__PURE__ */ jsx_runtime14.jsx("span", {
               children: moved
             })
           ]
         }),
-        error ? /* @__PURE__ */ jsx_runtime13.jsx("div", {
+        error ? /* @__PURE__ */ jsx_runtime14.jsx("div", {
           className: "rounded border border-rose-300/40 bg-rose-950/40 px-2 py-1 text-rose-100",
           children: error
         }) : null
@@ -23056,7 +23181,7 @@ function PhysicsLayoutCard({ activeEdgeHandleSide, edgeHandles, edges, element, 
 }
 
 // packages/react/src/elementTypes/RectElement.tsx
-var jsx_runtime14 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
 var DEFAULT_RECT_COLOR = "#67e8f9";
 var HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 function normalizeRectColor(color) {
@@ -23076,7 +23201,7 @@ var rectElementType = {
   },
   render({ element }) {
     const color = normalizeRectColor(element.color);
-    return /* @__PURE__ */ jsx_runtime14.jsx("div", {
+    return /* @__PURE__ */ jsx_runtime15.jsx("div", {
       className: "absolute flex items-center justify-center rounded text-sm font-semibold text-white shadow-xl",
       "data-workbench-element-id": element.id,
       "data-workbench-rect-color": color,
@@ -23091,7 +23216,7 @@ var rectElementType = {
   },
   renderPlaceholder(element, _context) {
     const color = normalizeRectColor(element.color);
-    return /* @__PURE__ */ jsx_runtime14.jsx("div", {
+    return /* @__PURE__ */ jsx_runtime15.jsx("div", {
       className: "absolute rounded opacity-80",
       "data-workbench-element-id": element.id,
       "data-workbench-rect-color": color,
@@ -23130,7 +23255,7 @@ class ElementTypeRegistry {
   }
   getForElement(element) {
     const kind = getElementKind(element);
-    const definition = this.definitions.get(kind);
+    const definition = this.definitions.get(kind) ?? (element.kind === "component" ? this.definitions.get("component") : undefined);
     if (!definition)
       throw new Error(`No element type registered for kind: ${kind}`);
     return definition;
@@ -23152,7 +23277,7 @@ function getElementKind(element) {
 }
 
 // packages/react/src/elementTypes/SquareElement.tsx
-var jsx_runtime15 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime16 = __toESM(require_jsx_runtime(), 1);
 var colorClassByName = {
   red: "bg-red-500",
   blue: "bg-blue-500",
@@ -23178,7 +23303,7 @@ var squareElementType = {
   },
   render({ element }) {
     const size = snapNodeValue(element.size);
-    return /* @__PURE__ */ jsx_runtime15.jsx("div", {
+    return /* @__PURE__ */ jsx_runtime16.jsx("div", {
       className: `absolute flex items-center justify-center rounded-2xl text-xl font-black text-white shadow-2xl ${colorClassByName[element.color]}`,
       style: { height: size, left: snapNodeValue(element.x), top: snapNodeValue(element.y), width: size },
       children: element.color
@@ -23186,7 +23311,7 @@ var squareElementType = {
   },
   renderPlaceholder(element, _context) {
     const size = snapNodeValue(element.size);
-    return /* @__PURE__ */ jsx_runtime15.jsx("div", {
+    return /* @__PURE__ */ jsx_runtime16.jsx("div", {
       className: `absolute rounded-full opacity-80 ${colorClassByName[element.color]}`,
       style: { height: size, left: snapNodeValue(element.x), top: snapNodeValue(element.y), width: size }
     });
@@ -23194,7 +23319,7 @@ var squareElementType = {
 };
 
 // packages/react/src/elementTypes/TextFileElement.tsx
-var import_react7 = __toESM(require_react(), 1);
+var import_react8 = __toESM(require_react(), 1);
 
 // packages/react/src/codeColorizer.ts
 var CODE_COLORS = {
@@ -23518,7 +23643,7 @@ function getTextFileLineRangeInContent(startLine, endLine = startLine, contentHe
 }
 
 // packages/react/src/elementTypes/TextFileElement.tsx
-var jsx_runtime16 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime17 = __toESM(require_jsx_runtime(), 1);
 var textFileElementType = {
   kind: "text-file",
   label: "Text file",
@@ -23547,20 +23672,20 @@ var textFileElementType = {
     return element.width;
   },
   render(props) {
-    return /* @__PURE__ */ jsx_runtime16.jsx(TextFileNode, {
+    return /* @__PURE__ */ jsx_runtime17.jsx(TextFileNode, {
       ...props
     });
   },
   renderPlaceholder(element, { lodPreviewImage, viewportZoom }) {
     const scale = element.benchTransform?.scale ?? 1;
-    return /* @__PURE__ */ jsx_runtime16.jsxs(jsx_runtime16.Fragment, {
+    return /* @__PURE__ */ jsx_runtime17.jsxs(jsx_runtime17.Fragment, {
       children: [
-        /* @__PURE__ */ jsx_runtime16.jsx(NodePlaceholder, {
+        /* @__PURE__ */ jsx_runtime17.jsx(NodePlaceholder, {
           className: "bg-cyan-200/80",
           element,
           viewportZoom
         }),
-        /* @__PURE__ */ jsx_runtime16.jsx("div", {
+        /* @__PURE__ */ jsx_runtime17.jsx("div", {
           className: "pointer-events-none absolute overflow-hidden bg-cover bg-center",
           style: {
             ...lodPreviewImage ? { backgroundImage: `url("${lodPreviewImage}")` } : {},
@@ -23569,7 +23694,7 @@ var textFileElementType = {
             top: element.y + TEXT_FILE_HEADER_HEIGHT * scale,
             width: element.width * scale
           },
-          children: /* @__PURE__ */ jsx_runtime16.jsx(ActivityLineHighlights, {
+          children: /* @__PURE__ */ jsx_runtime17.jsx(ActivityLineHighlights, {
             activityHighlights: element.activityHighlights,
             scale
           })
@@ -23614,13 +23739,13 @@ function shouldRenderLowResolutionTextProjection(element, hasLoadedContent, view
   return element.readOnly === true && typeof element.loadContent === "function" && (!hasLoadedContent || getTextContentRenderedScale(viewportZoom, element.benchTransform?.scale) < TEXT_CONTENT_INTERACTION_ZOOM);
 }
 function ColorizedCodeText({ document: providedDocument, path, value }) {
-  const document2 = import_react7.useMemo(() => providedDocument ?? colorizeCodeDocument(path, value), [path, providedDocument, value]);
-  return /* @__PURE__ */ jsx_runtime16.jsxs("span", {
+  const document2 = import_react8.useMemo(() => providedDocument ?? colorizeCodeDocument(path, value), [path, providedDocument, value]);
+  return /* @__PURE__ */ jsx_runtime17.jsxs("span", {
     "data-code-colorized": "true",
     children: [
-      document2.lines.map((line, lineIndex) => /* @__PURE__ */ jsx_runtime16.jsxs(import_react7.Fragment, {
+      document2.lines.map((line, lineIndex) => /* @__PURE__ */ jsx_runtime17.jsxs(import_react8.Fragment, {
         children: [
-          line.tokens.map((token, tokenIndex) => /* @__PURE__ */ jsx_runtime16.jsx("span", {
+          line.tokens.map((token, tokenIndex) => /* @__PURE__ */ jsx_runtime17.jsx("span", {
             style: { color: token.color },
             children: token.value
           }, tokenIndex)),
@@ -23633,13 +23758,13 @@ function ColorizedCodeText({ document: providedDocument, path, value }) {
   });
 }
 function ActivityLineHighlights({ activityHighlights, scale = 1 }) {
-  return /* @__PURE__ */ jsx_runtime16.jsx(jsx_runtime16.Fragment, {
+  return /* @__PURE__ */ jsx_runtime17.jsx(jsx_runtime17.Fragment, {
     children: activityHighlights?.map((highlight) => {
       const startLine = Math.max(1, highlight.startLine);
       const endLine = Math.max(startLine, highlight.endLine ?? startLine);
       const colorClass = highlight.kind === "read" ? "bg-blue-400" : highlight.kind === "write" ? "bg-emerald-400" : "bg-red-400";
       const range = getTextFileLineRangeInContent(startLine, endLine);
-      return /* @__PURE__ */ jsx_runtime16.jsx("span", {
+      return /* @__PURE__ */ jsx_runtime17.jsx("span", {
         "aria-label": `${highlight.kind} lines ${startLine}-${endLine}`,
         className: `pointer-events-none absolute inset-x-0 ${colorClass}`,
         "data-activity-line-highlight": `${startLine}:${endLine}`,
@@ -23651,15 +23776,15 @@ function ActivityLineHighlights({ activityHighlights, scale = 1 }) {
 function LowResolutionTextProjection({ activityHighlights, lineCount, path }) {
   const seed = [...path].reduce((value, character) => Math.imul(value ^ character.charCodeAt(0), 16777619), 2166136261) >>> 0;
   const widths = [42 + seed % 43, 35 + (seed >>> 8) % 52, 48 + (seed >>> 16) % 38];
-  return /* @__PURE__ */ jsx_runtime16.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime17.jsxs("div", {
     "aria-hidden": "true",
     className: "relative min-h-0 flex-1 overflow-hidden bg-slate-950 px-1 py-0.5",
     "data-line-count": lineCount,
     children: [
-      /* @__PURE__ */ jsx_runtime16.jsx(ActivityLineHighlights, {
+      /* @__PURE__ */ jsx_runtime17.jsx(ActivityLineHighlights, {
         activityHighlights
       }),
-      widths.map((width, index2) => /* @__PURE__ */ jsx_runtime16.jsx("div", {
+      widths.map((width, index2) => /* @__PURE__ */ jsx_runtime17.jsx("div", {
         className: "absolute left-1 top-0 bottom-0 opacity-55",
         style: {
           backgroundImage: "repeating-linear-gradient(to bottom, rgb(34 211 238 / 0.48) 0 7px, transparent 7px 60px)",
@@ -23671,19 +23796,19 @@ function LowResolutionTextProjection({ activityHighlights, lineCount, path }) {
   });
 }
 function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, lodPreviewImage, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementRuntimePreview, onElementSelect, onTextFileList, onTextFilePathChange, selectedCount, viewportZoom }) {
-  const inputRef = import_react7.useRef(null);
-  const commitInFlightRef = import_react7.useRef(false);
-  const [pathInput, setPathInput] = import_react7.useState(element.path);
-  const [pathError, setPathError] = import_react7.useState(null);
-  const [isRenaming, setIsRenaming] = import_react7.useState(false);
-  const [resourceContent, setResourceContent] = import_react7.useState(null);
-  const [resourceError, setResourceError] = import_react7.useState(null);
+  const inputRef = import_react8.useRef(null);
+  const commitInFlightRef = import_react8.useRef(false);
+  const [pathInput, setPathInput] = import_react8.useState(element.path);
+  const [pathError, setPathError] = import_react8.useState(null);
+  const [isRenaming, setIsRenaming] = import_react8.useState(false);
+  const [resourceContent, setResourceContent] = import_react8.useState(null);
+  const [resourceError, setResourceError] = import_react8.useState(null);
   const resourceKey = `${element.id}\x1F${element.rootId ?? ""}\x1F${element.vaultId ?? ""}\x1F${element.path}\x1F${element.resourceRevision ?? ""}`;
   const hasLoadedResourceContent = resourceContent?.key === resourceKey && resourceContent.loadContent === element.loadContent;
-  import_react7.useEffect(() => {
+  import_react8.useEffect(() => {
     setPathInput(element.path);
   }, [element.path]);
-  import_react7.useEffect(() => {
+  import_react8.useEffect(() => {
     if (!shouldLoadResourceTextFileContent(element, viewportZoom))
       return;
     if (hasLoadedResourceContent)
@@ -23711,7 +23836,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
       active = false;
     };
   }, [element, hasLoadedResourceContent, onElementRuntimePreview, resourceKey, viewportZoom]);
-  import_react7.useEffect(() => {
+  import_react8.useEffect(() => {
     if (!element.isNew)
       return;
     const input = inputRef.current;
@@ -23758,7 +23883,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
     }
     setPathInput(result.path);
   }
-  return /* @__PURE__ */ jsx_runtime16.jsxs(NodeWrapper, {
+  return /* @__PURE__ */ jsx_runtime17.jsxs(NodeWrapper, {
     activeEdgeHandleSide,
     bodyClassName: "flex flex-col",
     edgeHandles,
@@ -23775,17 +23900,17 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
     viewportZoom,
     wrapperClassName: "border-cyan-700/70 bg-slate-950/95 text-slate-300",
     children: [
-      /* @__PURE__ */ jsx_runtime16.jsx("div", {
+      /* @__PURE__ */ jsx_runtime17.jsx("div", {
         className: "flex shrink-0 flex-col gap-1 border-b border-cyan-900/60 bg-slate-900/70 px-1 py-1",
-        children: element.readOnly ? /* @__PURE__ */ jsx_runtime16.jsxs("div", {
+        children: element.readOnly ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
           className: "flex min-w-0 items-center gap-1 font-mono text-xs text-cyan-100",
           children: [
-            /* @__PURE__ */ jsx_runtime16.jsx("span", {
+            /* @__PURE__ */ jsx_runtime17.jsx("span", {
               className: "min-w-0 flex-1 truncate",
               title: element.path,
               children: element.path
             }),
-            newestLineHighlight ? /* @__PURE__ */ jsx_runtime16.jsxs("span", {
+            newestLineHighlight ? /* @__PURE__ */ jsx_runtime17.jsxs("span", {
               className: "shrink-0 rounded bg-slate-950/80 px-1 text-[10px] text-cyan-200",
               "data-activity-line-range": `${newestLineHighlight.startLine}:${newestLineHighlight.endLine ?? newestLineHighlight.startLine}`,
               children: [
@@ -23795,7 +23920,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
               ]
             }) : null
           ]
-        }) : /* @__PURE__ */ jsx_runtime16.jsx(VaultFilePathInput, {
+        }) : /* @__PURE__ */ jsx_runtime17.jsx(VaultFilePathInput, {
           extensions: [".md", ".txt"],
           inputRef,
           label: "Text file path",
@@ -23829,44 +23954,44 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
           }
         })
       }),
-      element.readOnly ? shouldRenderLowResolutionTextProjection(element, hasLoadedResourceContent, viewportZoom) ? lodPreviewImage ? /* @__PURE__ */ jsx_runtime16.jsxs("div", {
+      element.readOnly ? shouldRenderLowResolutionTextProjection(element, hasLoadedResourceContent, viewportZoom) ? lodPreviewImage ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
         className: "relative min-h-0 flex-1 overflow-hidden",
         children: [
-          /* @__PURE__ */ jsx_runtime16.jsx("img", {
+          /* @__PURE__ */ jsx_runtime17.jsx("img", {
             alt: "",
             "aria-hidden": "true",
             className: "h-full w-full object-fill [image-rendering:pixelated]",
             "data-text-file-lod-raster": "true",
             src: lodPreviewImage
           }),
-          /* @__PURE__ */ jsx_runtime16.jsx(ActivityLineHighlights, {
+          /* @__PURE__ */ jsx_runtime17.jsx(ActivityLineHighlights, {
             activityHighlights: element.activityHighlights
           })
         ]
-      }) : /* @__PURE__ */ jsx_runtime16.jsx(LowResolutionTextProjection, {
+      }) : /* @__PURE__ */ jsx_runtime17.jsx(LowResolutionTextProjection, {
         activityHighlights: element.activityHighlights,
         lineCount: element.lineCount,
         path: element.path
-      }) : /* @__PURE__ */ jsx_runtime16.jsxs("pre", {
+      }) : /* @__PURE__ */ jsx_runtime17.jsxs("pre", {
         className: "relative min-h-0 flex-1 overflow-hidden whitespace-pre p-1 font-mono text-xs font-normal leading-tight text-slate-100 outline-none select-text focus:ring-1 focus:ring-cyan-300/70",
         onPointerDown: (event) => event.stopPropagation(),
         onPointerMove: (event) => event.stopPropagation(),
         onPointerUp: (event) => event.stopPropagation(),
         tabIndex: 0,
         children: [
-          /* @__PURE__ */ jsx_runtime16.jsx(ActivityLineHighlights, {
+          /* @__PURE__ */ jsx_runtime17.jsx(ActivityLineHighlights, {
             activityHighlights: element.activityHighlights
           }),
-          /* @__PURE__ */ jsx_runtime16.jsx("span", {
+          /* @__PURE__ */ jsx_runtime17.jsx("span", {
             className: "relative",
-            children: /* @__PURE__ */ jsx_runtime16.jsx(ColorizedCodeText, {
+            children: /* @__PURE__ */ jsx_runtime17.jsx(ColorizedCodeText, {
               document: hasLoadedResourceContent ? resourceContent.document : undefined,
               path: element.path,
               value: hasLoadedResourceContent ? resourceContent.value : element.value
             })
           })
         ]
-      }) : /* @__PURE__ */ jsx_runtime16.jsx(BufferedElementTextarea, {
+      }) : /* @__PURE__ */ jsx_runtime17.jsx(BufferedElementTextarea, {
         className: "min-h-0 flex-1 resize-none border-0 bg-slate-950 px-1 py-0.5 font-mono text-sm font-normal leading-tight text-slate-100 outline-none select-text focus:bg-slate-950 focus:ring-1 focus:ring-cyan-300/70",
         value: element.value,
         onCommit: (value) => {
@@ -23882,7 +24007,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
 }
 
 // packages/react/src/elementTypes/TextareaElement.tsx
-var jsx_runtime17 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime18 = __toESM(require_jsx_runtime(), 1);
 var textareaElementType = {
   kind: "textarea",
   label: "Text",
@@ -23907,7 +24032,7 @@ var textareaElementType = {
     return element.width;
   },
   render({ activeEdgeHandleSide, edgeHandles, editorAutoFocus, element, isSelected, onEditorAutoFocusApplied, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementSelect, selectedCount, viewportZoom }) {
-    return /* @__PURE__ */ jsx_runtime17.jsx(NodeWrapper, {
+    return /* @__PURE__ */ jsx_runtime18.jsx(NodeWrapper, {
       activeEdgeHandleSide,
       edgeHandles,
       element,
@@ -23921,7 +24046,7 @@ var textareaElementType = {
       onElementSelect,
       selectedCount,
       viewportZoom,
-      children: /* @__PURE__ */ jsx_runtime17.jsx(BufferedElementTextarea, {
+      children: /* @__PURE__ */ jsx_runtime18.jsx(BufferedElementTextarea, {
         autoFocus: editorAutoFocus,
         className: "h-full w-full resize-none border-0 bg-slate-950 px-1 py-0.5 font-mono text-sm font-normal leading-tight text-slate-100 outline-none select-text focus:bg-slate-950 focus:ring-1 focus:ring-cyan-300/70",
         value: element.value,
@@ -23938,7 +24063,7 @@ var textareaElementType = {
     });
   },
   renderPlaceholder(element, { viewportZoom }) {
-    return /* @__PURE__ */ jsx_runtime17.jsx(NodePlaceholder, {
+    return /* @__PURE__ */ jsx_runtime18.jsx(NodePlaceholder, {
       element,
       viewportZoom
     });
@@ -23948,6 +24073,7 @@ var textareaElementType = {
 // packages/react/src/elementTypes/index.ts
 function createDefaultElementTypeRegistry(additionalDefinitions = []) {
   const registry = new ElementTypeRegistry().register(actorElementType).register(squareElementType).register(rectElementType).register(textareaElementType).register(commentElementType).register(directoryElementType).register(textFileElementType).register(imageElementType).register(groupElementType).register(benchElementType).register(physicsLayoutElementType);
+  registry.register(liveComponentElementType);
   for (const definition of additionalDefinitions)
     registry.register(definition);
   return registry.freeze();
@@ -24798,7 +24924,7 @@ function dataUrlToBytes(value) {
 }
 
 // packages/react/src/WireframeElement.tsx
-var jsx_runtime18 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime19 = __toESM(require_jsx_runtime(), 1);
 function getWireframeSize(element) {
   if ("width" in element && "height" in element)
     return { height: element.height, width: element.width };
@@ -24843,13 +24969,13 @@ function WireframeElement({ element, label = getWireframeAssetLabel(element), vi
     transformOrigin: "left top",
     width
   };
-  return /* @__PURE__ */ jsx_runtime18.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
     "aria-label": `Wireframe ${label}`,
     className: "pointer-events-none absolute z-30 overflow-visible border border-cyan-300 bg-transparent text-cyan-100",
     "data-workbench-wireframe-id": element.id,
     "data-workbench-wireframe-kind": element.kind ?? "square",
     style: style2,
-    children: /* @__PURE__ */ jsx_runtime18.jsx("span", {
+    children: /* @__PURE__ */ jsx_runtime19.jsx("span", {
       className: "absolute left-0 top-0 max-w-[32rem] whitespace-nowrap bg-slate-950/90 px-1 py-0.5 font-mono text-[10px] leading-none",
       style: { transform: `scale(${labelScale})`, transformOrigin: "left top" },
       children: label
@@ -24944,7 +25070,7 @@ function isWorkbenchNoWheelTarget(target) {
 }
 
 // packages/react/src/BenchViewport.tsx
-var jsx_runtime19 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
 var defaultElementTypeRegistry = createDefaultElementTypeRegistry();
 function resolveActorQuickAccessId(actors, lastActorId, knownLastActor) {
   if (lastActorId && (actors.some((actor) => actor.id === lastActorId) || knownLastActor?.id === lastActorId))
@@ -25740,87 +25866,87 @@ function BenchViewport({
   worldOverlaySvgOpacity = 0.7
 }) {
   const assetTransport = useWorkbenchAssetTransport();
-  const persistentLodRasterCache = import_react8.useMemo(() => {
+  const persistentLodRasterCache = import_react9.useMemo(() => {
     if (typeof window === "undefined" || !assetTransport)
       return;
     return createBrowserPersistentLodRasterCache(createWorkbenchAssetFetcher(assetTransport));
   }, [assetTransport]);
-  const [viewport, setViewportState] = import_react8.useState({ x: 0, y: 0, zoom: 1 });
-  const [elements, setElements] = import_react8.useState(scene.elements);
-  const [edges, setEdges] = import_react8.useState(scene.edges ?? []);
-  const edgeLayouts = import_react8.useMemo(() => edges.map((edge) => resolveEdgeLayout(elements, edge)), [edges, elements]);
-  const [motionMode, setMotionMode] = import_react8.useState("off");
-  const [renderPlan, setRenderPlan] = import_react8.useState([]);
-  const [rasterRevision, setRasterRevision] = import_react8.useState(0);
-  const [stressStats, setStressStats] = import_react8.useState({
+  const [viewport, setViewportState] = import_react9.useState({ x: 0, y: 0, zoom: 1 });
+  const [elements, setElements] = import_react9.useState(scene.elements);
+  const [edges, setEdges] = import_react9.useState(scene.edges ?? []);
+  const edgeLayouts = import_react9.useMemo(() => edges.map((edge) => resolveEdgeLayout(elements, edge)), [edges, elements]);
+  const [motionMode, setMotionMode] = import_react9.useState("off");
+  const [renderPlan, setRenderPlan] = import_react9.useState([]);
+  const [rasterRevision, setRasterRevision] = import_react9.useState(0);
+  const [stressStats, setStressStats] = import_react9.useState({
     running: false,
     fps: 0,
     longestFrameDelay: 0
   });
-  const [debugMenuRequested, setDebugMenuRequested] = import_react8.useState(false);
-  const [debugPanelRequested, setDebugPanelRequested] = import_react8.useState(false);
-  const [viewportSize, setViewportSize] = import_react8.useState({ width: 0, height: 0 });
-  const [addNodeMenu, setAddNodeMenu] = import_react8.useState(null);
-  const [pendingBenchAdd, setPendingBenchAdd] = import_react8.useState(null);
-  const [edgeDrag, setEdgeDrag] = import_react8.useState(null);
-  const [selectedEdgeId, setSelectedEdgeId] = import_react8.useState(null);
-  const [selectedIds, setSelectedIds] = import_react8.useState(() => new Set);
-  const [editorAutoFocusId, setEditorAutoFocusId] = import_react8.useState(null);
-  const [openActorId, setOpenActorId] = import_react8.useState(null);
-  const [openApplicationPanelId, setOpenApplicationPanelId] = import_react8.useState(null);
-  const [lastActorId, setLastActorId] = import_react8.useState(null);
-  const knownActorsByIdRef = import_react8.useRef(new Map);
-  const knownActorsSceneKeyRef = import_react8.useRef(null);
-  const [focusedActorActivityKey, setFocusedActorActivityKey] = import_react8.useState(null);
-  const [selectionDrag, setSelectionDrag] = import_react8.useState(null);
-  const [highlightedGroupId, setHighlightedGroupId] = import_react8.useState(null);
-  const [pendingDeleteIds, setPendingDeleteIds] = import_react8.useState(null);
-  const pendingImagePasteSequenceRef = import_react8.useRef(0);
-  const pendingImagePasteIdsRef = import_react8.useRef(new Set);
-  const pendingImagePasteAbortControllersRef = import_react8.useRef(new Map);
-  const pendingImagePasteScopeKeyRef = import_react8.useRef(viewportResetKey ?? scene.id);
-  const [runtimeCodePreviews, setRuntimeCodePreviews] = import_react8.useState(() => new Map);
-  const dragRef = import_react8.useRef(null);
-  const viewportRef = import_react8.useRef(null);
-  const pointersRef = import_react8.useRef(new Map);
-  const pinchRef = import_react8.useRef(null);
-  const motionNeutralRef = import_react8.useRef(null);
-  const motionBaseViewportRef = import_react8.useRef(null);
-  const motionPausedByTouchRef = import_react8.useRef(false);
-  const viewportLatestRef = import_react8.useRef(viewport);
-  const edgesLatestRef = import_react8.useRef(edges);
-  const elementsLatestRef = import_react8.useRef(elements);
-  const navigableElementsLatestRef = import_react8.useRef(resolveElementWorldPositions(elements));
-  const renderPlanLatestRef = import_react8.useRef([]);
-  const selectedEdgeIdLatestRef = import_react8.useRef(selectedEdgeId);
-  const selectedIdsLatestRef = import_react8.useRef(selectedIds);
-  const recentlyClearedSelectedIdsRef = import_react8.useRef(null);
-  const highlightedGroupIdRef = import_react8.useRef(null);
-  const selectionDragRef = import_react8.useRef(null);
-  const motionVelocityRef = import_react8.useRef({ x: 0, y: 0 });
-  const renderTimerRef = import_react8.useRef(null);
-  const uiFrameRef = import_react8.useRef(null);
-  const viewportUiCommitTimerRef = import_react8.useRef(null);
-  const lastRenderViewportRef = import_react8.useRef(null);
-  const transformLayerRef = import_react8.useRef(null);
-  const stressAnimationRef = import_react8.useRef(null);
-  const benchNavigationZoomBaselineRef = import_react8.useRef(1);
-  const benchNavigationWheelLatchRef = import_react8.useRef(null);
-  const longPressTimerRef = import_react8.useRef(null);
-  const lastPastePointRef = import_react8.useRef(null);
-  const longPressStartRef = import_react8.useRef(null);
-  const lastActiveElementSizesRef = import_react8.useRef({});
-  const stressStatsRef = import_react8.useRef({
+  const [debugMenuRequested, setDebugMenuRequested] = import_react9.useState(false);
+  const [debugPanelRequested, setDebugPanelRequested] = import_react9.useState(false);
+  const [viewportSize, setViewportSize] = import_react9.useState({ width: 0, height: 0 });
+  const [addNodeMenu, setAddNodeMenu] = import_react9.useState(null);
+  const [pendingBenchAdd, setPendingBenchAdd] = import_react9.useState(null);
+  const [edgeDrag, setEdgeDrag] = import_react9.useState(null);
+  const [selectedEdgeId, setSelectedEdgeId] = import_react9.useState(null);
+  const [selectedIds, setSelectedIds] = import_react9.useState(() => new Set);
+  const [editorAutoFocusId, setEditorAutoFocusId] = import_react9.useState(null);
+  const [openActorId, setOpenActorId] = import_react9.useState(null);
+  const [openApplicationPanelId, setOpenApplicationPanelId] = import_react9.useState(null);
+  const [lastActorId, setLastActorId] = import_react9.useState(null);
+  const knownActorsByIdRef = import_react9.useRef(new Map);
+  const knownActorsSceneKeyRef = import_react9.useRef(null);
+  const [focusedActorActivityKey, setFocusedActorActivityKey] = import_react9.useState(null);
+  const [selectionDrag, setSelectionDrag] = import_react9.useState(null);
+  const [highlightedGroupId, setHighlightedGroupId] = import_react9.useState(null);
+  const [pendingDeleteIds, setPendingDeleteIds] = import_react9.useState(null);
+  const pendingImagePasteSequenceRef = import_react9.useRef(0);
+  const pendingImagePasteIdsRef = import_react9.useRef(new Set);
+  const pendingImagePasteAbortControllersRef = import_react9.useRef(new Map);
+  const pendingImagePasteScopeKeyRef = import_react9.useRef(viewportResetKey ?? scene.id);
+  const [runtimeCodePreviews, setRuntimeCodePreviews] = import_react9.useState(() => new Map);
+  const dragRef = import_react9.useRef(null);
+  const viewportRef = import_react9.useRef(null);
+  const pointersRef = import_react9.useRef(new Map);
+  const pinchRef = import_react9.useRef(null);
+  const motionNeutralRef = import_react9.useRef(null);
+  const motionBaseViewportRef = import_react9.useRef(null);
+  const motionPausedByTouchRef = import_react9.useRef(false);
+  const viewportLatestRef = import_react9.useRef(viewport);
+  const edgesLatestRef = import_react9.useRef(edges);
+  const elementsLatestRef = import_react9.useRef(elements);
+  const navigableElementsLatestRef = import_react9.useRef(resolveElementWorldPositions(elements));
+  const renderPlanLatestRef = import_react9.useRef([]);
+  const selectedEdgeIdLatestRef = import_react9.useRef(selectedEdgeId);
+  const selectedIdsLatestRef = import_react9.useRef(selectedIds);
+  const recentlyClearedSelectedIdsRef = import_react9.useRef(null);
+  const highlightedGroupIdRef = import_react9.useRef(null);
+  const selectionDragRef = import_react9.useRef(null);
+  const motionVelocityRef = import_react9.useRef({ x: 0, y: 0 });
+  const renderTimerRef = import_react9.useRef(null);
+  const uiFrameRef = import_react9.useRef(null);
+  const viewportUiCommitTimerRef = import_react9.useRef(null);
+  const lastRenderViewportRef = import_react9.useRef(null);
+  const transformLayerRef = import_react9.useRef(null);
+  const stressAnimationRef = import_react9.useRef(null);
+  const benchNavigationZoomBaselineRef = import_react9.useRef(1);
+  const benchNavigationWheelLatchRef = import_react9.useRef(null);
+  const longPressTimerRef = import_react9.useRef(null);
+  const lastPastePointRef = import_react9.useRef(null);
+  const longPressStartRef = import_react9.useRef(null);
+  const lastActiveElementSizesRef = import_react9.useRef({});
+  const stressStatsRef = import_react9.useRef({
     frames: 0,
     longestFrameDelay: 0,
     lastFrameTime: 0,
     lastReportAt: 0,
     startedAt: 0
   });
-  const lastViewportInitSceneIdRef = import_react8.useRef(null);
-  const viewportPersistenceStorageRef = import_react8.useRef(null);
-  const viewportPersistenceControllerRef = import_react8.useRef(null);
-  const updateRuntimeCodePreview = import_react8.useCallback((elementId, codePreview, resource) => {
+  const lastViewportInitSceneIdRef = import_react9.useRef(null);
+  const viewportPersistenceStorageRef = import_react9.useRef(null);
+  const viewportPersistenceControllerRef = import_react9.useRef(null);
+  const updateRuntimeCodePreview = import_react9.useCallback((elementId, codePreview, resource) => {
     setRuntimeCodePreviews((current) => {
       const existing = current.get(elementId);
       if (existing?.codePreview === codePreview && existing.resource === resource)
@@ -25830,12 +25956,12 @@ function BenchViewport({
       return next;
     });
   }, []);
-  const baseRenderedElements = import_react8.useMemo(() => applyRuntimeCodePreviews(elements, runtimeCodePreviews), [elements, runtimeCodePreviews]);
-  const baseWorldElements = import_react8.useMemo(() => resolveElementWorldPositions(baseRenderedElements), [baseRenderedElements]);
-  const actorOptions = import_react8.useMemo(() => elements.filter((element) => element.kind === "actor" && Boolean(element.details)), [elements]);
-  const actorActivityTargetIndex = import_react8.useMemo(() => createActorActivityTargetIndex(baseWorldElements), [baseWorldElements]);
+  const baseRenderedElements = import_react9.useMemo(() => applyRuntimeCodePreviews(elements, runtimeCodePreviews), [elements, runtimeCodePreviews]);
+  const baseWorldElements = import_react9.useMemo(() => resolveElementWorldPositions(baseRenderedElements), [baseRenderedElements]);
+  const actorOptions = import_react9.useMemo(() => elements.filter((element) => element.kind === "actor" && Boolean(element.details)), [elements]);
+  const actorActivityTargetIndex = import_react9.useMemo(() => createActorActivityTargetIndex(baseWorldElements), [baseWorldElements]);
   const actorsSceneKey = viewportResetKey ?? scene.id;
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     if (pendingImagePasteScopeKeyRef.current === actorsSceneKey)
       return;
     pendingImagePasteScopeKeyRef.current = actorsSceneKey;
@@ -25851,36 +25977,36 @@ function BenchViewport({
   for (const actor of actorOptions)
     knownActorsByIdRef.current.set(actor.id, actor);
   const knownLastActor = lastActorId ? knownActorsByIdRef.current.get(lastActorId) : undefined;
-  const quickAccessActorId = import_react8.useMemo(() => resolveActorQuickAccessId(actorOptions, lastActorId, knownLastActor), [actorOptions, knownLastActor, lastActorId]);
+  const quickAccessActorId = import_react9.useMemo(() => resolveActorQuickAccessId(actorOptions, lastActorId, knownLastActor), [actorOptions, knownLastActor, lastActorId]);
   const knownOpenActor = openActorId ? knownActorsByIdRef.current.get(openActorId) : undefined;
-  const openActor = import_react8.useMemo(() => resolveActorPopupActor(actorOptions, knownOpenActor, openActorId), [actorOptions, knownOpenActor, openActorId]);
+  const openActor = import_react9.useMemo(() => resolveActorPopupActor(actorOptions, knownOpenActor, openActorId), [actorOptions, knownOpenActor, openActorId]);
   const openApplicationPanel = applicationPanels.find((panel) => panel.id === openApplicationPanelId) ?? null;
-  const actorActivityTargetsByActor = import_react8.useMemo(() => new Map(actorOptions.map((actor) => [
+  const actorActivityTargetsByActor = import_react9.useMemo(() => new Map(actorOptions.map((actor) => [
     actor.id,
     resolveActorActivityTargets(actor.details?.actions ?? [], baseWorldElements, viewport, { cursorAt: actorActivityFadeReferenceAt, fadeSeconds: actorActivityFadeSeconds }, actorActivityTargetIndex)
   ])), [actorActivityFadeReferenceAt, actorActivityFadeSeconds, actorActivityTargetIndex, actorOptions, baseWorldElements, viewport]);
   const actorActivityTargets = openActor ? actorActivityTargetsByActor.get(openActor.id) ?? [] : [];
-  const allActorActivityTargets = import_react8.useMemo(() => [...actorActivityTargetsByActor.values()].flat(), [actorActivityTargetsByActor]);
+  const allActorActivityTargets = import_react9.useMemo(() => [...actorActivityTargetsByActor.values()].flat(), [actorActivityTargetsByActor]);
   const worldElements = baseWorldElements;
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     navigableElementsLatestRef.current = worldElements;
     if (openActor)
       scheduleRenderPlanUpdate({ force: true });
   }, [openActor, worldElements]);
-  const textContentLodZoomThresholds = import_react8.useMemo(() => getTextContentLodZoomThresholds(worldElements), [worldElements]);
-  const lodRasterPyramid = import_react8.useMemo(() => new LazyLodRasterPyramid({
+  const textContentLodZoomThresholds = import_react9.useMemo(() => getTextContentLodZoomThresholds(worldElements), [worldElements]);
+  const lodRasterPyramid = import_react9.useMemo(() => new LazyLodRasterPyramid({
     onTileChange: () => setRasterRevision((current) => current + 1),
     persistentCache: persistentLodRasterCache,
     rasterize: assetTransport ? (plan, signal) => createBrowserRasterTile(plan, undefined, createWorkbenchRasterImageLoader(assetTransport), signal) : undefined
   }), [assetTransport, persistentLodRasterCache, scene.id]);
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     lodRasterPyramid.updateScene(worldElements, scene.previewGroups ?? []);
   }, [lodRasterPyramid, scene.previewGroups, worldElements]);
-  const spatialIndex = import_react8.useMemo(() => buildSpatialIndex(worldElements, spatialCellSize), [worldElements]);
-  const sceneForBounds = import_react8.useMemo(() => ({ ...scene, elements: worldElements }), [worldElements, scene]);
-  const sceneBounds = import_react8.useMemo(() => getSceneBounds(sceneForBounds, elementTypeRegistry), [elementTypeRegistry, sceneForBounds]);
-  const minimapPreview = import_react8.useMemo(() => createMinimapPreview(worldElements, sceneBounds, elementTypeRegistry), [elementTypeRegistry, worldElements, sceneBounds]);
-  import_react8.useEffect(() => {
+  const spatialIndex = import_react9.useMemo(() => buildSpatialIndex(worldElements, spatialCellSize), [worldElements]);
+  const sceneForBounds = import_react9.useMemo(() => ({ ...scene, elements: worldElements }), [worldElements, scene]);
+  const sceneBounds = import_react9.useMemo(() => getSceneBounds(sceneForBounds, elementTypeRegistry), [elementTypeRegistry, sceneForBounds]);
+  const minimapPreview = import_react9.useMemo(() => createMinimapPreview(worldElements, sceneBounds, elementTypeRegistry), [elementTypeRegistry, worldElements, sceneBounds]);
+  import_react9.useEffect(() => {
     if (!debugApiRef)
       return;
     debugApiRef.current = {
@@ -25915,7 +26041,7 @@ function BenchViewport({
         debugApiRef.current = null;
     };
   }, [debugApiRef, sceneBounds, setViewport, viewportSize.height, viewportSize.width]);
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     if (!voiceCommentControllerRef)
       return;
     voiceCommentControllerRef.current = {
@@ -25990,7 +26116,7 @@ function BenchViewport({
       });
     }
   }
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     setElements(scene.elements);
     setRuntimeCodePreviews((current) => {
       const textFiles = new Map(scene.elements.flatMap((element) => element.kind === "text-file" ? [[element.id, element]] : []));
@@ -26056,7 +26182,7 @@ function BenchViewport({
       lastRenderViewportRef.current = null;
     }
   }, [elementTypeRegistry, focusElementId, focusViewportSource, onFocusElementApplied, openViewportSource, scene.edges, scene.id, scene.elements, scene.previewGroups, viewportPersistenceKey, viewportResetKey]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     const flushViewport = () => viewportPersistenceControllerRef.current?.flush();
     window.addEventListener("pagehide", flushViewport);
     return () => {
@@ -26064,37 +26190,37 @@ function BenchViewport({
       viewportPersistenceControllerRef.current?.dispose();
     };
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     lodRasterPyramid.resume();
     return () => lodRasterPyramid.dispose();
   }, [lodRasterPyramid]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     if (rasterRevision > 0)
       scheduleRenderPlanUpdate({ force: true });
   }, [rasterRevision]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     return () => {
       if (benchNavigationWheelLatchRef.current !== null)
         window.clearTimeout(benchNavigationWheelLatchRef.current);
     };
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     edgesLatestRef.current = edges;
   }, [edges]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     elementsLatestRef.current = elements;
     navigableElementsLatestRef.current = worldElements;
   }, [elements, worldElements]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     selectedEdgeIdLatestRef.current = selectedEdgeId;
   }, [selectedEdgeId]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     selectedIdsLatestRef.current = selectedIds;
   }, [selectedIds]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     highlightedGroupIdRef.current = highlightedGroupId;
   }, [highlightedGroupId]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     const viewportMeta = document.querySelector('meta[name="viewport"]');
     const previousContent = viewportMeta?.content;
     const lockedViewportContent = "width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover";
@@ -26151,7 +26277,7 @@ function BenchViewport({
         viewportMeta.content = previousContent;
     };
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     const node = viewportRef.current;
     if (!node)
       return;
@@ -26164,7 +26290,7 @@ function BenchViewport({
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     function handleDocumentPointerDown(event) {
       if (!shouldClearViewportSelectionForEvent(event))
         return;
@@ -26179,7 +26305,7 @@ function BenchViewport({
       document.removeEventListener("pointerdown", handleDocumentPointerDown, true);
     };
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     scheduleRenderPlanUpdate({ force: renderPlan.length === 0 });
     return () => {
       if (renderTimerRef.current !== null)
@@ -26194,10 +26320,10 @@ function BenchViewport({
       }
     };
   }, [spatialIndex, elements]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     scheduleRenderPlanUpdate({ force: shouldUpdateRenderPlan(viewport, lastRenderViewportRef.current) });
   }, [viewport]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     return () => {
       clearLongPressTimer();
       if (stressAnimationRef.current)
@@ -26208,7 +26334,7 @@ function BenchViewport({
       pendingImagePasteIdsRef.current.clear();
     };
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     function handleKeyDown(event) {
       if (event.key !== "Delete")
         return;
@@ -26230,7 +26356,7 @@ function BenchViewport({
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     async function handlePaste(event) {
       const activeElement2 = document.activeElement;
       if (activeElement2 && isEditableElement(activeElement2))
@@ -26290,7 +26416,7 @@ function BenchViewport({
     window.addEventListener("paste", handlePaste);
     return () => window.removeEventListener("paste", handlePaste);
   }, [onImagePaste]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     if (motionMode === "off")
       return;
     let frame = 0;
@@ -26886,17 +27012,17 @@ function BenchViewport({
       return;
     setViewport(getViewportForActorActivityTarget(target, rect));
   }
-  return /* @__PURE__ */ jsx_runtime19.jsxs("main", {
+  return /* @__PURE__ */ jsx_runtime20.jsxs("main", {
     className: "flex h-screen flex-col bg-slate-950 text-slate-100",
     children: [
-      showScenarioHeader ? /* @__PURE__ */ jsx_runtime19.jsxs("header", {
+      showScenarioHeader ? /* @__PURE__ */ jsx_runtime20.jsxs("header", {
         className: "flex h-16 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-2 sm:gap-3 sm:px-4",
         "data-bench-viewport-scenario-header": "true",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             className: "min-w-0 flex-1",
             children: [
-              backHref ? /* @__PURE__ */ jsx_runtime19.jsxs("a", {
+              backHref ? /* @__PURE__ */ jsx_runtime20.jsxs("a", {
                 className: "block truncate text-xs text-cyan-300 hover:text-cyan-200 sm:text-sm",
                 href: backHref,
                 onClick: onBackNavigate ? (event) => {
@@ -26908,23 +27034,23 @@ function BenchViewport({
                   backLabel ?? "Scenarios"
                 ]
               }) : null,
-              /* @__PURE__ */ jsx_runtime19.jsx("h1", {
+              /* @__PURE__ */ jsx_runtime20.jsx("h1", {
                 className: "mt-1 truncate text-base font-bold sm:text-xl",
                 children: scene.name
               }),
-              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime19.jsx("nav", {
+              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
                 "aria-label": "Bench path",
                 className: "mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-slate-400 sm:text-xs",
-                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime19.jsxs(import_react8.Fragment, {
+                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
                   children: [
-                    index2 > 0 ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
                       className: "text-slate-600",
                       children: "/"
                     }) : null,
-                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
                       className: "truncate text-slate-300",
                       children: item.label
-                    }) : /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
                       className: "truncate text-cyan-300 hover:text-cyan-200",
                       onClick: item.onClick,
                       type: "button",
@@ -26935,13 +27061,13 @@ function BenchViewport({
               }) : null
             ]
           }),
-          /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             className: "flex min-w-0 shrink items-center justify-end gap-1 whitespace-nowrap text-xs text-slate-300 sm:gap-3 sm:text-sm",
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                 className: "min-w-0 truncate text-right",
                 children: [
-                  /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                     className: "sm:hidden",
                     children: [
                       "z ",
@@ -26951,21 +27077,21 @@ function BenchViewport({
                       scene.stressTest ? ` · ${stressStats.fps.toFixed(0)}fps` : ""
                     ]
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                     className: "hidden sm:inline",
                     children: [
                       "x ",
                       Math.round(viewport.x)
                     ]
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                     className: "hidden sm:inline",
                     children: [
                       " y ",
                       Math.round(viewport.y)
                     ]
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                     className: "hidden sm:inline",
                     children: [
                       " zoom ",
@@ -26973,7 +27099,7 @@ function BenchViewport({
                       "×"
                     ]
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                     className: "hidden sm:inline",
                     children: [
                       " ",
@@ -26981,9 +27107,9 @@ function BenchViewport({
                       " drawn"
                     ]
                   }),
-                  scene.stressTest ? /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+                  scene.stressTest ? /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
                     children: [
-                      /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                      /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                         className: "hidden sm:inline",
                         children: [
                           " ",
@@ -26991,7 +27117,7 @@ function BenchViewport({
                           " fps"
                         ]
                       }),
-                      /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                      /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                         className: "hidden md:inline",
                         children: [
                           " max delay ",
@@ -27003,7 +27129,7 @@ function BenchViewport({
                   }) : null
                 ]
               }),
-              /* @__PURE__ */ jsx_runtime19.jsx("button", {
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
                 "aria-label": `Motion mode: ${motionMode}`,
                 "aria-pressed": motionMode !== "off",
                 className: `flex h-8 w-8 items-center justify-center rounded-lg border text-base sm:hidden ${motionMode !== "off" ? "border-cyan-300 bg-cyan-300 text-slate-950" : "border-slate-700 hover:border-cyan-400"}`,
@@ -27016,7 +27142,7 @@ function BenchViewport({
           })
         ]
       }) : null,
-      /* @__PURE__ */ jsx_runtime19.jsxs("section", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("section", {
         ref: viewportRef,
         className: "relative flex-1 cursor-grab touch-none select-none overflow-hidden overscroll-none bg-slate-950 active:cursor-grabbing",
         onDoubleClick: (event) => {
@@ -27212,20 +27338,20 @@ function BenchViewport({
           }, { commitAfterIdle: true, deferUi: true });
         },
         children: [
-          !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime19.jsx("nav", {
+          !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
             "aria-label": "Bench path",
             className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
             "data-workbench-viewport-controls": "true",
-            children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+            children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
               children: [
-                index2 > 0 ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
                   className: "text-slate-600",
                   children: "/"
                 }) : null,
-                item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
                   className: "truncate text-slate-300",
                   children: item.label
-                }) : /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
                   className: "truncate text-cyan-300 hover:text-cyan-200",
                   onClick: item.onClick,
                   type: "button",
@@ -27234,27 +27360,27 @@ function BenchViewport({
               ]
             }, `${item.path}:${index2}`))
           }) : null,
-          /* @__PURE__ */ jsx_runtime19.jsxs(ViewportTransformLayer, {
+          /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
             layerRef: transformLayerRef,
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsx(ViewportWorldGrid, {}),
-              worldOverlayImage ? /* @__PURE__ */ jsx_runtime19.jsx(ViewportImageWorldOverlay, {
+              /* @__PURE__ */ jsx_runtime20.jsx(ViewportWorldGrid, {}),
+              worldOverlayImage ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportImageWorldOverlay, {
                 frame: worldOverlayImage.frame,
                 opacity: worldOverlayImageOpacity,
                 url: worldOverlayImage.url
               }) : null,
-              worldOverlaySvg ? /* @__PURE__ */ jsx_runtime19.jsx(ViewportSvgWorldOverlay, {
+              worldOverlaySvg ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportSvgWorldOverlay, {
                 opacity: worldOverlaySvgOpacity,
                 sceneBounds,
                 svg: worldOverlaySvg
               }) : null,
-              /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                 className: elementLayerHidden ? "pointer-events-none" : undefined,
                 "data-workbench-active-scene-elements": "true",
                 "data-workbench-element-layer-hidden": elementLayerHidden ? "true" : undefined,
                 style: { opacity: elementLayerHidden ? 0 : elementLayerOpacity },
                 children: [
-                  /* @__PURE__ */ jsx_runtime19.jsx(ViewportEdgeLayer, {
+                  /* @__PURE__ */ jsx_runtime20.jsx(ViewportEdgeLayer, {
                     edgeDrag,
                     edges: edgeLayouts,
                     onDeleteEdge: (edgeId) => updateEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId)),
@@ -27267,7 +27393,7 @@ function BenchViewport({
                     selectedEdgeId,
                     viewportZoom: viewport.zoom
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx(ViewportElementLayer, {
+                  /* @__PURE__ */ jsx_runtime20.jsx(ViewportElementLayer, {
                     edgeDrag,
                     editorAutoFocusId,
                     elementTypeRegistry,
@@ -27295,7 +27421,7 @@ function BenchViewport({
                     wireframe,
                     wireframeLabels
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx(ActorActivityHighlightLayer, {
+                  /* @__PURE__ */ jsx_runtime20.jsx(ActorActivityHighlightLayer, {
                     edges,
                     elements: worldElements,
                     focusedActionKey: focusedActorActivityKey,
@@ -27306,11 +27432,11 @@ function BenchViewport({
               })
             ]
           }),
-          viewportOverlayControls ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          viewportOverlayControls ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
             "data-workbench-viewport-controls": "true",
             children: viewportOverlayControls
           }) : null,
-          openActor ? /* @__PURE__ */ jsx_runtime19.jsx(ActorInteractionPanel, {
+          openActor ? /* @__PURE__ */ jsx_runtime20.jsx(ActorInteractionPanel, {
             actor: openActor,
             actorPanel,
             actors: actorOptions,
@@ -27330,17 +27456,17 @@ function BenchViewport({
             viewport,
             viewportRootRef: viewportRef
           }) : null,
-          scene.stressTest ? /* @__PURE__ */ jsx_runtime19.jsx(BenchViewportDebugControls, {
+          scene.stressTest ? /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportDebugControls, {
             menuOpen: debugMenuRequested,
             onMenuOpenChange: setDebugMenuRequested,
             onPanelOpenChange: setDebugPanelRequested,
             panelOpen: debugPanelRequested,
-            children: /* @__PURE__ */ jsx_runtime19.jsx(BenchViewportRunChecksPanel, {
+            children: /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportRunChecksPanel, {
               onToggleStress: toggleStressAnimation,
               stressStats
             })
           }) : null,
-          /* @__PURE__ */ jsx_runtime19.jsx(ViewportMinimap, {
+          /* @__PURE__ */ jsx_runtime20.jsx(ViewportMinimap, {
             onFitContents: fitToContents,
             previewImage: minimapPreview,
             quickAccess: [
@@ -27369,7 +27495,7 @@ function BenchViewport({
             viewport,
             viewportSize
           }),
-          openApplicationPanel ? /* @__PURE__ */ jsx_runtime19.jsxs("aside", {
+          openApplicationPanel ? /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
             "aria-label": openApplicationPanel.label,
             className: "absolute right-4 top-4 z-[90] flex max-h-[calc(100%-2rem)] w-[min(32rem,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border border-cyan-400/30 bg-slate-950/95 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur",
             "data-workbench-application-panel": openApplicationPanel.id,
@@ -27383,14 +27509,14 @@ function BenchViewport({
             onWheel: (event) => event.stopPropagation(),
             role: "dialog",
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsxs("header", {
+              /* @__PURE__ */ jsx_runtime20.jsxs("header", {
                 className: "flex items-center justify-between border-b border-slate-800 px-3 py-2",
                 children: [
-                  /* @__PURE__ */ jsx_runtime19.jsx("h2", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("h2", {
                     className: "text-sm font-bold text-slate-50",
                     children: openApplicationPanel.label
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("button", {
                     "aria-label": `Close ${openApplicationPanel.label}`,
                     className: "rounded px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white",
                     onClick: () => setOpenApplicationPanelId(null),
@@ -27399,39 +27525,39 @@ function BenchViewport({
                   })
                 ]
               }),
-              /* @__PURE__ */ jsx_runtime19.jsx("div", {
+              /* @__PURE__ */ jsx_runtime20.jsx("div", {
                 className: "min-h-0 flex-1 overflow-hidden",
                 children: openApplicationPanel.content
               })
             ]
           }) : null,
-          addNodeMenu ? /* @__PURE__ */ jsx_runtime19.jsx(ElementAddMenu, {
+          addNodeMenu ? /* @__PURE__ */ jsx_runtime20.jsx(ElementAddMenu, {
             elementTypeRegistry,
             onSelect: addNodeFromMenu,
             x: addNodeMenu.screenX,
             y: addNodeMenu.screenY
           }) : null,
-          pendingBenchAdd ? /* @__PURE__ */ jsx_runtime19.jsx(BenchAddPanel, {
+          pendingBenchAdd ? /* @__PURE__ */ jsx_runtime20.jsx(BenchAddPanel, {
             listFiles: onBenchFileList,
             state: pendingBenchAdd,
             onCancel: () => setPendingBenchAdd(null),
             onChange: setPendingBenchAdd,
             onSubmit: submitPendingBenchAdd
           }) : null,
-          selectionDrag ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          selectionDrag ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
             "aria-label": "Selection box",
             className: "pointer-events-none absolute z-20 border border-cyan-300/80 bg-cyan-300/10",
             style: getSelectionBoxStyle(selectionDrag)
           }) : null,
-          pendingDeleteIds ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          pendingDeleteIds ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "absolute inset-0 z-30 flex items-center justify-center bg-slate-950/40",
             onPointerDown: (event) => event.stopPropagation(),
-            children: /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("div", {
               className: "w-64 rounded-md border border-red-400/40 bg-slate-950/95 p-3 text-sm shadow-2xl",
               role: "dialog",
               "aria-label": "Confirm delete selected nodes",
               children: [
-                /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                   className: "font-semibold text-red-100",
                   children: [
                     "Delete ",
@@ -27439,16 +27565,16 @@ function BenchViewport({
                     " selected nodes?"
                   ]
                 }),
-                /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+                /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                   className: "mt-3 flex justify-end gap-2",
                   children: [
-                    /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                    /* @__PURE__ */ jsx_runtime20.jsx("button", {
                       className: "rounded border border-slate-700 px-2 py-1 text-slate-300 hover:border-slate-500",
                       type: "button",
                       onClick: () => setPendingDeleteIds(null),
                       children: "Cancel"
                     }),
-                    /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                    /* @__PURE__ */ jsx_runtime20.jsx("button", {
                       className: "rounded border border-red-400/60 bg-red-500/20 px-2 py-1 font-semibold text-red-100 hover:bg-red-500/30",
                       type: "button",
                       onClick: () => {
@@ -27468,7 +27594,7 @@ function BenchViewport({
   });
 }
 function ViewportImageWorldOverlay({ frame, opacity, url }) {
-  return /* @__PURE__ */ jsx_runtime19.jsx(WorkbenchAssetImage, {
+  return /* @__PURE__ */ jsx_runtime20.jsx(WorkbenchAssetImage, {
     alt: "",
     "aria-hidden": "true",
     className: "pointer-events-none absolute z-[1] mix-blend-screen",
@@ -27641,7 +27767,7 @@ function ActorActivityHighlightLayer({ edges = [], elements = [], focusedActionK
         target
       });
   }
-  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     "aria-hidden": "true",
     className: "pointer-events-none absolute inset-0 z-[55]",
     "data-actor-activity-highlight-layer": "true",
@@ -27650,7 +27776,7 @@ function ActorActivityHighlightLayer({ edges = [], elements = [], focusedActionK
       if (!bounds)
         return [];
       const height = Math.max(bounds.height, minimumWorldHeight);
-      return /* @__PURE__ */ jsx_runtime19.jsx("span", {
+      return /* @__PURE__ */ jsx_runtime20.jsx("span", {
         className: "pointer-events-none absolute",
         "data-activity-line-highlight": `${highlight.startLine}:${highlight.endLine}`,
         "data-actor-activity-highlight": highlight.actionKey,
@@ -27713,10 +27839,10 @@ function ActorInteractionPanel({
   viewportRootRef
 }) {
   const details = actor.details;
-  const [selectedTab, setSelectedTab] = import_react8.useState(actorPanel ? "primary" : "activity");
-  const tabsId = import_react8.useId();
-  const primaryTabRef = import_react8.useRef(null);
-  const activityTabRef = import_react8.useRef(null);
+  const [selectedTab, setSelectedTab] = import_react9.useState(actorPanel ? "primary" : "activity");
+  const tabsId = import_react9.useId();
+  const primaryTabRef = import_react9.useRef(null);
+  const activityTabRef = import_react9.useRef(null);
   const selectTabFromKeyboard = (event) => {
     if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End")
       return;
@@ -27725,14 +27851,14 @@ function ActorInteractionPanel({
     setSelectedTab(next);
     (next === "primary" ? primaryTabRef : activityTabRef).current?.focus();
   };
-  const actions = import_react8.useMemo(() => details ? sortActorActivityActionsNewestFirst(details.actions) : [], [details]);
+  const actions = import_react9.useMemo(() => details ? sortActorActivityActionsNewestFirst(details.actions) : [], [details]);
   const actorTransitionDurationMs = getActorTransitionDurationMs(actor);
-  const headerRef = import_react8.useRef(null);
-  const listRef = import_react8.useRef(null);
-  const rowRefs = import_react8.useRef(new Map);
-  const [connectorAnchors, setConnectorAnchors] = import_react8.useState({});
-  const [headerConnector, setHeaderConnector] = import_react8.useState(null);
-  const measureHeaderConnector = import_react8.useCallback(() => {
+  const headerRef = import_react9.useRef(null);
+  const listRef = import_react9.useRef(null);
+  const rowRefs = import_react9.useRef(new Map);
+  const [connectorAnchors, setConnectorAnchors] = import_react9.useState({});
+  const [headerConnector, setHeaderConnector] = import_react9.useState(null);
+  const measureHeaderConnector = import_react9.useCallback(() => {
     const root2 = viewportRootRef?.current;
     const rootRect = root2?.getBoundingClientRect();
     if (!root2 || !rootRect)
@@ -27751,7 +27877,7 @@ function ActorInteractionPanel({
       setHeaderConnector(null);
     }
   }, [actor.id, viewportRootRef]);
-  const measureRows = import_react8.useCallback(() => {
+  const measureRows = import_react9.useCallback(() => {
     measureHeaderConnector();
     const root2 = viewportRootRef?.current;
     const rootRect = root2?.getBoundingClientRect();
@@ -27784,7 +27910,7 @@ function ActorInteractionPanel({
       }]];
     })));
   }, [activityTargets, measureHeaderConnector, viewportRootRef]);
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     measureRows();
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
@@ -27797,7 +27923,7 @@ function ActorInteractionPanel({
         window.cancelAnimationFrame(secondFrame);
     };
   }, [measureRows, selectedTab, viewport.x, viewport.y, viewport.zoom]);
-  import_react8.useLayoutEffect(() => {
+  import_react9.useLayoutEffect(() => {
     const actorNode = viewportRootRef?.current?.querySelector(`[data-workbench-actor-id="${CSS.escape(actor.id)}"]`);
     if (!actorNode)
       return;
@@ -27816,7 +27942,7 @@ function ActorInteractionPanel({
       stopTracking();
     };
   }, [actor.id, actor.x, actor.y, actorTransitionDurationMs, measureHeaderConnector, viewportRootRef]);
-  import_react8.useEffect(() => {
+  import_react9.useEffect(() => {
     const root2 = viewportRootRef?.current;
     if (!root2)
       return;
@@ -27829,15 +27955,15 @@ function ActorInteractionPanel({
   }, [measureRows, viewportRootRef]);
   if (!details)
     return null;
-  return /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+  return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsxs("svg", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
         "aria-hidden": "true",
         className: "pointer-events-none absolute inset-0 z-[89] h-full w-full overflow-visible",
         "data-agent-activity-connectors": "true",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("defs", {
-            children: /* @__PURE__ */ jsx_runtime19.jsx("marker", {
+          /* @__PURE__ */ jsx_runtime20.jsx("defs", {
+            children: /* @__PURE__ */ jsx_runtime20.jsx("marker", {
               id: "agent-activity-popup-arrow",
               markerHeight: "6",
               markerWidth: "7",
@@ -27845,13 +27971,13 @@ function ActorInteractionPanel({
               refX: "6",
               refY: "3",
               viewBox: "0 0 7 6",
-              children: /* @__PURE__ */ jsx_runtime19.jsx("path", {
+              children: /* @__PURE__ */ jsx_runtime20.jsx("path", {
                 d: "M 0 0 L 7 3 L 0 6 z",
                 fill: "context-stroke"
               })
             })
           }),
-          headerConnector ? /* @__PURE__ */ jsx_runtime19.jsx("path", {
+          headerConnector ? /* @__PURE__ */ jsx_runtime20.jsx("path", {
             d: `M ${headerConnector.fromX} ${headerConnector.fromY} L ${headerConnector.toX} ${headerConnector.toY}`,
             "data-agent-popup-connector": actor.id,
             fill: "none",
@@ -27866,7 +27992,7 @@ function ActorInteractionPanel({
             if (!anchor || strength <= 0)
               return [];
             const bendX = anchor.fromX + (anchor.toX - anchor.fromX) * 0.5;
-            return /* @__PURE__ */ jsx_runtime19.jsx("path", {
+            return /* @__PURE__ */ jsx_runtime20.jsx("path", {
               d: `M ${anchor.fromX} ${anchor.fromY} C ${bendX} ${anchor.fromY}, ${bendX} ${anchor.toY}, ${anchor.toX} ${anchor.toY}`,
               "data-agent-activity-connector": target.actionKey,
               "data-target-element-id": target.target.id,
@@ -27880,7 +28006,7 @@ function ActorInteractionPanel({
           }) : null
         ]
       }),
-      /* @__PURE__ */ jsx_runtime19.jsxs("aside", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
         "aria-label": `${actor.label} details`,
         className: "absolute right-4 top-4 z-[90] flex max-h-[calc(100%-2rem)] w-[min(32rem,calc(100%-2rem))] flex-col rounded-lg border border-cyan-400/30 bg-slate-950/95 p-4 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur",
         "data-workbench-viewport-controls": "true",
@@ -27896,32 +28022,32 @@ function ActorInteractionPanel({
         onWheel: (event) => event.stopPropagation(),
         role: "dialog",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsxs("header", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("header", {
             className: "flex items-start justify-between gap-3",
             ref: headerRef,
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                 className: "min-w-0",
                 children: [
-                  /* @__PURE__ */ jsx_runtime19.jsx("select", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("select", {
                     "aria-label": "Selected actor",
                     className: "max-w-full cursor-pointer appearance-auto bg-transparent font-semibold text-cyan-100 outline-none",
                     onChange: (event) => onActorSelect?.(event.currentTarget.value),
                     value: actor.id,
-                    children: actors.map((candidate) => /* @__PURE__ */ jsx_runtime19.jsx("option", {
+                    children: actors.map((candidate) => /* @__PURE__ */ jsx_runtime20.jsx("option", {
                       className: "bg-slate-950 text-cyan-100",
                       value: candidate.id,
                       children: candidate.label
                     }, candidate.id))
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx("div", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
                     className: "mt-0.5 truncate font-mono text-[11px] text-slate-400",
                     title: details.title,
                     children: details.title
                   })
                 ]
               }),
-              /* @__PURE__ */ jsx_runtime19.jsx("button", {
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
                 "aria-label": "Close actor details",
                 className: "rounded px-1.5 py-0.5 text-slate-400 hover:bg-slate-800 hover:text-white",
                 onClick: onClose,
@@ -27930,12 +28056,12 @@ function ActorInteractionPanel({
               })
             ]
           }),
-          actorPanel ? /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          actorPanel ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             "aria-label": `${actor.label} views`,
             className: "mt-3 grid grid-cols-2 rounded-md border border-slate-800 bg-slate-900/60 p-1",
             role: "tablist",
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsx("button", {
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
                 "aria-controls": `${tabsId}-primary-panel`,
                 "aria-selected": selectedTab === "primary",
                 className: `rounded px-3 py-1.5 font-semibold ${selectedTab === "primary" ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`,
@@ -27948,7 +28074,7 @@ function ActorInteractionPanel({
                 type: "button",
                 children: actorPanel.primaryTabLabel
               }),
-              /* @__PURE__ */ jsx_runtime19.jsx("button", {
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
                 "aria-controls": `${tabsId}-activity-panel`,
                 "aria-selected": selectedTab === "activity",
                 className: `rounded px-3 py-1.5 font-semibold ${selectedTab === "activity" ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`,
@@ -27963,7 +28089,7 @@ function ActorInteractionPanel({
               })
             ]
           }) : null,
-          actorPanel ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          actorPanel ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
             "aria-labelledby": `${tabsId}-primary-tab`,
             className: `${selectedTab === "primary" ? "" : "hidden"} mt-3 min-h-0 flex-1 overflow-hidden`,
             hidden: selectedTab !== "primary",
@@ -27971,22 +28097,22 @@ function ActorInteractionPanel({
             role: "tabpanel",
             children: actorPanel.renderPrimaryTab(actor)
           }) : null,
-          /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             "aria-labelledby": actorPanel ? `${tabsId}-activity-tab` : undefined,
             className: `${actorPanel && selectedTab !== "activity" ? "hidden" : "flex"} mt-3 min-h-0 flex-1 flex-col`,
             hidden: actorPanel ? selectedTab !== "activity" : undefined,
             id: actorPanel ? `${tabsId}-activity-panel` : undefined,
             role: actorPanel ? "tabpanel" : undefined,
             children: [
-              /* @__PURE__ */ jsx_runtime19.jsx("dl", {
+              /* @__PURE__ */ jsx_runtime20.jsx("dl", {
                 className: "grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-y border-slate-800 py-2 text-[11px]",
-                children: details.metadata.map((item) => /* @__PURE__ */ jsx_runtime19.jsxs(import_react8.Fragment, {
+                children: details.metadata.map((item) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
                   children: [
-                    /* @__PURE__ */ jsx_runtime19.jsx("dt", {
+                    /* @__PURE__ */ jsx_runtime20.jsx("dt", {
                       className: "text-slate-500",
                       children: item.label
                     }),
-                    /* @__PURE__ */ jsx_runtime19.jsx("dd", {
+                    /* @__PURE__ */ jsx_runtime20.jsx("dd", {
                       className: "min-w-0 truncate font-mono text-slate-300",
                       title: item.value,
                       children: item.value
@@ -27994,24 +28120,24 @@ function ActorInteractionPanel({
                   ]
                 }, item.label))
               }),
-              /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                 className: "mt-3 grid grid-cols-[1fr_auto] gap-x-3 text-[11px] font-semibold uppercase tracking-wide text-slate-400",
                 children: [
-                  /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("span", {
                     children: "Activity"
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("span", {
                     children: details.activityCount ?? details.actions.length
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("span", {
                     children: "Mapped file actions"
                   }),
-                  /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  /* @__PURE__ */ jsx_runtime20.jsx("span", {
                     children: details.actions.filter((action) => action.path).length
                   })
                 ]
               }),
-              /* @__PURE__ */ jsx_runtime19.jsx("ol", {
+              /* @__PURE__ */ jsx_runtime20.jsx("ol", {
                 className: "mt-1 min-h-0 flex-1 space-y-1 overflow-y-auto pr-1",
                 onScroll: measureRows,
                 ref: listRef,
@@ -28019,8 +28145,8 @@ function ActorInteractionPanel({
                   const actionKey = getActorActivityActionKey(action, index2);
                   const lineRange = formatActorActivityLineRange(action);
                   const target = activityTargets.find((candidate) => candidate.actionKey === actionKey);
-                  return /* @__PURE__ */ jsx_runtime19.jsx("li", {
-                    children: /* @__PURE__ */ jsx_runtime19.jsxs("button", {
+                  return /* @__PURE__ */ jsx_runtime20.jsx("li", {
+                    children: /* @__PURE__ */ jsx_runtime20.jsxs("button", {
                       "aria-label": target ? `Focus ${action.path} ${lineRange}` : `Jump timeline to ${action.occurredAt}`,
                       className: "flex w-full flex-col gap-1 rounded bg-slate-900/70 px-2 py-2 text-left hover:bg-slate-800/90 focus-visible:outline focus-visible:outline-1 focus-visible:outline-cyan-300",
                       "data-agent-activity-action": actionKey,
@@ -28033,32 +28159,32 @@ function ActorInteractionPanel({
                       },
                       type: "button",
                       children: [
-                        /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                        /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                           className: "grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2",
                           "data-agent-activity-summary-row": "true",
                           children: [
-                            /* @__PURE__ */ jsx_runtime19.jsx("time", {
+                            /* @__PURE__ */ jsx_runtime20.jsx("time", {
                               className: "font-mono text-[10px] text-slate-500",
                               dateTime: action.occurredAt,
                               children: formatActorActivityTimestamp(action.occurredAt)
                             }),
-                            /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                            /* @__PURE__ */ jsx_runtime20.jsx("span", {
                               className: "font-semibold",
                               style: { color: action.color },
                               children: action.label ?? action.kind
                             })
                           ]
                         }),
-                        /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+                        /* @__PURE__ */ jsx_runtime20.jsxs("span", {
                           className: "grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-2",
                           "data-agent-activity-resource-row": "true",
                           children: [
-                            /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                            /* @__PURE__ */ jsx_runtime20.jsx("span", {
                               className: "min-w-0 break-all font-mono text-[11px] leading-4 text-slate-200",
                               title: action.path ?? action.label ?? action.kind,
                               children: action.path ?? action.label ?? "Session activity"
                             }),
-                            /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                            /* @__PURE__ */ jsx_runtime20.jsx("span", {
                               className: "whitespace-nowrap rounded bg-cyan-950/60 px-1.5 py-0.5 font-mono text-[10px] text-cyan-300",
                               children: lineRange ?? "—"
                             })
@@ -28077,7 +28203,7 @@ function ActorInteractionPanel({
   });
 }
 function ViewportSvgWorldOverlay({ opacity, sceneBounds, svg }) {
-  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     "aria-hidden": "true",
     className: "pointer-events-none absolute z-[1] mix-blend-screen [&_svg]:h-full [&_svg]:w-full",
     dangerouslySetInnerHTML: { __html: svg },
@@ -28096,9 +28222,9 @@ function ViewportEdgeLayer({
   const drawableEdges = edges.filter((edge) => Boolean(edge.from && edge.to && !edge.error));
   const orderedEdges = selectedEdgeId ? [...drawableEdges].sort((a, b) => (a.id === selectedEdgeId ? 1 : 0) - (b.id === selectedEdgeId ? 1 : 0)) : drawableEdges;
   const labelLaneOffsets = getEdgeLabelLaneOffsets(drawableEdges);
-  const svgRef = import_react8.useRef(null);
-  const [renderedActorOffsets, setRenderedActorOffsets] = import_react8.useState({});
-  import_react8.useEffect(() => {
+  const svgRef = import_react9.useRef(null);
+  const [renderedActorOffsets, setRenderedActorOffsets] = import_react9.useState({});
+  import_react9.useEffect(() => {
     if (typeof requestAnimationFrame === "undefined")
       return;
     const actorIds = new Set(edges.flatMap((edge) => [edge.fromElementId, edge.toElementId].filter((id) => Boolean(id))));
@@ -28127,7 +28253,7 @@ function ViewportEdgeLayer({
   }, [edges]);
   if (!orderedEdges.length && !edgeDrag)
     return null;
-  return /* @__PURE__ */ jsx_runtime19.jsxs("svg", {
+  return /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
     ref: svgRef,
     "aria-label": "Edges",
     className: "pointer-events-none absolute left-0 top-0 overflow-visible",
@@ -28136,15 +28262,15 @@ function ViewportEdgeLayer({
     style: { zIndex: WORKBENCH_EDGE_Z_INDEX },
     width: "1",
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsx("defs", {
-        children: /* @__PURE__ */ jsx_runtime19.jsx("marker", {
+      /* @__PURE__ */ jsx_runtime20.jsx("defs", {
+        children: /* @__PURE__ */ jsx_runtime20.jsx("marker", {
           id: "bench-edge-arrow",
           markerHeight: "7",
           markerWidth: "8",
           orient: "auto",
           refX: "7",
           refY: "3.5",
-          children: /* @__PURE__ */ jsx_runtime19.jsx("path", {
+          children: /* @__PURE__ */ jsx_runtime20.jsx("path", {
             d: "M0,0 L8,3.5 L0,7 Z",
             fill: "context-stroke"
           })
@@ -28156,12 +28282,12 @@ function ViewportEdgeLayer({
         const path = getEdgePath(from, to);
         const selected = edge.id === selectedEdgeId;
         const midpoint = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-        return /* @__PURE__ */ jsx_runtime19.jsxs("g", {
+        return /* @__PURE__ */ jsx_runtime20.jsxs("g", {
           className: "group/edge",
           "data-edge-id": edge.id,
           opacity: selected ? 1 : Math.max(0, Math.min(1, edge.opacity ?? 1)),
           children: [
-            /* @__PURE__ */ jsx_runtime19.jsx("path", {
+            /* @__PURE__ */ jsx_runtime20.jsx("path", {
               "aria-label": "Select edge",
               className: "cursor-pointer",
               d: path,
@@ -28176,7 +28302,7 @@ function ViewportEdgeLayer({
                 onSelectEdge(edge.id);
               }
             }),
-            /* @__PURE__ */ jsx_runtime19.jsx("path", {
+            /* @__PURE__ */ jsx_runtime20.jsx("path", {
               className: "pointer-events-none",
               d: path,
               fill: "none",
@@ -28186,14 +28312,14 @@ function ViewportEdgeLayer({
               strokeLinejoin: "round",
               strokeWidth: selected ? 3 : 2
             }),
-            edge.label ? /* @__PURE__ */ jsx_runtime19.jsx(ViewportEdgeLabel, {
+            edge.label ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportEdgeLabel, {
               from,
               label: edge.label,
               laneOffset: labelLaneOffsets[edge.id] ?? 0,
               to,
               viewportZoom
             }) : null,
-            selected ? /* @__PURE__ */ jsx_runtime19.jsxs("g", {
+            selected ? /* @__PURE__ */ jsx_runtime20.jsxs("g", {
               className: "pointer-events-auto cursor-pointer",
               "data-edge-delete-id": edge.id,
               transform: `translate(${midpoint.x} ${midpoint.y})`,
@@ -28203,12 +28329,12 @@ function ViewportEdgeLayer({
                 onDeleteEdge(edge.id);
               },
               children: [
-                /* @__PURE__ */ jsx_runtime19.jsx("circle", {
+                /* @__PURE__ */ jsx_runtime20.jsx("circle", {
                   className: "fill-rose-950 stroke-rose-300",
                   r: 10,
                   strokeWidth: 1.5
                 }),
-                /* @__PURE__ */ jsx_runtime19.jsx("text", {
+                /* @__PURE__ */ jsx_runtime20.jsx("text", {
                   className: "select-none fill-rose-100 text-[14px] font-bold",
                   dominantBaseline: "central",
                   textAnchor: "middle",
@@ -28217,7 +28343,7 @@ function ViewportEdgeLayer({
                 })
               ]
             }) : null,
-            /* @__PURE__ */ jsx_runtime19.jsx("circle", {
+            /* @__PURE__ */ jsx_runtime20.jsx("circle", {
               "aria-label": "Edge source handle",
               className: getEdgeEndpointClassName(edge.fromRaw),
               cx: from.x,
@@ -28233,7 +28359,7 @@ function ViewportEdgeLayer({
                 onEndpointPointerDown(edge.id, "from", event.nativeEvent);
               }
             }),
-            /* @__PURE__ */ jsx_runtime19.jsx("circle", {
+            /* @__PURE__ */ jsx_runtime20.jsx("circle", {
               "aria-label": "Edge target handle",
               className: getEdgeEndpointClassName(edge.toRaw),
               cx: to.x,
@@ -28252,7 +28378,7 @@ function ViewportEdgeLayer({
           ]
         }, edge.id);
       }),
-      edgeDrag ? /* @__PURE__ */ jsx_runtime19.jsx("line", {
+      edgeDrag ? /* @__PURE__ */ jsx_runtime20.jsx("line", {
         className: "pointer-events-none",
         stroke: "rgb(103 232 249 / 0.55)",
         strokeDasharray: "6 5",
@@ -28278,7 +28404,7 @@ function ViewportEdgeLabel({
     return null;
   const safeZoom = Math.max(0.01, viewportZoom);
   const position = getEdgeLabelLayout(from, to, safeZoom, laneOffset);
-  return /* @__PURE__ */ jsx_runtime19.jsx("text", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("text", {
     className: "pointer-events-none select-none",
     "data-edge-label": "true",
     dominantBaseline: "central",
@@ -28364,11 +28490,11 @@ function ViewportMinimap({
   const minimapHeight = minimapSize.height;
   const indicator = getMinimapViewportIndicatorRect(viewport, viewportSize, sceneBounds, { height: minimapHeight, width: minimapWidth });
   const { contentHeight, contentLeft: offsetX, contentTop: offsetY, contentWidth, height: rectHeight, left: rectLeft, top: rectTop, width: rectWidth } = indicator;
-  return /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
     className: "pointer-events-none absolute right-2 top-2 flex items-start gap-2 sm:right-4 sm:top-4",
     "data-workbench-viewport-controls": "true",
     children: [
-      onFitContents ? /* @__PURE__ */ jsx_runtime19.jsx("button", {
+      onFitContents ? /* @__PURE__ */ jsx_runtime20.jsx("button", {
         "aria-label": "Fit contents",
         className: "pointer-events-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-950/90 text-lg text-slate-100 shadow-lg hover:border-cyan-400",
         onClick: onFitContents,
@@ -28376,17 +28502,17 @@ function ViewportMinimap({
         type: "button",
         children: "⛶"
       }) : null,
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "flex flex-col gap-2",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "rounded-md border border-slate-300/50 bg-slate-950/70 p-1",
             "data-workbench-minimap": "true",
-            children: /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("div", {
               className: "relative overflow-hidden rounded-sm bg-slate-900",
               style: { height: minimapHeight, width: minimapWidth },
               children: [
-                /* @__PURE__ */ jsx_runtime19.jsx("div", {
+                /* @__PURE__ */ jsx_runtime20.jsx("div", {
                   className: "absolute bg-cover bg-center",
                   style: {
                     backgroundImage: createPreviewBackgroundImage(previewImage),
@@ -28396,14 +28522,14 @@ function ViewportMinimap({
                     width: contentWidth
                   }
                 }),
-                /* @__PURE__ */ jsx_runtime19.jsx("div", {
+                /* @__PURE__ */ jsx_runtime20.jsx("div", {
                   className: "absolute z-10 border-2 border-yellow-300 bg-yellow-200/10 shadow-[0_0_14px_rgba(253,224,71,0.85)]",
                   style: { height: rectHeight, left: rectLeft, top: rectTop, width: rectWidth }
                 })
               ]
             })
           }),
-          quickAccess?.map((item) => /* @__PURE__ */ jsx_runtime19.jsxs("button", {
+          quickAccess?.map((item) => /* @__PURE__ */ jsx_runtime20.jsxs("button", {
             "aria-label": item.ariaLabel,
             className: "pointer-events-auto flex items-center justify-center gap-2 rounded-md border border-cyan-300/50 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-cyan-200 shadow-lg hover:border-cyan-200 hover:bg-slate-900",
             onClick: item.onOpen,
@@ -28425,14 +28551,14 @@ function BenchViewportDebugControls({
   onPanelOpenChange,
   panelOpen
 }) {
-  return /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+  return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "absolute left-2 top-2 z-50 sm:left-4 sm:top-4",
         onClick: (event) => event.stopPropagation(),
         onPointerDown: (event) => event.stopPropagation(),
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             "aria-expanded": menuOpen,
             "aria-label": "Bench menu",
             className: "rounded bg-slate-950/80 px-2 py-1 text-base leading-none text-slate-100 shadow-lg hover:bg-slate-800",
@@ -28440,17 +28566,17 @@ function BenchViewportDebugControls({
             type: "button",
             children: "☰"
           }),
-          menuOpen ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          menuOpen ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "mt-2 min-w-36 rounded-md bg-slate-900/98 p-2 text-sm text-slate-100 shadow-2xl",
-            children: /* @__PURE__ */ jsx_runtime19.jsxs("label", {
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("label", {
               className: "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-slate-800",
               children: [
-                /* @__PURE__ */ jsx_runtime19.jsx("input", {
+                /* @__PURE__ */ jsx_runtime20.jsx("input", {
                   checked: panelOpen,
                   onChange: (event) => onPanelOpenChange(event.currentTarget.checked),
                   type: "checkbox"
                 }),
-                /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                /* @__PURE__ */ jsx_runtime20.jsx("span", {
                   children: "Debug"
                 })
               ]
@@ -28458,7 +28584,7 @@ function BenchViewportDebugControls({
           }) : null
         ]
       }),
-      panelOpen ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+      panelOpen ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
         className: "absolute bottom-2 right-2 top-4 z-50 w-72 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950/95 p-3 text-xs text-slate-100 shadow-2xl sm:bottom-4 sm:right-4 sm:top-4",
         onClick: (event) => event.stopPropagation(),
         onPointerDown: (event) => event.stopPropagation(),
@@ -28471,45 +28597,45 @@ function BenchViewportDebugControls({
   });
 }
 function BenchViewportRunChecksPanel({ onToggleStress, stressStats }) {
-  return /* @__PURE__ */ jsx_runtime19.jsxs("section", {
+  return /* @__PURE__ */ jsx_runtime20.jsxs("section", {
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "mb-1.5 flex items-center justify-between gap-2 border-b border-slate-800 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("span", {
+          /* @__PURE__ */ jsx_runtime20.jsx("span", {
             children: "Run checks"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsx("span", {
+          /* @__PURE__ */ jsx_runtime20.jsx("span", {
             children: stressStats.running ? "RUNNING" : "IDLE"
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime19.jsxs("button", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("button", {
         "aria-label": stressStats.running ? "Stop viewport stress test" : "Run viewport stress test",
         className: "flex w-full items-center gap-2 rounded-md border border-cyan-300/40 bg-cyan-300 px-2 py-1.5 font-semibold text-slate-950 hover:bg-cyan-200",
         "data-bench-viewport-run-test": "stress",
         onClick: onToggleStress,
         type: "button",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("span", {
+          /* @__PURE__ */ jsx_runtime20.jsx("span", {
             "aria-hidden": "true",
             children: "✓"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsx("span", {
+          /* @__PURE__ */ jsx_runtime20.jsx("span", {
             children: stressStats.running ? "Stop stress" : "Run stress"
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "mt-2 grid grid-cols-2 gap-2 rounded-md bg-slate-900/30 px-2 py-1.5 text-[11px] text-slate-300",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("span", {
             children: [
               stressStats.fps.toFixed(1),
               " fps"
             ]
           }),
-          /* @__PURE__ */ jsx_runtime19.jsxs("span", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("span", {
             children: [
               stressStats.longestFrameDelay.toFixed(1),
               "ms max"
@@ -28521,7 +28647,7 @@ function BenchViewportRunChecksPanel({ onToggleStress, stressStats }) {
   });
 }
 function ViewportTransformLayer({ children, layerRef }) {
-  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     ref: layerRef,
     className: "absolute left-0 top-0 h-full w-full",
     "data-workbench-transform-layer": "true",
@@ -28532,21 +28658,21 @@ function ViewportTransformLayer({ children, layerRef }) {
 function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
   const targetPath = normalizeBenchPathDraft(state.path);
   const previewPath = targetPath ? getBenchPreviewPathDraft(targetPath) : "";
-  return /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
     className: "absolute z-40 w-[32rem] max-w-[calc(100vw-2rem)] rounded-xl border border-violet-300/40 bg-slate-950/98 p-3 text-sm text-slate-100 shadow-2xl",
     "data-debug-id": "bench-add-panel",
     style: { left: state.screenX, top: state.screenY },
     onPointerDown: (event) => event.stopPropagation(),
     onWheel: (event) => event.stopPropagation(),
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "flex items-center justify-between gap-3 border-b border-slate-800 pb-2",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "font-bold text-violet-100",
             children: "Add nested bench"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             className: "rounded px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100",
             type: "button",
             onClick: onCancel,
@@ -28554,16 +28680,16 @@ function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "mt-3 grid grid-cols-2 overflow-hidden rounded-lg border border-slate-700 bg-slate-950/70 p-1 text-xs font-semibold",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             className: `rounded-md px-3 py-2 ${state.mode === "existing" ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`,
             type: "button",
             onClick: () => onChange({ ...state, error: null, mode: "existing" }),
             children: "Existing bench"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             className: `rounded-md px-3 py-2 ${state.mode === "new" ? "bg-cyan-300 text-slate-950" : "text-slate-300 hover:bg-slate-800"}`,
             type: "button",
             onClick: () => onChange({ ...state, error: null, mode: "new" }),
@@ -28571,9 +28697,9 @@ function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
           })
         ]
       }),
-      /* @__PURE__ */ jsx_runtime19.jsx("div", {
+      /* @__PURE__ */ jsx_runtime20.jsx("div", {
         className: "mt-3",
-        children: /* @__PURE__ */ jsx_runtime19.jsx(VaultFilePathInput, {
+        children: /* @__PURE__ */ jsx_runtime20.jsx(VaultFilePathInput, {
           disabled: state.saving,
           extensions: [".bench.json", ".bench.hjson"],
           label: state.mode === "existing" ? "Bench file" : "New bench path",
@@ -28582,20 +28708,20 @@ function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
           onChange: (path) => onChange({ ...state, error: null, path })
         })
       }),
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "mt-3 rounded-lg border border-violet-300/25 bg-violet-950/20 p-2 font-mono text-xs text-slate-300",
         "data-debug-id": "bench-add-preview",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          /* @__PURE__ */ jsx_runtime20.jsx("div", {
             children: "type: bench"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             children: [
               "path: ",
               targetPath || "—"
             ]
           }),
-          /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
             children: [
               "preview: ",
               previewPath || "—"
@@ -28603,21 +28729,21 @@ function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
           })
         ]
       }),
-      state.error ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+      state.error ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
         className: "mt-2 rounded border border-rose-400/50 bg-rose-950/40 px-2 py-1 text-xs text-rose-100",
         children: state.error
       }) : null,
-      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "mt-3 flex justify-end gap-2",
         children: [
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             className: "rounded border border-slate-700 px-3 py-2 text-slate-300 hover:border-slate-500",
             disabled: state.saving,
             type: "button",
             onClick: onCancel,
             children: "Cancel"
           }),
-          /* @__PURE__ */ jsx_runtime19.jsx("button", {
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
             className: "rounded bg-violet-300 px-3 py-2 font-black text-slate-950 hover:bg-violet-200 disabled:opacity-60",
             disabled: state.saving,
             type: "button",
@@ -28631,7 +28757,7 @@ function BenchAddPanel({ listFiles, onCancel, onChange, onSubmit, state }) {
 }
 function ViewportWorldGrid() {
   const extent = 1e6;
-  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     "aria-hidden": "true",
     className: "pointer-events-none absolute bg-[radial-gradient(circle_at_center,rgba(148,163,184,0.18)_1px,transparent_1px)]",
     style: {
@@ -28643,7 +28769,7 @@ function ViewportWorldGrid() {
     }
   });
 }
-var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
+var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   edgeDrag,
   editorAutoFocusId,
   elementTypeRegistry,
@@ -28669,11 +28795,11 @@ var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
   wireframeLabels
 }) {
   const commentParentTargetFrame = getCommentParentTargetFrame(elements, highlightedGroupId);
-  return /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+  return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
     children: [
       renderPlan.map((item) => {
         if (item.kind === "aggregate") {
-          return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          return /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "absolute overflow-hidden rounded-md border border-cyan-300/40 bg-cyan-950/60 bg-cover bg-center text-[10px] font-bold text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.12)]",
             style: {
               backgroundImage: createPreviewBackgroundImage(item.previewImage),
@@ -28683,7 +28809,7 @@ var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
               width: item.width
             },
             title: `${item.count} elements`,
-            children: /* @__PURE__ */ jsx_runtime19.jsx("span", {
+            children: /* @__PURE__ */ jsx_runtime20.jsx("span", {
               className: "absolute bottom-1 right-1 rounded bg-slate-950/70 px-1",
               children: item.count
             })
@@ -28691,22 +28817,22 @@ var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
         }
         const elementOpacity = item.element.id.includes("::") ? nestedElementOpacity : 1;
         if (wireframe && item.element.kind !== "actor") {
-          return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+          return /* @__PURE__ */ jsx_runtime20.jsx("div", {
             "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
             style: { opacity: elementOpacity },
-            children: /* @__PURE__ */ jsx_runtime19.jsx(WireframeElement, {
+            children: /* @__PURE__ */ jsx_runtime20.jsx(WireframeElement, {
               element: item.element,
               label: wireframeLabels?.get(item.element.id) ?? getWireframeAssetLabel(item.element),
               viewportZoom
             })
           }, item.element.id);
         }
-        return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+        return /* @__PURE__ */ jsx_runtime20.jsx("div", {
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
           style: { opacity: elementOpacity },
-          children: /* @__PURE__ */ jsx_runtime19.jsx(ElementRenderBoundary, {
+          children: /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
             element: item.element,
-            children: /* @__PURE__ */ jsx_runtime19.jsx(ViewportElement, {
+            children: /* @__PURE__ */ jsx_runtime20.jsx(ViewportElement, {
               activeEdgeHandleSide: edgeDrag ? getActiveHandleSideNearWorldPoint(item.element, edgeDrag.current, 18 / viewportZoom) : null,
               edgeHandles: getVisibleHandleSlots(edges, item.element.id),
               editorAutoFocus: editorAutoFocusId === item.element.id,
@@ -28735,7 +28861,7 @@ var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
           })
         }, item.element.id);
       }),
-      commentParentTargetFrame ? /* @__PURE__ */ jsx_runtime19.jsx("div", {
+      commentParentTargetFrame ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
         "aria-hidden": "true",
         className: "pointer-events-none absolute z-[60] rounded border-solid border-emerald-300 bg-emerald-300/10",
         "data-comment-parent-drop-target": commentParentTargetFrame.id,
@@ -28752,7 +28878,7 @@ var ViewportElementLayer = import_react8.memo(function ViewportElementLayer2({
   });
 });
 
-class ElementRenderBoundary extends import_react8.Component {
+class ElementRenderBoundary extends import_react9.Component {
   state = { hasError: false };
   static getDerivedStateFromError() {
     return { hasError: true };
@@ -28766,7 +28892,7 @@ class ElementRenderBoundary extends import_react8.Component {
   }
   render() {
     if (this.state.hasError)
-      return /* @__PURE__ */ jsx_runtime19.jsx(BrokenElementFallback, {
+      return /* @__PURE__ */ jsx_runtime20.jsx(BrokenElementFallback, {
         element: this.props.element
       });
     return this.props.children;
@@ -28775,7 +28901,7 @@ class ElementRenderBoundary extends import_react8.Component {
 function BrokenElementFallback({ element }) {
   const width = "width" in element ? element.width : ("size" in element) ? element.size : defaultNodeMinWidth;
   const height = "height" in element ? element.height : ("size" in element) ? element.size : defaultNodeMinHeight;
-  return /* @__PURE__ */ jsx_runtime19.jsx("div", {
+  return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     "aria-label": "Broken element",
     className: "absolute border border-red-400/70 bg-red-950/50",
     style: { height, left: element.x, top: element.y, width }
@@ -29399,7 +29525,7 @@ function motionPanVelocity(deltaDegrees) {
 var debugElementTypeRegistry = createDefaultElementTypeRegistry();
 
 // packages/react/src/BenchViewport.debug.tsx
-var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
 var scenarioRegistrations = [
   {
     id: "rgb-squares",
@@ -29505,7 +29631,7 @@ var benchViewportDebugComponent = {
   renderScenario(scenarioId, context) {
     const scenario = scenarioRegistrations.find((candidate) => candidate.id === scenarioId)?.create();
     if (!scenario) {
-      return /* @__PURE__ */ jsx_runtime20.jsx(DebugMissingScenario, {
+      return /* @__PURE__ */ jsx_runtime21.jsx(DebugMissingScenario, {
         componentHref: context.componentHref,
         componentName: context.componentName,
         scenarioId
@@ -29514,12 +29640,12 @@ var benchViewportDebugComponent = {
     const actorPanel = scenarioId === "agent-quick-access" ? {
       primaryTabLabel: "Chat",
       quickAccessLabel: "Agent",
-      renderPrimaryTab: (actor) => /* @__PURE__ */ jsx_runtime20.jsx("div", {
+      renderPrimaryTab: (actor) => /* @__PURE__ */ jsx_runtime21.jsx("div", {
         "data-agent-quick-access-primary": true,
         children: actor.label
       })
     } : undefined;
-    return /* @__PURE__ */ jsx_runtime20.jsx(BenchViewport, {
+    return /* @__PURE__ */ jsx_runtime21.jsx(BenchViewport, {
       actorPanel,
       backHref: context.componentHref,
       backLabel: `${context.componentName} scenarios`,
@@ -29643,12 +29769,12 @@ function seededRandom(seed) {
   };
 }
 function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
-  return /* @__PURE__ */ jsx_runtime20.jsx("main", {
+  return /* @__PURE__ */ jsx_runtime21.jsx("main", {
     className: "min-h-screen bg-slate-950 px-6 py-10 text-slate-100",
-    children: /* @__PURE__ */ jsx_runtime20.jsxs("section", {
+    children: /* @__PURE__ */ jsx_runtime21.jsxs("section", {
       className: "mx-auto flex max-w-4xl flex-col gap-4",
       children: [
-        /* @__PURE__ */ jsx_runtime20.jsxs("a", {
+        /* @__PURE__ */ jsx_runtime21.jsxs("a", {
           className: "text-sm text-cyan-300 hover:text-cyan-200",
           href: componentHref,
           children: [
@@ -29657,11 +29783,11 @@ function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
             " scenarios"
           ]
         }),
-        /* @__PURE__ */ jsx_runtime20.jsx("h1", {
+        /* @__PURE__ */ jsx_runtime21.jsx("h1", {
           className: "text-3xl font-black",
           children: "Scenario not found"
         }),
-        /* @__PURE__ */ jsx_runtime20.jsxs("p", {
+        /* @__PURE__ */ jsx_runtime21.jsxs("p", {
           className: "text-slate-300",
           children: [
             "No bench viewport scenario is registered as “",
@@ -29757,7 +29883,7 @@ var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishe
 var publishedWorkbenchDebugCategoryIds = Object.freeze(publishedWorkbenchDebugContributions.map((contribution) => contribution.debugId));
 
 // packages/publish-sdk/src/gateway-debug-bench-viewport.tsx
-var jsx_runtime21 = __toESM(require_jsx_runtime(), 1);
+var jsx_runtime22 = __toESM(require_jsx_runtime(), 1);
 var publishedBenchViewportScenarioIds = new Set(publishedWorkbenchDebugContributions.find((contribution) => contribution.debugId === "bench-viewport")?.scenarioIds ?? []);
 function mountDebugReact(host, content, createDebugRoot) {
   const container = host.root.ownerDocument.createElement("div");
@@ -29786,46 +29912,46 @@ function mountDebugReact(host, content, createDebugRoot) {
 }
 function mountDebugCategory(host, context, createDebugRoot = import_client.createRoot) {
   const scenarios = benchViewportDebugComponent.scenarios.filter((scenario) => publishedBenchViewportScenarioIds.has(scenario.id));
-  return mountDebugReact(host, /* @__PURE__ */ jsx_runtime21.jsx("main", {
+  return mountDebugReact(host, /* @__PURE__ */ jsx_runtime22.jsx("main", {
     className: "min-h-screen bg-slate-950 px-6 py-10 text-slate-100",
-    children: /* @__PURE__ */ jsx_runtime21.jsxs("section", {
+    children: /* @__PURE__ */ jsx_runtime22.jsxs("section", {
       className: "mx-auto max-w-5xl space-y-8",
       children: [
-        /* @__PURE__ */ jsx_runtime21.jsx("a", {
+        /* @__PURE__ */ jsx_runtime22.jsx("a", {
           className: "text-sm text-cyan-300 hover:text-cyan-200",
           href: context.componentHref,
           children: "← Workbench debug scenarios"
         }),
-        /* @__PURE__ */ jsx_runtime21.jsxs("div", {
+        /* @__PURE__ */ jsx_runtime22.jsxs("div", {
           children: [
-            /* @__PURE__ */ jsx_runtime21.jsx("p", {
+            /* @__PURE__ */ jsx_runtime22.jsx("p", {
               className: "text-sm font-semibold uppercase tracking-[0.3em] text-cyan-300",
               children: "Workbench debug"
             }),
-            /* @__PURE__ */ jsx_runtime21.jsxs("h1", {
+            /* @__PURE__ */ jsx_runtime22.jsxs("h1", {
               className: "mt-3 text-4xl font-black",
               children: [
                 benchViewportDebugComponent.name,
                 " scenarios"
               ]
             }),
-            /* @__PURE__ */ jsx_runtime21.jsx("p", {
+            /* @__PURE__ */ jsx_runtime22.jsx("p", {
               className: "mt-3 text-slate-300",
               children: benchViewportDebugComponent.description
             })
           ]
         }),
-        /* @__PURE__ */ jsx_runtime21.jsx("div", {
+        /* @__PURE__ */ jsx_runtime22.jsx("div", {
           className: "grid gap-4 md:grid-cols-2",
-          children: scenarios.map((scenario) => /* @__PURE__ */ jsx_runtime21.jsxs("a", {
+          children: scenarios.map((scenario) => /* @__PURE__ */ jsx_runtime22.jsxs("a", {
             className: "rounded-xl border border-slate-700 bg-slate-900 p-5 hover:border-cyan-400",
             href: `${context.routeHref}/${scenario.id}`,
             children: [
-              /* @__PURE__ */ jsx_runtime21.jsx("h2", {
+              /* @__PURE__ */ jsx_runtime22.jsx("h2", {
                 className: "text-lg font-bold text-white",
                 children: scenario.name
               }),
-              /* @__PURE__ */ jsx_runtime21.jsx("p", {
+              /* @__PURE__ */ jsx_runtime22.jsx("p", {
                 className: "mt-2 text-sm text-slate-300",
                 children: scenario.description
               })
