@@ -4,6 +4,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayLegacyProcessSupervisorArgv, gatewayMountRevision, gatewayPackageDigest, gatewayProcessSessionName, gatewayProcessSupervisorArgv, gatewayProcessSupervisorArgvCompatible, gatewayProcessSupervisorPaneGid, gatewaySandboxRoot, gatewayServiceUser, gatewayWorkerEnvironmentProbeScript, loadGatewayManifest, parseActiveGatewayMount, recoverGatewayPackageRootFromWorkerArgv, replaceActiveGatewayMount, readGatewayAsset, type ActiveGatewayMount } from "./gateway-runtime";
 import {
   desktopSshRelayPort,
+  assertPriorRealmDirectoryMigrationAllowed,
   effectiveSshdUsesAuthorizedKeysFile,
   failAfterRollbackOperations,
   formatRegistrationUrlBlock,
@@ -1220,6 +1221,7 @@ async function reconcilePriorRealmDirectorySessions(): Promise<void> {
     const mode = priorRealmDirectorySessionMode(sessionName, config.realm.id);
     return mode ? [{ mode, sessionName }] : [];
   }).sort((left, right) => modes.indexOf(left.mode) - modes.indexOf(right.mode));
+  assertPriorRealmDirectoryMigrationAllowed(stale.map(({ sessionName }) => sessionName), invocation.forcePriorDirectory);
   for (const { mode, sessionName } of stale) {
     const pid = await tmuxPanePid(sessionName);
     const snapshot = await readManagedProcessSnapshot(pid);
@@ -1400,11 +1402,10 @@ if (invocation.command === "registration-url") {
   process.exit(0);
 }
 
-await ensureLoopbackSshGateway();
-
 const tmuxVersion = await tmux(["-V"]);
 if (tmuxVersion.code !== 0) throw new Error("start-realm requires tmux for durable managed sessions");
 await reconcilePriorRealmDirectorySessions();
+await ensureLoopbackSshGateway();
 
 const tunnel = config.publicOrigin ? undefined : await ensureManagedTunnel({
   path: managedTunnelPath,

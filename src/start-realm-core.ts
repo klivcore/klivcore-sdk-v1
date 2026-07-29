@@ -30,7 +30,11 @@ export type StartRealmTunnelPlan = Readonly<{ mode: "managed" }>
   | Readonly<{ mode: "external"; publicOrigin: string }>;
 
 export type CloudflaredAsset = Readonly<{ version: string; url: string; sha256: string }>;
-export type StartRealmArgs = Readonly<{ command: "run" | "registration-url"; configPath: string }>;
+export type StartRealmArgs = Readonly<{
+  command: "run" | "registration-url";
+  configPath: string;
+  forcePriorDirectory: boolean;
+}>;
 export type ActiveRealmRecord = Readonly<{
   schemaVersion: 1 | 2 | 3;
   pid: number;
@@ -166,7 +170,7 @@ export function effectiveSshdUsesAuthorizedKeysFile(output: string, authorizedKe
   });
 }
 
-const usage = "Usage: start-realm config.json | start-realm registration-url config.json";
+const usage = "Usage: start-realm [--force] config.json | start-realm registration-url config.json";
 
 function validLauncherHost(host: string): boolean {
   if (host.length < 1 || host.length > 253 || /[\u0000-\u0020\u007f]/u.test(host)) return false;
@@ -176,11 +180,28 @@ function validLauncherHost(host: string): boolean {
 }
 
 export function parseStartRealmArgs(args: readonly string[]): StartRealmArgs {
-  if (args.length === 1 && args[0] && args[0] !== "registration-url") return Object.freeze({ command: "run", configPath: args[0] });
+  if (args.length === 1 && args[0] && args[0] !== "registration-url" && args[0] !== "--force") {
+    return Object.freeze({ command: "run", configPath: args[0], forcePriorDirectory: false });
+  }
+  if (args.length === 2 && args[0] === "--force" && args[1] && args[1] !== "registration-url") {
+    return Object.freeze({ command: "run", configPath: args[1], forcePriorDirectory: true });
+  }
   if (args.length === 2 && args[0] === "registration-url" && args[1]) {
-    return Object.freeze({ command: "registration-url", configPath: args[1] });
+    return Object.freeze({ command: "registration-url", configPath: args[1], forcePriorDirectory: false });
   }
   throw new TypeError(usage);
+}
+
+export function assertPriorRealmDirectoryMigrationAllowed(
+  priorSessionNames: readonly string[],
+  forcePriorDirectory: boolean,
+): void {
+  if (priorSessionNames.length === 0 || forcePriorDirectory) return;
+  throw new Error([
+    "This Realm ID is already running from another directory.",
+    `Existing managed sessions: ${priorSessionNames.join(", ")}`,
+    "Refusing to replace its Realm or Quick Tunnel. Re-run with --force only for an intentional directory migration.",
+  ].join("\n"));
 }
 
 export function parseActiveRealmRecord(

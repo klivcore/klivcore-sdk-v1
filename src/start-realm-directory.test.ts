@@ -2,13 +2,40 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { reconcileRealmDirectory } from "./start-realm-directory";
+import { reconcileRealmDirectory, resolveRealmDirectoryArgs } from "./start-realm-directory";
+import { assertPriorRealmDirectoryMigrationAllowed, parseStartRealmArgs } from "./start-realm-core";
 
 const temporaryDirectories: string[] = [];
 const SDK_REVISION = "0123456789abcdef0123456789abcdef01234567";
 
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+describe("start-realm directory conflict guard", () => {
+  test("propagates an explicit force flag through directory and coordinator argument parsing", () => {
+    const directory = resolveRealmDirectoryArgs(["--force", "acme"], "/workspaces");
+    expect(directory).toEqual({
+      command: "run",
+      realmDirectory: "/workspaces/acme",
+      configPath: "/workspaces/acme/realm.config.json",
+      forcePriorDirectory: true,
+    });
+    expect(parseStartRealmArgs(["--force", directory.configPath])).toEqual({
+      command: "run",
+      configPath: directory.configPath,
+      forcePriorDirectory: true,
+    });
+  });
+
+  test("refuses a live same-ID Realm from another directory unless force was explicit", () => {
+    const stale = ["klivcore-acme-old-tunnel", "klivcore-acme-old-realm"];
+    expect(() => assertPriorRealmDirectoryMigrationAllowed(stale, false)).toThrow(
+      "already running from another directory",
+    );
+    expect(() => assertPriorRealmDirectoryMigrationAllowed(stale, false)).toThrow("--force");
+    expect(() => assertPriorRealmDirectoryMigrationAllowed(stale, true)).not.toThrow();
+  });
 });
 
 describe("reconcileRealmDirectory", () => {

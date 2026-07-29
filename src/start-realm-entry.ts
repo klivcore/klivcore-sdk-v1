@@ -45,7 +45,7 @@ try {
     const configPath = await reconcileRealmDirectory(invocation.realmDirectory, execution.revision);
     process.argv = invocation.command === "registration-url"
       ? [process.argv[0]!, process.argv[1]!, "registration-url", configPath]
-      : [process.argv[0]!, process.argv[1]!, configPath];
+      : [process.argv[0]!, process.argv[1]!, ...(invocation.forcePriorDirectory ? ["--force"] : []), configPath];
     await import("./start-realm-coordinator");
   }
 } catch (error) {

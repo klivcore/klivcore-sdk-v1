@@ -21,10 +21,15 @@ export function planLatestSdkExecution(latestRevision: string, pinnedRevision?: 
 }
 
 export function resolveRealmDirectoryArgs(args: readonly string[], cwd = process.cwd()): RealmDirectoryInvocation {
-  const command = args[0] === "registration-url" ? "registration-url" : "run";
-  const directoryArgument = command === "registration-url" ? args[1] : args[0];
-  if ((command === "run" && args.length !== 1) || (command === "registration-url" && args.length !== 2) || !directoryArgument) {
-    throw new TypeError("Usage: start-realm <realm-directory> | start-realm registration-url <realm-directory>");
+  const forcePriorDirectory = args[0] === "--force";
+  const effectiveArgs = forcePriorDirectory ? args.slice(1) : args;
+  const command = effectiveArgs[0] === "registration-url" ? "registration-url" : "run";
+  const directoryArgument = command === "registration-url" ? effectiveArgs[1] : effectiveArgs[0];
+  if ((command === "run" && effectiveArgs.length !== 1)
+    || (command === "registration-url" && effectiveArgs.length !== 2)
+    || (command === "registration-url" && forcePriorDirectory)
+    || !directoryArgument) {
+    throw new TypeError("Usage: start-realm [--force] <realm-directory> | start-realm registration-url <realm-directory>");
   }
   if (directoryArgument.split(/[\\/]/u).some((component) => component === "..")) {
     throw new TypeError("Realm directory name must not contain parent traversal");
@@ -32,7 +37,7 @@ export function resolveRealmDirectoryArgs(args: readonly string[], cwd = process
   const realmDirectory = resolve(cwd, directoryArgument);
   const realmId = basename(realmDirectory);
   if (!REALM_ID.test(realmId)) throw new TypeError("Realm directory name must be a valid Realm ID");
-  return Object.freeze({ command, realmDirectory, configPath: join(realmDirectory, CONFIG_NAME) });
+  return Object.freeze({ command, realmDirectory, configPath: join(realmDirectory, CONFIG_NAME), forcePriorDirectory });
 }
 
 function realmName(id: string): string {
