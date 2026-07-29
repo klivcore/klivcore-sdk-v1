@@ -26928,6 +26928,7 @@ function BenchViewport({
   onTextFilePathChange,
   nestedElementOpacity = 1,
   scenario: scene,
+  showScenarioHeader = true,
   viewportPersistenceKey,
   viewportResetKey,
   viewportOverlayControls,
@@ -28088,8 +28089,9 @@ function BenchViewport({
   return /* @__PURE__ */ jsx_runtime19.jsxs("main", {
     className: "flex h-screen flex-col bg-slate-950 text-slate-100",
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsxs("header", {
+      showScenarioHeader ? /* @__PURE__ */ jsx_runtime19.jsxs("header", {
         className: "flex h-16 shrink-0 items-center justify-between gap-2 border-b border-slate-800 px-2 sm:gap-3 sm:px-4",
+        "data-bench-viewport-scenario-header": "true",
         children: [
           /* @__PURE__ */ jsx_runtime19.jsxs("div", {
             className: "min-w-0 flex-1",
@@ -28202,14 +28204,6 @@ function BenchViewport({
                 ]
               }),
               /* @__PURE__ */ jsx_runtime19.jsx("button", {
-                "aria-label": "Fit contents",
-                className: "flex h-8 w-8 items-center justify-center rounded-lg border border-slate-700 text-lg hover:border-cyan-400",
-                onClick: fitToContents,
-                title: "Fit contents",
-                type: "button",
-                children: "⛶"
-              }),
-              /* @__PURE__ */ jsx_runtime19.jsx("button", {
                 "aria-label": `Motion mode: ${motionMode}`,
                 "aria-pressed": motionMode !== "off",
                 className: `flex h-8 w-8 items-center justify-center rounded-lg border text-base sm:hidden ${motionMode !== "off" ? "border-cyan-300 bg-cyan-300 text-slate-950" : "border-slate-700 hover:border-cyan-400"}`,
@@ -28221,7 +28215,7 @@ function BenchViewport({
             ]
           })
         ]
-      }),
+      }) : null,
       /* @__PURE__ */ jsx_runtime19.jsxs("section", {
         ref: viewportRef,
         className: "relative flex-1 cursor-grab touch-none select-none overflow-hidden overscroll-none bg-slate-950 active:cursor-grabbing",
@@ -28418,6 +28412,28 @@ function BenchViewport({
           }, { commitAfterIdle: true, deferUi: true });
         },
         children: [
+          !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime19.jsx("nav", {
+            "aria-label": "Bench path",
+            className: "absolute left-20 top-12 z-50 flex max-w-[calc(100%-6rem)] min-w-0 items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-14 sm:text-xs",
+            "data-workbench-viewport-controls": "true",
+            children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime19.jsxs(jsx_runtime19.Fragment, {
+              children: [
+                index2 > 0 ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  className: "text-slate-600",
+                  children: "/"
+                }) : null,
+                item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime19.jsx("span", {
+                  className: "truncate text-slate-300",
+                  children: item.label
+                }) : /* @__PURE__ */ jsx_runtime19.jsx("button", {
+                  className: "truncate text-cyan-300 hover:text-cyan-200",
+                  onClick: item.onClick,
+                  type: "button",
+                  children: item.label
+                })
+              ]
+            }, `${item.path}:${index2}`))
+          }) : null,
           /* @__PURE__ */ jsx_runtime19.jsxs(ViewportTransformLayer, {
             layerRef: transformLayerRef,
             children: [
@@ -28525,6 +28541,7 @@ function BenchViewport({
             })
           }) : null,
           /* @__PURE__ */ jsx_runtime19.jsx(ViewportMinimap, {
+            onFitContents: fitToContents,
             previewImage: minimapPreview,
             quickAccess: [
               ...actorPanel && quickAccessActorId ? [{
@@ -29539,6 +29556,7 @@ function offsetPointBySide(point, distance) {
   return { x: point.x, y: point.y + distance };
 }
 function ViewportMinimap({
+  onFitContents,
   previewImage,
   quickAccess,
   sceneBounds,
@@ -29555,42 +29573,56 @@ function ViewportMinimap({
   const indicator = getMinimapViewportIndicatorRect(viewport, viewportSize, sceneBounds, { height: minimapHeight, width: minimapWidth });
   const { contentHeight, contentLeft: offsetX, contentTop: offsetY, contentWidth, height: rectHeight, left: rectLeft, top: rectTop, width: rectWidth } = indicator;
   return /* @__PURE__ */ jsx_runtime19.jsxs("div", {
-    className: "pointer-events-none absolute right-2 top-2 flex flex-col gap-2 sm:right-4 sm:top-4",
+    className: "pointer-events-none absolute right-2 top-2 flex items-start gap-2 sm:right-4 sm:top-4",
     "data-workbench-viewport-controls": "true",
     children: [
-      /* @__PURE__ */ jsx_runtime19.jsx("div", {
-        className: "rounded-md border border-slate-300/50 bg-slate-950/70 p-1",
-        children: /* @__PURE__ */ jsx_runtime19.jsxs("div", {
-          className: "relative overflow-hidden rounded-sm bg-slate-900",
-          style: { height: minimapHeight, width: minimapWidth },
-          children: [
-            /* @__PURE__ */ jsx_runtime19.jsx("div", {
-              className: "absolute bg-cover bg-center",
-              style: {
-                backgroundImage: createPreviewBackgroundImage(previewImage),
-                height: contentHeight,
-                left: offsetX,
-                top: offsetY,
-                width: contentWidth
-              }
-            }),
-            /* @__PURE__ */ jsx_runtime19.jsx("div", {
-              className: "absolute z-10 border-2 border-yellow-300 bg-yellow-200/10 shadow-[0_0_14px_rgba(253,224,71,0.85)]",
-              style: { height: rectHeight, left: rectLeft, top: rectTop, width: rectWidth }
-            })
-          ]
-        })
-      }),
-      quickAccess?.map((item) => /* @__PURE__ */ jsx_runtime19.jsxs("button", {
-        "aria-label": item.ariaLabel,
-        className: "pointer-events-auto flex items-center justify-center gap-2 rounded-md border border-cyan-300/50 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-cyan-200 shadow-lg hover:border-cyan-200 hover:bg-slate-900",
-        onClick: item.onOpen,
+      onFitContents ? /* @__PURE__ */ jsx_runtime19.jsx("button", {
+        "aria-label": "Fit contents",
+        className: "pointer-events-auto flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-slate-700 bg-slate-950/90 text-lg text-slate-100 shadow-lg hover:border-cyan-400",
+        onClick: onFitContents,
+        title: "Fit contents",
         type: "button",
+        children: "⛶"
+      }) : null,
+      /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+        className: "flex flex-col gap-2",
         children: [
-          item.label,
-          item.adornment
+          /* @__PURE__ */ jsx_runtime19.jsx("div", {
+            className: "rounded-md border border-slate-300/50 bg-slate-950/70 p-1",
+            "data-workbench-minimap": "true",
+            children: /* @__PURE__ */ jsx_runtime19.jsxs("div", {
+              className: "relative overflow-hidden rounded-sm bg-slate-900",
+              style: { height: minimapHeight, width: minimapWidth },
+              children: [
+                /* @__PURE__ */ jsx_runtime19.jsx("div", {
+                  className: "absolute bg-cover bg-center",
+                  style: {
+                    backgroundImage: createPreviewBackgroundImage(previewImage),
+                    height: contentHeight,
+                    left: offsetX,
+                    top: offsetY,
+                    width: contentWidth
+                  }
+                }),
+                /* @__PURE__ */ jsx_runtime19.jsx("div", {
+                  className: "absolute z-10 border-2 border-yellow-300 bg-yellow-200/10 shadow-[0_0_14px_rgba(253,224,71,0.85)]",
+                  style: { height: rectHeight, left: rectLeft, top: rectTop, width: rectWidth }
+                })
+              ]
+            })
+          }),
+          quickAccess?.map((item) => /* @__PURE__ */ jsx_runtime19.jsxs("button", {
+            "aria-label": item.ariaLabel,
+            className: "pointer-events-auto flex items-center justify-center gap-2 rounded-md border border-cyan-300/50 bg-slate-950/90 px-3 py-2 text-xs font-semibold text-cyan-200 shadow-lg hover:border-cyan-200 hover:bg-slate-900",
+            onClick: item.onOpen,
+            type: "button",
+            children: [
+              item.label,
+              item.adornment
+            ]
+          }, item.ariaLabel))
         ]
-      }, item.ariaLabel))
+      })
     ]
   });
 }
@@ -33138,6 +33170,12 @@ function setStoredBenchPreviewFormat(storage, key, value) {
 function isWorkbenchDebugControlsEnabled(href) {
   return href.includes("debug");
 }
+function shouldShowWorkbenchScenarioHeader(scenarioId) {
+  return scenarioId !== "native";
+}
+function getWorkbenchNavigationPlacementClassName() {
+  return "absolute left-20 top-2 z-50 rounded bg-slate-950/80 px-2 py-1 text-xs text-slate-200 shadow-lg sm:top-4";
+}
 function createBenchDebugPanelState(debugControlsEnabled, menuRequested, debugPanelRequested) {
   const menuOpen = debugControlsEnabled && menuRequested;
   return {
@@ -35050,7 +35088,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         ]
       }) : null,
       bootstrapSources && !debugPanelState.menuButtonVisible ? /* @__PURE__ */ jsx_runtime23.jsxs("div", {
-        className: "absolute left-12 top-2 z-50 rounded bg-slate-950/80 px-2 py-1 text-xs text-slate-200 shadow-lg sm:left-16 sm:top-4",
+        className: getWorkbenchNavigationPlacementClassName(),
         "data-workbench-bootstrap": "ready",
         "data-workbench-source-count": bootstrapSources.length,
         "data-workbench-source-ids": bootstrapSources.map((source) => source.id).join(","),
@@ -35481,6 +35519,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       onTextFileList: vaultFiles.listFiles,
       onTextFilePathChange: handleTextFilePathChange,
       scenario: visibleScenario,
+      showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
       viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
       viewportOverlayControls: /* @__PURE__ */ jsx_runtime23.jsxs(jsx_runtime23.Fragment, {
         children: [

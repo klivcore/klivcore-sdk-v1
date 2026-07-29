@@ -13,38 +13,38 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 116043,
-      "sha256": "78b8781c325987b7c09862c728623cbd9d68ba5a1575741c6a6ed9c95c847972",
+      "bytes": 116065,
+      "sha256": "84e56ed91a02f92751377cc5dbd060e74454b5438a7a24b9c83dd8352f0e3ef7",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.css",
-      "bytes": 37711,
-      "sha256": "02328176fb9d167f05e563b0c573922e82c3f0ec4d1443f723a94aea8e56a733",
+      "bytes": 37805,
+      "sha256": "7696c41677927a769eaee55b619681e1939cdd8e48f4167dc79d995a10d59097",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1604212,
-      "sha256": "d2cb1082e445889abd2e37a3b16a1487f45fdaf6db31f2646271af79ac3d510d",
+      "bytes": 1606024,
+      "sha256": "9591d66d1c157f2684e5d7c8c7a99e0b52c6c51a31bf69a348a7e35c40651d84",
       "mode": 420
     },
     {
       "path": "debug/assets/directory-scene.css",
-      "bytes": 37711,
-      "sha256": "02328176fb9d167f05e563b0c573922e82c3f0ec4d1443f723a94aea8e56a733",
+      "bytes": 37805,
+      "sha256": "7696c41677927a769eaee55b619681e1939cdd8e48f4167dc79d995a10d59097",
       "mode": 420
     },
     {
       "path": "debug/assets/directory-scene.js",
-      "bytes": 1614918,
-      "sha256": "b92c18e6f10a15e4fde7f7917056da33930cb04dfbdcb20f64b2715efcbd981d",
+      "bytes": 1616730,
+      "sha256": "ad3f224d35799612768537a61a513f6aef8fc39071926e5dc0f9719d70578844",
       "mode": 420
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 9788,
-      "sha256": "4756d1b01be110b0f9b7716ccfee8eb019cd361bbe923c9075af49c174737b74",
+      "bytes": 10276,
+      "sha256": "d0f96c6044f04da2bb8f55f55f4208afce4db9cd08c0d2c1ee9abbb06545179f",
       "mode": 420
     },
     {
@@ -55,14 +55,14 @@
     },
     {
       "path": "ui/debug-index.css",
-      "bytes": 37711,
-      "sha256": "02328176fb9d167f05e563b0c573922e82c3f0ec4d1443f723a94aea8e56a733",
+      "bytes": 37805,
+      "sha256": "7696c41677927a769eaee55b619681e1939cdd8e48f4167dc79d995a10d59097",
       "mode": 420
     },
     {
       "path": "ui/debug-index.js",
-      "bytes": 532329,
-      "sha256": "9b142fabe1db2b16236618a178c029093aaaa3f28b07b2188e106b2da9b0eb18",
+      "bytes": 532351,
+      "sha256": "6387619ea63f61a5c8a79caa126854bb6d10acae2ebf3b461a3a1f60161a80eb",
       "mode": 420
     },
     {
@@ -79,14 +79,14 @@
     },
     {
       "path": "ui/main.css",
-      "bytes": 33165,
-      "sha256": "ca98e4f1b9907f129af615a73b70b8fb5e0411988382b4a82c1caa1afdd1441d",
+      "bytes": 33301,
+      "sha256": "db29a2de8527ae0fbc5babda4952257329d164df189a99599f8005d4736c6cd1",
       "mode": 420
     },
     {
       "path": "ui/main.js",
-      "bytes": 1928264,
-      "sha256": "cf6cc08159088cd69a84cc27237c4f1b9f0e169faf44317205d62f12f0abb63e",
+      "bytes": 1930318,
+      "sha256": "4f7128f6434fe5f043f704372696db8c7f74c5dde380bedcf4e3217720fb08f8",
       "mode": 420
     }
   ]

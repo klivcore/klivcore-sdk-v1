@@ -327,6 +327,23 @@
         "js": "ui/debug-loader.js",
         "css": "ui/debug-loader.css"
       }
+    },
+    {
+      "id": "debug-directory-scene-repeated-traversal",
+      "path": "/debug/directory-scene/repeated-traversal",
+      "title": "Workbench debug: Repeated traversal",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-directory-scene-repeated-traversal",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
     }
   ],
   "server": {
