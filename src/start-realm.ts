@@ -96,6 +96,7 @@ async function loadMountedGateways(): Promise<Readonly<{
         port: mount.port,
         requiredCapabilities: mount.manifest.server.requiredCapabilities,
         allowedRequests: mount.manifest.server.allowedRequests,
+        maxRequestBytes: mount.manifest.server.maxRequestBytes,
       }));
     }
   }

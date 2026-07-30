@@ -12,6 +12,7 @@ export type GatewayServer = Readonly<{
   requiredCapabilities: readonly string[];
   allowedRequests: readonly Readonly<{ method: "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE"; path?: string; pathPrefix?: string }>[];
   healthPath: string;
+  maxRequestBytes?: number;
 }>;
 export type GatewayManifest = Readonly<{
   schemaVersion: 1;
@@ -254,10 +255,12 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
   let server: GatewayServer | null = null;
   if (root.server !== null) {
     const rawServer = record(root.server);
-    if (!exact(rawServer, ["id", "process", "requiredCapabilities", "allowedRequests", "healthPath"])
+    const serverKeys = ["id", "process", "requiredCapabilities", "allowedRequests", "healthPath", ...(rawServer.maxRequestBytes === undefined ? [] : ["maxRequestBytes"])];
+    if (!exact(rawServer, serverKeys)
       || typeof rawServer.id !== "string" || !idPattern.test(rawServer.id)
       || typeof rawServer.process !== "string" || !processes.some((process) => process.role === rawServer.process)
-      || typeof rawServer.healthPath !== "string" || !apiPathPattern.test(rawServer.healthPath.replace(/^\/health$/u, "/v1/health"))) throw new TypeError("Gateway package contract is invalid");
+      || typeof rawServer.healthPath !== "string" || !apiPathPattern.test(rawServer.healthPath.replace(/^\/health$/u, "/v1/health"))
+      || (rawServer.maxRequestBytes !== undefined && (!Number.isSafeInteger(rawServer.maxRequestBytes) || (rawServer.maxRequestBytes as number) < 1 || (rawServer.maxRequestBytes as number) > 64 * 1024 * 1024))) throw new TypeError("Gateway package contract is invalid");
     const serverCapabilities = strings(rawServer.requiredCapabilities, capabilityPattern, 16);
     if (serverCapabilities.some((capability) => !capabilities.includes(capability)) || !Array.isArray(rawServer.allowedRequests) || rawServer.allowedRequests.length < 1 || rawServer.allowedRequests.length > 32) throw new TypeError("Gateway package contract is invalid");
     const allowedRequests = rawServer.allowedRequests.map((raw) => {
@@ -267,7 +270,7 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
         || hasPath === (rule.pathPrefix !== undefined) || !apiPathPattern.test((rule.path ?? rule.pathPrefix) as string)) throw new TypeError("Gateway package contract is invalid");
       return Object.freeze({ method: rule.method as "GET" | "HEAD" | "POST" | "PUT" | "PATCH" | "DELETE", ...(hasPath ? { path: rule.path as string } : { pathPrefix: rule.pathPrefix as string }) });
     });
-    server = Object.freeze({ id: rawServer.id, process: rawServer.process, requiredCapabilities: serverCapabilities, allowedRequests: Object.freeze(allowedRequests), healthPath: rawServer.healthPath as string });
+    server = Object.freeze({ id: rawServer.id, process: rawServer.process, requiredCapabilities: serverCapabilities, allowedRequests: Object.freeze(allowedRequests), healthPath: rawServer.healthPath as string, ...(rawServer.maxRequestBytes === undefined ? {} : { maxRequestBytes: rawServer.maxRequestBytes as number }) });
   }
   if (routes.some((route) => route.services.some((service) => service !== server?.id))) throw new TypeError("Gateway package contract is invalid");
   return Object.freeze({ schemaVersion: 1, contractVersion: 1, id: root.id, capabilities, routes: Object.freeze(routes), server, processes: Object.freeze(processes), ...(agentTools ? { agentTools } : {}) });

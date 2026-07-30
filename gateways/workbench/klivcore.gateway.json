@@ -319,7 +319,8 @@
         "pathPrefix": "/v1/components"
       }
     ],
-    "healthPath": "/health"
+    "healthPath": "/health",
+    "maxRequestBytes": 16777216
   },
   "processes": [
     {
