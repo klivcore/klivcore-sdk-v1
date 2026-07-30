@@ -1125,6 +1125,7 @@ type ManagedTunnelOptions = Readonly<{
   sessionName: string;
   workerMode: "tunnel" | "ssh-tunnel";
   label: string;
+  validateReusedPublicHealth?: (record: ManagedTunnelRecord) => Promise<void>;
 }>;
 
 async function readManagedTunnel(options: ManagedTunnelOptions): Promise<ManagedTunnelRecord> {
@@ -1153,9 +1154,26 @@ async function waitForManagedTunnel(options: ManagedTunnelOptions): Promise<Mana
 async function ensureManagedTunnel(options: ManagedTunnelOptions): Promise<ManagedTunnelRecord> {
   if (await tmuxExists(options.sessionName)) {
     const record = await readManagedTunnel(options);
-    await inspectReusableTmuxWorker(options.sessionName, realmWorkerExpectation(options.workerMode, record.pid));
-    console.log(`Reusing ${options.label} session: ${options.sessionName}`);
-    return waitForManagedTunnel(options);
+    const expectation = realmWorkerExpectation(options.workerMode, record.pid);
+    await inspectReusableTmuxWorker(options.sessionName, expectation);
+    if (options.validateReusedPublicHealth) {
+      try {
+        await waitForManagedPublicHealth({
+          probe: () => options.validateReusedPublicHealth!(record),
+          tunnelExitCode: () => processIsAlive(record.pid) ? null : -1,
+          timeoutMs: 10_000,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(`Replacing unhealthy ${options.label} session: ${message}`);
+        await stopOwnedTmuxSession(options.sessionName, expectation, options.label);
+        await rm(options.path, { force: true });
+      }
+    }
+    if (await tmuxExists(options.sessionName)) {
+      console.log(`Reusing ${options.label} session: ${options.sessionName}`);
+      return waitForManagedTunnel(options);
+    }
   }
   await rm(options.path, { force: true });
   console.log(`Starting ${options.label} session: ${options.sessionName}`);
@@ -1413,6 +1431,11 @@ const tunnel = config.publicOrigin ? undefined : await ensureManagedTunnel({
   sessionName: sessions.tunnel,
   workerMode: "tunnel",
   label: "managed Realm Quick Tunnel",
+  validateReusedPublicHealth: async (record) => {
+    try { await probeHealthInFreshBun(`http://127.0.0.1:${config.port}`, config.realm.id); }
+    catch { return; }
+    await probePublicHealth(record.publicOrigin, config.realm.id);
+  },
 });
 const publicOrigin = config.publicOrigin ?? tunnel!.publicOrigin;
 let sshTunnel: ManagedTunnelRecord | undefined;
@@ -1424,6 +1447,7 @@ if (config.desktop) {
     sessionName: sessions.sshTunnel,
     workerMode: "ssh-tunnel",
     label: "managed SSH Quick Tunnel",
+    validateReusedPublicHealth: (record) => probePublicHealth(record.publicOrigin, config.realm.id),
   });
   await waitForManagedPublicHealth({
     probe: () => probePublicHealth(sshTunnel!.publicOrigin, config.realm.id),

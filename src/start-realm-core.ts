@@ -706,6 +706,7 @@ export type ManagedPublicHealthWait = Readonly<{
   retryDelayMs?: number;
   reportAfterMs?: number;
   reportEveryMs?: number;
+  timeoutMs?: number;
   onWaiting?: (message: string) => void;
 }>;
 
@@ -714,7 +715,9 @@ export async function waitForManagedPublicHealth(input: ManagedPublicHealthWait)
   const now = input.now ?? Date.now;
   const retryDelayMs = input.retryDelayMs ?? 500;
   const reportEveryMs = input.reportEveryMs ?? 30_000;
+  const deadline = input.timeoutMs === undefined ? undefined : now() + input.timeoutMs;
   let nextReportAt = now() + (input.reportAfterMs ?? 45_000);
+  let lastError = "unreachable";
   while (true) {
     const exitCode = input.tunnelExitCode();
     if (exitCode !== null) throw new Error(`cloudflared exited before public health was ready (${exitCode})`);
@@ -723,8 +726,12 @@ export async function waitForManagedPublicHealth(input: ManagedPublicHealthWait)
       return;
     } catch (error) {
       const current = now();
+      lastError = error instanceof Error ? error.message : String(error);
+      if (deadline !== undefined && current >= deadline) {
+        throw new Error(`managed public health did not become ready within ${input.timeoutMs}ms: ${lastError}`);
+      }
       if (current >= nextReportAt) {
-        input.onWaiting?.(error instanceof Error ? error.message : String(error));
+        input.onWaiting?.(lastError);
         nextReportAt = current + reportEveryMs;
       }
     }
