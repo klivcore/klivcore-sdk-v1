@@ -417,6 +417,7 @@ try {
   const publishedCapabilities = Object.freeze(["realm:view", ...mountedGateways.capabilities]);
   console.log(`Starting Realm on http://127.0.0.1:${config.port}...`);
   auth = createPasskeyAuth({
+    agentAccess: Object.freeze({ capabilities: publishedCapabilities }),
     branding,
     databasePath: resolve(stateDir, "auth.sqlite"),
     realmId: config.realm.id,
