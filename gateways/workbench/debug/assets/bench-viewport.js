@@ -27348,7 +27348,7 @@ function BenchViewport({
         children: [
           !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
             "aria-label": "Bench path",
-            className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
+            className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
             "data-workbench-viewport-controls": "true",
             children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
               children: [
