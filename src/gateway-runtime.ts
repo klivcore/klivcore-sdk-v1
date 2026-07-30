@@ -260,7 +260,7 @@ export function parseGatewayManifest(value: unknown): GatewayManifest {
       || typeof rawServer.id !== "string" || !idPattern.test(rawServer.id)
       || typeof rawServer.process !== "string" || !processes.some((process) => process.role === rawServer.process)
       || typeof rawServer.healthPath !== "string" || !apiPathPattern.test(rawServer.healthPath.replace(/^\/health$/u, "/v1/health"))
-      || (rawServer.maxRequestBytes !== undefined && (!Number.isSafeInteger(rawServer.maxRequestBytes) || (rawServer.maxRequestBytes as number) < 1 || (rawServer.maxRequestBytes as number) > 64 * 1024 * 1024))) throw new TypeError("Gateway package contract is invalid");
+      || (rawServer.maxRequestBytes !== undefined && (!Number.isSafeInteger(rawServer.maxRequestBytes) || (rawServer.maxRequestBytes as number) < 1 || (rawServer.maxRequestBytes as number) > 16 * 1024 * 1024))) throw new TypeError("Gateway package contract is invalid");
     const serverCapabilities = strings(rawServer.requiredCapabilities, capabilityPattern, 16);
     if (serverCapabilities.some((capability) => !capabilities.includes(capability)) || !Array.isArray(rawServer.allowedRequests) || rawServer.allowedRequests.length < 1 || rawServer.allowedRequests.length > 32) throw new TypeError("Gateway package contract is invalid");
     const allowedRequests = rawServer.allowedRequests.map((raw) => {

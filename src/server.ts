@@ -419,7 +419,7 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
     const maxRequestBytes = relay.maxRequestBytes ?? 64 * 1024;
     const timeoutMs = relay.timeoutMs ?? 10_000;
     if (!Number.isSafeInteger(maxMessageBytes) || maxMessageBytes < 1 || maxMessageBytes > 512 * 1024
-      || !Number.isSafeInteger(maxRequestBytes) || maxRequestBytes < 0 || maxRequestBytes > 1024 * 1024
+      || !Number.isSafeInteger(maxRequestBytes) || maxRequestBytes < 0 || maxRequestBytes > 16 * 1024 * 1024
       || !Number.isSafeInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 120_000) {
       throw new TypeError(`Realm HTTP relay ${index} limits are invalid`);
     }
