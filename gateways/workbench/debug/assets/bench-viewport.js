@@ -26339,7 +26339,7 @@ function BenchViewport({
       if (event.key !== "Delete")
         return;
       const activeElement2 = document.activeElement;
-      if (activeElement2 && isEditableElement(activeElement2))
+      if (isEditableInteractionEvent(event, activeElement2))
         return;
       const selectedEdgeId2 = selectedEdgeIdLatestRef.current;
       if (selectedEdgeId2) {
@@ -26359,7 +26359,7 @@ function BenchViewport({
   import_react9.useEffect(() => {
     async function handlePaste(event) {
       const activeElement2 = document.activeElement;
-      if (activeElement2 && isEditableElement(activeElement2))
+      if (isEditableInteractionEvent(event, activeElement2))
         return;
       const imageFile = getClipboardImageFile(event.clipboardData);
       if (imageFile && onImagePaste) {
@@ -29226,7 +29226,19 @@ function isIOSBrowser() {
   return /iPad|iPhone|iPod/.test(userAgent) || touchMac;
 }
 function isEditableElement(element) {
-  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || element.getAttribute("contenteditable") === "true";
+  if (element.matches?.("input, textarea, select"))
+    return true;
+  const editableElement = element;
+  if (typeof editableElement.isContentEditable === "boolean")
+    return editableElement.isContentEditable;
+  return Boolean(element.closest?.("[contenteditable]:not([contenteditable='false'])"));
+}
+function isEditableInteractionEvent(event, activeElement2) {
+  return [...event.composedPath(), event.target, activeElement2].some((target) => {
+    if (!target || typeof target !== "object")
+      return false;
+    return isEditableElement(target);
+  });
 }
 function blurActiveEditableInViewport(viewportNode) {
   const activeElement2 = document.activeElement;

@@ -27559,7 +27559,7 @@ function BenchViewport({
       if (event.key !== "Delete")
         return;
       const activeElement2 = document.activeElement;
-      if (activeElement2 && isEditableElement(activeElement2))
+      if (isEditableInteractionEvent(event, activeElement2))
         return;
       const selectedEdgeId2 = selectedEdgeIdLatestRef.current;
       if (selectedEdgeId2) {
@@ -27579,7 +27579,7 @@ function BenchViewport({
   import_react9.useEffect(() => {
     async function handlePaste(event) {
       const activeElement2 = document.activeElement;
-      if (activeElement2 && isEditableElement(activeElement2))
+      if (isEditableInteractionEvent(event, activeElement2))
         return;
       const imageFile = getClipboardImageFile(event.clipboardData);
       if (imageFile && onImagePaste) {
@@ -30454,7 +30454,19 @@ function isIOSBrowser() {
   return /iPad|iPhone|iPod/.test(userAgent) || touchMac;
 }
 function isEditableElement(element) {
-  return element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement || element.getAttribute("contenteditable") === "true";
+  if (element.matches?.("input, textarea, select"))
+    return true;
+  const editableElement = element;
+  if (typeof editableElement.isContentEditable === "boolean")
+    return editableElement.isContentEditable;
+  return Boolean(element.closest?.("[contenteditable]:not([contenteditable='false'])"));
+}
+function isEditableInteractionEvent(event, activeElement2) {
+  return [...event.composedPath(), event.target, activeElement2].some((target) => {
+    if (!target || typeof target !== "object")
+      return false;
+    return isEditableElement(target);
+  });
 }
 function blurActiveEditableInViewport(viewportNode) {
   const activeElement2 = document.activeElement;
@@ -33184,6 +33196,9 @@ function createOpenedBenchStack(stack, currentPath, element) {
 function createActiveBenchAncestorPaths(_activePath, _stack) {
   return [];
 }
+function createActiveBenchLoadKey(activePath, _stack) {
+  return activePath;
+}
 function shouldSkipBenchBreadcrumbClick(_activeBenchPath, stack, stackIndex) {
   return stackIndex >= stack.length;
 }
@@ -34130,6 +34145,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   }, [benchNavigationStorageKey, benchPath]);
   const [activeBenchPath, setActiveBenchPath] = import_react13.useState(restoredBenchNavigation?.activeBenchPath ?? benchPath);
   const [activeBenchStack, setActiveBenchStack] = import_react13.useState(restoredBenchNavigation?.activeBenchStack ?? []);
+  const activeBenchLoadKey = createActiveBenchLoadKey(activeBenchPath, activeBenchStack);
   const [focusElementId, setFocusElementId] = import_react13.useState();
   const [focusViewportSource, setFocusViewportSource] = import_react13.useState();
   const [openViewportSource, setOpenViewportSource] = import_react13.useState();
@@ -34198,7 +34214,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     directoryHydrationGenerationRef.current += 1;
     let cancelled = false;
-    loadMainBenchRuntime(activeBenchPath, scenarioId, createActiveBenchAncestorPaths(activeBenchPath, activeBenchStack), benchPreviewFormat, vaultFiles, 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
+    loadMainBenchRuntime(activeBenchLoadKey, scenarioId, [], benchPreviewFormat, vaultFiles, 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
       if (cancelled)
         return;
       restoredNestedNavigationPendingRef.current = false;
@@ -34217,7 +34233,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       setShowActivePreviewSvg(false);
       setActivePreviewJpgOverlay(null);
       setShowActivePreviewJpg(false);
-      setStatus(`Loaded ${activeBenchPath} from the main vault.`);
+      setStatus(`Loaded ${activeBenchLoadKey} from the main vault.`);
     }).catch((caught) => {
       if (cancelled)
         return;
@@ -34237,7 +34253,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchPath, activeBenchStack, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
+  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
   import_react13.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
