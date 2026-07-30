@@ -14251,6 +14251,14 @@ var jsx_runtime12 = __toESM(require_jsx_runtime(), 1);
 function getImageObjectFitClass() {
   return "object-contain";
 }
+function createImageElementSource(element) {
+  if (element.src)
+    return element.src;
+  if (!element.path)
+    return;
+  const vaultId = element.vaultId ?? "main";
+  return `/api/workbench/vaults/${encodeURIComponent(vaultId)}/file?path=${encodeURIComponent(element.path)}&raw=1`;
+}
 function getImageNodeWrapperError(element) {
   return element.uploading ? undefined : element.error;
 }
@@ -14315,7 +14323,7 @@ var imageElementType = {
     return element.width;
   },
   render({ activeEdgeHandleSide, edgeHandles, element, isSelected, lodPreviewImage, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementSelect, selectedCount, viewportZoom }) {
-    const source = element.src ?? (element.path ? `/api/workbench/vaults/main/file?path=${encodeURIComponent(element.path)}&raw=1` : undefined);
+    const source = createImageElementSource(element);
     const renderedScale = getTextContentRenderedScale(viewportZoom, element.benchTransform?.scale);
     const src = element.uploading ? source : renderedScale < TEXT_CONTENT_INTERACTION_ZOOM && lodPreviewImage ? lodPreviewImage : shouldRenderImageSource(element, viewportZoom) ? source : undefined;
     const uploadLabel = getImageUploadLabel(element);
