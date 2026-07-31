@@ -281,6 +281,13 @@ export function tmuxStopResultIsSafe(exitCode: number, sessionStillExists: boole
   return exitCode === 0 || !sessionStillExists;
 }
 
+export function tmuxSessionListResultIsEmpty(exitCode: number, stderr: string): boolean {
+  if (exitCode !== 1) return false;
+  const message = stderr.trim();
+  return /no server running|no sessions/u.test(message)
+    || /^error connecting to .+ \(No such file or directory\)$/u.test(message);
+}
+
 export function isOwnedRealmWorkerCommand(
   argv: readonly string[],
   executablePath: string,

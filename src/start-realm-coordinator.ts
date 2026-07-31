@@ -26,6 +26,7 @@ import {
   renderLoopbackSshdDropIn,
   startRealmSessionNames,
   terminateExactManagedProcess,
+  tmuxSessionListResultIsEmpty,
   tmuxStopResultIsSafe,
   waitForManagedPublicHealth,
   type ManagedProcessExpectation,
@@ -146,7 +147,7 @@ async function tmuxExists(sessionName: string): Promise<boolean> {
 
 async function tmuxSessionNames(): Promise<readonly string[]> {
   const result = await tmux(["list-sessions", "-F", "#{session_name}"]);
-  if (result.code === 1 && /no server running|no sessions/u.test(result.stderr)) return Object.freeze([]);
+  if (tmuxSessionListResultIsEmpty(result.code, result.stderr)) return Object.freeze([]);
   if (result.code !== 0) throw new Error(result.stderr.trim() || "failed to list tmux sessions");
   const names = result.stdout.trim() ? result.stdout.trim().split("\n") : [];
   if (names.length > 128 || names.some((name) => !/^[A-Za-z0-9_.-]{1,128}$/u.test(name))) {
