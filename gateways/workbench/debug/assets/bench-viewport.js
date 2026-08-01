@@ -28016,7 +28016,7 @@ function ActorInteractionPanel({
       }),
       /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
         "aria-label": `${actor.label} details`,
-        className: "absolute right-4 top-4 z-[90] flex max-h-[calc(100%-2rem)] w-[min(32rem,calc(100%-2rem))] flex-col rounded-lg border border-cyan-400/30 bg-slate-950/95 p-4 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur",
+        className: `${actorPanel ? "h-[calc(100%-2rem)]" : "max-h-[calc(100%-2rem)]"} nopan nowheel absolute right-4 top-4 z-[90] flex w-[min(32rem,calc(100%-2rem))] flex-col rounded-lg border border-cyan-400/30 bg-slate-950/95 p-4 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur`,
         "data-workbench-viewport-controls": "true",
         onClick: (event) => event.stopPropagation(),
         onContextMenu: (event) => event.stopPropagation(),
