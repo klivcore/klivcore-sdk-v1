@@ -13088,15 +13088,89 @@ function resolveAlignedCoordinate(origin, size, alignment, offset) {
 
 // packages/react/src/elementTypes/NodeWrapper.tsx
 var jsx_runtime4 = __toESM(require_jsx_runtime(), 1);
-var WORKBENCH_EDGE_Z_INDEX = 20;
+var WORKBENCH_STACK_BAND_SIZE = 1e7;
+var WORKBENCH_GROUP_STACK_BAND = 1;
+var WORKBENCH_CONTENT_STACK_BAND = 3;
+var WORKBENCH_COMMENT_STACK_BAND = 4;
+var WORKBENCH_ACTOR_STACK_BAND = 6;
+var WORKBENCH_EDGE_Z_INDEX = 2 * WORKBENCH_STACK_BAND_SIZE;
+var WORKBENCH_ACTIVITY_HIGHLIGHT_Z_INDEX = 5 * WORKBENCH_STACK_BAND_SIZE;
+var WORKBENCH_INTERACTION_OVERLAY_Z_INDEX = 7 * WORKBENCH_STACK_BAND_SIZE;
+function getWorkbenchElementStackBand(element) {
+  if (element.kind === "group")
+    return WORKBENCH_GROUP_STACK_BAND;
+  if (element.kind === "comment")
+    return WORKBENCH_COMMENT_STACK_BAND;
+  if (element.kind === "actor")
+    return WORKBENCH_ACTOR_STACK_BAND;
+  return WORKBENCH_CONTENT_STACK_BAND;
+}
+function createWorkbenchElementZIndexMap(elements) {
+  const hasParentRelationships = elements.some((element) => ("parentId" in element) && Boolean(element.parentId));
+  if (!hasParentRelationships) {
+    const flatStackIndices = new Map;
+    elements.forEach((element, index2) => {
+      flatStackIndices.set(element.id, getWorkbenchElementStackBand(element) * WORKBENCH_STACK_BAND_SIZE + index2);
+    });
+    return flatStackIndices;
+  }
+  const byId = new Map(elements.map((element) => [element.id, element]));
+  const sourceIndexById = new Map(elements.map((element, index2) => [element.id, index2]));
+  const resolvedRanks = new Map;
+  const resolvedBands = new Map;
+  const resolving = new Set;
+  const resolvingBands = new Set;
+  function resolveRank(element) {
+    const cached = resolvedRanks.get(element.id);
+    if (cached !== undefined)
+      return cached;
+    const sourceIndex = sourceIndexById.get(element.id) ?? 0;
+    if (!("parentId" in element) || !element.parentId || resolving.has(element.id)) {
+      resolvedRanks.set(element.id, sourceIndex);
+      return sourceIndex;
+    }
+    const parent = byId.get(element.parentId);
+    if (!parent) {
+      resolvedRanks.set(element.id, sourceIndex);
+      return sourceIndex;
+    }
+    resolving.add(element.id);
+    const rank = Math.max(sourceIndex, resolveRank(parent) + 1);
+    resolving.delete(element.id);
+    resolvedRanks.set(element.id, rank);
+    return rank;
+  }
+  function resolveBand(element) {
+    const cached = resolvedBands.get(element.id);
+    if (cached !== undefined)
+      return cached;
+    const ownBand = getWorkbenchElementStackBand(element);
+    if (!("parentId" in element) || !element.parentId || resolvingBands.has(element.id)) {
+      resolvedBands.set(element.id, ownBand);
+      return ownBand;
+    }
+    const parent = byId.get(element.parentId);
+    if (!parent) {
+      resolvedBands.set(element.id, ownBand);
+      return ownBand;
+    }
+    resolvingBands.add(element.id);
+    const band = Math.max(ownBand, resolveBand(parent));
+    resolvingBands.delete(element.id);
+    resolvedBands.set(element.id, band);
+    return band;
+  }
+  const orderedElements = elements.slice().sort((left, right) => resolveRank(left) - resolveRank(right) || (sourceIndexById.get(left.id) ?? 0) - (sourceIndexById.get(right.id) ?? 0));
+  const stackIndices = new Map;
+  orderedElements.forEach((element, index2) => stackIndices.set(element.id, resolveBand(element) * WORKBENCH_STACK_BAND_SIZE + index2));
+  return stackIndices;
+}
 function resizeWrappedNodeElement(current, startElement, delta, options2) {
   const resizedFrame = snapNodeFrame({ ...startElement, height: startElement.height + delta.dy, width: startElement.width + delta.dx }, options2);
   return { ...current, height: resizedFrame.height, width: resizedFrame.width };
 }
 function getNodeWrapperZIndex(element) {
-  if (element.kind === "group")
-    return 10;
-  return element.kind === "comment" ? 40 : 30;
+  return getWorkbenchElementStackBand(element) * WORKBENCH_STACK_BAND_SIZE;
 }
 function getNodeWrapperInteractionClassName(element) {
   return `group absolute text-xs${element.kind === "component" ? " nopan nowheel" : ""}`;
@@ -29005,8 +29079,9 @@ function ActorActivityHighlightLayer({ edges = [], elements = [], focusedActionK
   }
   return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     "aria-hidden": "true",
-    className: "pointer-events-none absolute inset-0 z-[55]",
+    className: "pointer-events-none absolute inset-0",
     "data-actor-activity-highlight-layer": "true",
+    style: { zIndex: WORKBENCH_ACTIVITY_HIGHLIGHT_Z_INDEX },
     children: [...highlights.values()].flatMap((highlight) => {
       const bounds = getActorActivityLineBounds(highlight.target, { color: highlight.color, endLine: highlight.endLine, kind: "read", occurredAt: "", startLine: highlight.startLine });
       if (!bounds)
@@ -30031,6 +30106,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   wireframeLabels
 }) {
   const commentParentTargetFrame = getCommentParentTargetFrame(elements, highlightedGroupId);
+  const elementZIndexes = import_react9.useMemo(() => createWorkbenchElementZIndexMap(elements), [elements]);
   return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
     children: [
       renderPlan.map((item) => {
@@ -30054,8 +30130,10 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         const elementOpacity = item.element.id.includes("::") ? nestedElementOpacity : 1;
         if (wireframe && item.element.kind !== "actor") {
           return /* @__PURE__ */ jsx_runtime20.jsx("div", {
+            className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
             "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
-            style: { opacity: elementOpacity },
+            "data-workbench-stack-index": elementZIndexes.get(item.element.id),
+            style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
             children: /* @__PURE__ */ jsx_runtime20.jsx(WireframeElement, {
               element: item.element,
               label: wireframeLabels?.get(item.element.id) ?? getWireframeAssetLabel(item.element),
@@ -30064,8 +30142,10 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           }, item.element.id);
         }
         return /* @__PURE__ */ jsx_runtime20.jsx("div", {
+          className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
-          style: { opacity: elementOpacity },
+          "data-workbench-stack-index": elementZIndexes.get(item.element.id),
+          style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
             element: item.element,
             children: /* @__PURE__ */ jsx_runtime20.jsx(ViewportElement, {
@@ -30099,7 +30179,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
       }),
       commentParentTargetFrame ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
         "aria-hidden": "true",
-        className: "pointer-events-none absolute z-[60] rounded border-solid border-emerald-300 bg-emerald-300/10",
+        className: "pointer-events-none absolute rounded border-solid border-emerald-300 bg-emerald-300/10",
         "data-comment-parent-drop-target": commentParentTargetFrame.id,
         style: {
           borderWidth: 2 / Math.max(0.0001, viewportZoom),
@@ -30107,7 +30187,8 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           height: commentParentTargetFrame.height,
           left: commentParentTargetFrame.x,
           top: commentParentTargetFrame.y,
-          width: commentParentTargetFrame.width
+          width: commentParentTargetFrame.width,
+          zIndex: WORKBENCH_INTERACTION_OVERLAY_Z_INDEX
         }
       }) : null
     ]
