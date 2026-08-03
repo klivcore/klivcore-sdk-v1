@@ -14026,7 +14026,7 @@ function getTextContentRenderedScale(viewportZoom, benchScale = 1) {
   return viewportZoom * benchScale;
 }
 function shouldCaptureTextWheel(state) {
-  if (state.viewportZoom < TEXT_CONTENT_INTERACTION_ZOOM || !state.isFocused)
+  if (state.ctrlKey)
     return false;
   if (state.scrollHeight <= state.clientHeight || state.deltaY === 0)
     return false;
@@ -14038,6 +14038,7 @@ function routeTextWheel(event, viewportZoom) {
   const target = event.currentTarget;
   if (shouldCaptureTextWheel({
     clientHeight: target.clientHeight,
+    ctrlKey: event.ctrlKey,
     deltaY: event.deltaY,
     isFocused: target === target.ownerDocument.activeElement,
     scrollHeight: target.scrollHeight,
@@ -26481,6 +26482,15 @@ function createViewportPersistenceController({
 function shouldStartMouseSelection(event) {
   return event.pointerType === "mouse" && event.button === 0 && event.shiftKey;
 }
+function shouldCanvasControlPointerOverride(event) {
+  return event.pointerType === "mouse" && event.button === 0 && event.ctrlKey;
+}
+function shouldCanvasControlClickOverride(event) {
+  return event.button === 0 && event.ctrlKey;
+}
+function shouldHandleViewportWheel(event, isNoWheelTarget) {
+  return event.ctrlKey || !isNoWheelTarget;
+}
 function shouldClearViewportSelectionForEvent(event) {
   return event.type === "pointerdown";
 }
@@ -28314,6 +28324,52 @@ function BenchViewport({
       return;
     setViewport(getViewportForActorActivityTarget(target, rect));
   }
+  function startViewportPointerInteraction(event) {
+    blurActiveEditableInViewport(event.currentTarget);
+    event.preventDefault();
+    recordLastPastePoint(event.clientX, event.clientY);
+    setAddNodeMenu(null);
+    clearLongPressTimer();
+    if (event.pointerType === "touch") {
+      longPressStartRef.current = { pointerId: event.pointerId, screenX: event.clientX, screenY: event.clientY };
+      longPressTimerRef.current = window.setTimeout(() => {
+        openAddNodeMenu(event.clientX, event.clientY);
+        longPressTimerRef.current = null;
+      }, 550);
+    }
+    if (event.pointerType === "touch" && motionMode !== "off") {
+      motionPausedByTouchRef.current = true;
+      recalibrateMotionAnchor();
+    }
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {}
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (shouldStartMouseSelection(event)) {
+      const point = getWorldPoint(event.clientX, event.clientY);
+      if (point) {
+        const drag = {
+          currentScreenX: point.screenX,
+          currentScreenY: point.screenY,
+          currentWorldX: point.worldX,
+          currentWorldY: point.worldY,
+          pointerId: event.pointerId,
+          startScreenX: point.screenX,
+          startScreenY: point.screenY,
+          startWorldX: point.worldX,
+          startWorldY: point.worldY
+        };
+        setSelectionDrag(drag);
+        selectionDragRef.current = drag;
+        setSelectedIds(new Set);
+        selectedIdsLatestRef.current = new Set;
+      }
+      dragRef.current = null;
+    } else {
+      dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    }
+    pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
+  }
   return /* @__PURE__ */ jsx_runtime20.jsxs("main", {
     className: "flex h-screen flex-col bg-slate-950 text-slate-100",
     children: [
@@ -28449,9 +28505,24 @@ function BenchViewport({
         className: "relative flex-1 cursor-grab touch-none select-none overflow-hidden overscroll-none bg-slate-950 active:cursor-grabbing",
         onDoubleClick: (event) => {
           event.preventDefault();
+          if (event.ctrlKey)
+            return;
           openAddNodeMenu(event.clientX, event.clientY);
         },
+        onClickCapture: (event) => {
+          if (!shouldCanvasControlClickOverride(event))
+            return;
+          event.preventDefault();
+          event.stopPropagation();
+        },
         onPointerDownCapture: (event) => {
+          if (shouldCanvasControlPointerOverride(event)) {
+            blurActiveEditableInViewport(event.currentTarget);
+            clearViewportSelection();
+            startViewportPointerInteraction(event);
+            event.stopPropagation();
+            return;
+          }
           if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
             return;
           blurActiveEditableInViewport(event.currentTarget);
@@ -28460,50 +28531,7 @@ function BenchViewport({
         onPointerDown: (event) => {
           if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
             return;
-          blurActiveEditableInViewport(event.currentTarget);
-          event.preventDefault();
-          recordLastPastePoint(event.clientX, event.clientY);
-          setAddNodeMenu(null);
-          clearLongPressTimer();
-          if (event.pointerType === "touch") {
-            longPressStartRef.current = { pointerId: event.pointerId, screenX: event.clientX, screenY: event.clientY };
-            longPressTimerRef.current = window.setTimeout(() => {
-              openAddNodeMenu(event.clientX, event.clientY);
-              longPressTimerRef.current = null;
-            }, 550);
-          }
-          if (event.pointerType === "touch" && motionMode !== "off") {
-            motionPausedByTouchRef.current = true;
-            recalibrateMotionAnchor();
-          }
-          try {
-            event.currentTarget.setPointerCapture(event.pointerId);
-          } catch {}
-          pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-          if (shouldStartMouseSelection(event)) {
-            const point = getWorldPoint(event.clientX, event.clientY);
-            if (point) {
-              const drag = {
-                currentScreenX: point.screenX,
-                currentScreenY: point.screenY,
-                currentWorldX: point.worldX,
-                currentWorldY: point.worldY,
-                pointerId: event.pointerId,
-                startScreenX: point.screenX,
-                startScreenY: point.screenY,
-                startWorldX: point.worldX,
-                startWorldY: point.worldY
-              };
-              setSelectionDrag(drag);
-              selectionDragRef.current = drag;
-              setSelectedIds(new Set);
-              selectedIdsLatestRef.current = new Set;
-            }
-            dragRef.current = null;
-          } else {
-            dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-          }
-          pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
+          startViewportPointerInteraction(event);
         },
         onPointerMove: (event) => {
           if (!pointersRef.current.has(event.pointerId)) {
@@ -28600,7 +28628,7 @@ function BenchViewport({
           }
         },
         onWheel: (event) => {
-          if (isWorkbenchNoWheelTarget(event.target))
+          if (!shouldHandleViewportWheel(event, isWorkbenchNoWheelTarget(event.target)))
             return;
           event.preventDefault();
           setEditorAutoFocusId(null);
