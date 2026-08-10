@@ -13966,6 +13966,7 @@ function CommentCollaborationPopup({ commentId }) {
 // packages/react/src/elementTypes/BufferedElementTextarea.tsx
 var import_react5 = __toESM(require_react(), 1);
 var jsx_runtime8 = __toESM(require_jsx_runtime(), 1);
+var BUFFERED_ELEMENT_TEXTAREA_COMMIT_DELAY_MS = 250;
 function blurActiveBufferedTextarea(ownerDocument = document) {
   const activeElement2 = ownerDocument.activeElement;
   if (activeElement2?.tagName === "TEXTAREA")
@@ -13980,18 +13981,35 @@ function BufferedElementTextarea({ onBlur, onCommit, onFocus, value, ...props })
   const committedValueRef = import_react5.useRef(value);
   const draftRef = import_react5.useRef(value);
   const focusedRef = import_react5.useRef(false);
+  const editedWhileFocusedRef = import_react5.useRef(false);
   const onCommitRef = import_react5.useRef(onCommit);
+  const commitTimerRef = import_react5.useRef(null);
   onCommitRef.current = onCommit;
+  function clearPendingCommit() {
+    if (commitTimerRef.current === null)
+      return;
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }
   function commitDraft() {
+    clearPendingCommit();
     const nextValue = draftRef.current;
     if (nextValue === committedValueRef.current)
       return;
     committedValueRef.current = nextValue;
     onCommitRef.current(nextValue);
   }
+  function scheduleDraftCommit(nextValue) {
+    clearPendingCommit();
+    if (nextValue === committedValueRef.current)
+      return;
+    commitTimerRef.current = window.setTimeout(commitDraft, BUFFERED_ELEMENT_TEXTAREA_COMMIT_DELAY_MS);
+  }
   import_react5.useEffect(() => {
     const previousValue = committedValueRef.current;
     if (value === previousValue)
+      return;
+    if (focusedRef.current && editedWhileFocusedRef.current && value !== draftRef.current)
       return;
     committedValueRef.current = value;
     if (focusedRef.current && draftRef.current !== previousValue)
@@ -14000,18 +14018,26 @@ function BufferedElementTextarea({ onBlur, onCommit, onFocus, value, ...props })
     setDraft(value);
   }, [value]);
   import_react5.useLayoutEffect(() => () => commitDraft(), []);
+  import_react5.useEffect(() => {
+    const commitBeforePageTeardown = () => commitDraft();
+    window.addEventListener("pagehide", commitBeforePageTeardown);
+    return () => window.removeEventListener("pagehide", commitBeforePageTeardown);
+  }, []);
   return /* @__PURE__ */ jsx_runtime8.jsx("textarea", {
     ...props,
     value: draft,
     onBlur: (event) => {
       focusedRef.current = false;
+      editedWhileFocusedRef.current = false;
       commitDraft();
       onBlur?.(event);
     },
     onChange: (event) => {
       const nextValue = event.currentTarget.value;
+      editedWhileFocusedRef.current = true;
       draftRef.current = nextValue;
       setDraft(nextValue);
+      scheduleDraftCommit(nextValue);
     },
     onFocus: (event) => {
       focusedRef.current = true;
@@ -23932,6 +23958,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
   const [isRenaming, setIsRenaming] = import_react8.useState(false);
   const [resourceContent, setResourceContent] = import_react8.useState(null);
   const [resourceError, setResourceError] = import_react8.useState(null);
+  const [repairCopyStatus, setRepairCopyStatus] = import_react8.useState(null);
   const resourceKey = `${element.id}\x1F${element.rootId ?? ""}\x1F${element.vaultId ?? ""}\x1F${element.path}\x1F${element.resourceRevision ?? ""}`;
   const hasLoadedResourceContent = resourceContent?.key === resourceKey && resourceContent.loadContent === element.loadContent;
   import_react8.useEffect(() => {
@@ -24083,6 +24110,49 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
           }
         })
       }),
+      element.repairRequest ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
+        className: "shrink-0 border-b border-amber-700/60 bg-amber-950/80 p-2 text-xs text-amber-100",
+        role: "alert",
+        children: [
+          /* @__PURE__ */ jsx_runtime17.jsx("strong", {
+            className: "block text-sm text-amber-200",
+            children: "Malformed bench document"
+          }),
+          /* @__PURE__ */ jsx_runtime17.jsx("p", {
+            className: "mt-1 whitespace-pre-wrap font-mono",
+            children: element.error
+          }),
+          /* @__PURE__ */ jsx_runtime17.jsxs("div", {
+            className: "mt-2 flex items-center gap-2",
+            children: [
+              /* @__PURE__ */ jsx_runtime17.jsx("button", {
+                "aria-label": "Copy repair request",
+                className: "rounded border border-amber-500/70 bg-amber-900/70 px-2 py-1 font-semibold text-amber-50 hover:bg-amber-800/80",
+                onClick: async (event) => {
+                  event.stopPropagation();
+                  try {
+                    await navigator.clipboard.writeText(element.repairRequest);
+                    setRepairCopyStatus("copied");
+                  } catch {
+                    setRepairCopyStatus("failed");
+                  }
+                },
+                onPointerDown: (event) => event.stopPropagation(),
+                type: "button",
+                children: "Copy repair request"
+              }),
+              repairCopyStatus === "copied" ? /* @__PURE__ */ jsx_runtime17.jsx("span", {
+                role: "status",
+                children: "Copied."
+              }) : null,
+              repairCopyStatus === "failed" ? /* @__PURE__ */ jsx_runtime17.jsx("span", {
+                role: "status",
+                children: "Copy failed. Check clipboard permissions."
+              }) : null
+            ]
+          })
+        ]
+      }) : null,
       element.readOnly ? shouldRenderLowResolutionTextProjection(element, hasLoadedResourceContent, viewportZoom) ? lodPreviewImage ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
         className: "relative min-h-0 flex-1 overflow-hidden",
         children: [
@@ -26379,6 +26449,27 @@ function isWorkbenchNoWheelTarget(target) {
   return hasWorkbenchInteractionMarker(target, "nowheel");
 }
 
+// packages/react/src/editableInteraction.ts
+var NATIVE_EDITABLE_CONTROL_SELECTOR = "input, textarea, select";
+var CONTENTEDITABLE_SELECTOR = "[contenteditable]";
+function isEditableElement(target) {
+  if (target.matches?.(NATIVE_EDITABLE_CONTROL_SELECTOR))
+    return true;
+  if (target.isContentEditable === true)
+    return true;
+  const contentEditableHost = target.closest?.(CONTENTEDITABLE_SELECTOR);
+  if (!contentEditableHost)
+    return false;
+  return contentEditableHost.getAttribute?.("contenteditable") !== "false";
+}
+function isEditableInteractionEvent(event, activeElement2) {
+  return [...event.composedPath(), event.target, activeElement2].some((target) => {
+    if (!target || typeof target !== "object")
+      return false;
+    return isEditableElement(target);
+  });
+}
+
 // packages/react/src/BenchViewport.tsx
 var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
 var defaultElementTypeRegistry = createDefaultElementTypeRegistry();
@@ -26497,6 +26588,20 @@ function shouldCanvasControlClickOverride(event) {
 }
 function shouldHandleViewportWheel(event, isNoWheelTarget) {
   return event.ctrlKey || !isNoWheelTarget;
+}
+var VIEWPORT_WHEEL_LINE_HEIGHT = 16;
+var VIEWPORT_WHEEL_MAX_PIXEL_DELTA = 100;
+var VIEWPORT_WHEEL_ZOOM_SENSITIVITY = 0.001;
+function getViewportWheelZoomFactor(event, pageHeight) {
+  const pixelDelta = event.deltaY * (event.deltaMode === 1 ? VIEWPORT_WHEEL_LINE_HEIGHT : event.deltaMode === 2 ? pageHeight : 1);
+  const boundedPixelDelta = Math.max(-VIEWPORT_WHEEL_MAX_PIXEL_DELTA, Math.min(VIEWPORT_WHEEL_MAX_PIXEL_DELTA, pixelDelta));
+  return 1 - boundedPixelDelta * VIEWPORT_WHEEL_ZOOM_SENSITIVITY;
+}
+function shouldHandleWorkbenchDeleteShortcut(event, activeElement2) {
+  return event.key === "Delete" && !isEditableInteractionEvent(event, activeElement2);
+}
+function shouldHandleWorkbenchPaste(event, activeElement2) {
+  return !isEditableInteractionEvent(event, activeElement2);
 }
 function shouldClearViewportSelectionForEvent(event) {
   return event.type === "pointerdown";
@@ -27655,10 +27760,8 @@ function BenchViewport({
   }, []);
   import_react9.useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key !== "Delete")
-        return;
       const activeElement2 = document.activeElement;
-      if (isEditableInteractionEvent(event, activeElement2))
+      if (!shouldHandleWorkbenchDeleteShortcut(event, activeElement2))
         return;
       const selectedEdgeId2 = selectedEdgeIdLatestRef.current;
       if (selectedEdgeId2) {
@@ -27678,7 +27781,7 @@ function BenchViewport({
   import_react9.useEffect(() => {
     async function handlePaste(event) {
       const activeElement2 = document.activeElement;
-      if (isEditableInteractionEvent(event, activeElement2))
+      if (!shouldHandleWorkbenchPaste(event, activeElement2))
         return;
       const imageFile = getClipboardImageFile(event.clipboardData);
       if (imageFile && onImagePaste) {
@@ -28648,7 +28751,7 @@ function BenchViewport({
           const centerX = rect.width / 2;
           const centerY = rect.height / 2;
           setViewport((current) => {
-            const nextZoom = current.zoom * (event.deltaY > 0 ? 0.9 : 1.1);
+            const nextZoom = current.zoom * getViewportWheelZoomFactor(event, rect.height);
             const worldX = (pointerX - centerX - current.x) / current.zoom;
             const worldY = (pointerY - centerY - current.y) / current.zoom;
             const nextViewport = {
@@ -30576,21 +30679,6 @@ function isIOSBrowser() {
   const userAgent = navigator.userAgent || "";
   const touchMac = platform === "MacIntel" && navigator.maxTouchPoints > 1;
   return /iPad|iPhone|iPod/.test(userAgent) || touchMac;
-}
-function isEditableElement(element) {
-  if (element.matches?.("input, textarea, select"))
-    return true;
-  const editableElement = element;
-  if (typeof editableElement.isContentEditable === "boolean")
-    return editableElement.isContentEditable;
-  return Boolean(element.closest?.("[contenteditable]:not([contenteditable='false'])"));
-}
-function isEditableInteractionEvent(event, activeElement2) {
-  return [...event.composedPath(), event.target, activeElement2].some((target) => {
-    if (!target || typeof target !== "object")
-      return false;
-    return isEditableElement(target);
-  });
 }
 function blurActiveEditableInViewport(viewportNode) {
   const activeElement2 = document.activeElement;
@@ -32573,15 +32661,6 @@ function getElementParentId(element) {
 // packages/react/src/VoiceCommentControl.tsx
 var import_react11 = __toESM(require_react(), 1);
 var jsx_runtime22 = __toESM(require_jsx_runtime(), 1);
-function isEditableTarget(target) {
-  const element = target instanceof Element ? target : null;
-  if (!element)
-    return false;
-  if (element.closest("input, textarea, select"))
-    return true;
-  const htmlElement = element instanceof HTMLElement ? element : element.closest("[contenteditable]");
-  return htmlElement instanceof HTMLElement && htmlElement.isContentEditable;
-}
 function createVoiceKeyboardPushToTalk(options2) {
   let ownsKey = false;
   const isVoiceKey = (event) => event.code === "KeyV" || event.key.toLowerCase() === "v";
@@ -32694,7 +32773,7 @@ function VoiceCommentControl({
   }, [capture, status.commentId, status.hasAudio]);
   import_react11.useEffect(() => {
     const keyboard = createVoiceKeyboardPushToTalk({
-      isEditable: (event) => isEditableTarget(event.target),
+      isEditable: (event) => isEditableInteractionEvent(event, document.activeElement),
       start: () => {
         capture.start();
       },
@@ -34255,7 +34334,75 @@ async function createEmptyBenchFile(path, vaultFiles) {
 function hasStableBenchRecordIds(bench) {
   return [bench.elements ?? [], bench.edges ?? []].every((records) => records.every((record) => typeof record.id === "string" && record.id.length > 0));
 }
-function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
+function createWorkbenchLoadRecoveryLifecycle({
+  maxRetries = 3,
+  retryDelayMs = 500,
+  scheduleRetry = (callback, delay) => {
+    const timer = window.setTimeout(callback, delay);
+    return () => window.clearTimeout(timer);
+  }
+} = {}) {
+  let failureCount = 0;
+  let pendingGeneration = 0;
+  let cancelScheduledRetry = null;
+  const cancelPendingRetry = () => {
+    pendingGeneration += 1;
+    cancelScheduledRetry?.();
+    cancelScheduledRetry = null;
+  };
+  return {
+    cancelPendingRetry,
+    fail(scenario, caught, retry) {
+      cancelPendingRetry();
+      const message = formatCaughtError(caught);
+      if (!scenario) {
+        failureCount = 0;
+        return { error: message, retryScheduled: false, scenario, status: `Workbench load failed: ${message}` };
+      }
+      failureCount += 1;
+      const retryScheduled = failureCount <= maxRetries;
+      if (retryScheduled) {
+        const generation = pendingGeneration;
+        cancelScheduledRetry = scheduleRetry(() => {
+          if (generation !== pendingGeneration)
+            return;
+          cancelScheduledRetry = null;
+          retry();
+        }, retryDelayMs);
+      }
+      return {
+        error: null,
+        retryScheduled,
+        scenario,
+        status: retryScheduled ? `Connection trouble: ${message}. Keeping the visible Workbench scene while retrying (${failureCount}/${maxRetries}).` : `Connection trouble: ${message}. Keeping the visible Workbench scene. Automatic retries stopped after ${maxRetries} attempts.`
+      };
+    },
+    reload(scenario) {
+      cancelPendingRetry();
+      failureCount = 0;
+      return { error: null, retryScheduled: false, scenario, status: "Reloading Workbench from disk…" };
+    },
+    succeed(scenario, status) {
+      cancelPendingRetry();
+      failureCount = 0;
+      return { error: null, retryScheduled: false, scenario, status };
+    }
+  };
+}
+function WorkbenchViewportRecoveryFrame({ children, status }) {
+  return /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
+    children: [
+      status ? /* @__PURE__ */ jsx_runtime24.jsx("div", {
+        "aria-live": "polite",
+        className: "pointer-events-none absolute left-1/2 top-3 z-[60] max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 rounded border border-amber-300/40 bg-amber-950/95 px-3 py-2 text-sm text-amber-50 shadow-lg",
+        role: "status",
+        children: status
+      }) : null,
+      children
+    ]
+  });
+}
+function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, loadRecoveryOptions, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
   const vaultFiles = import_react13.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
   const assetTransport = import_react13.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
@@ -34309,6 +34456,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   const benchRef = import_react13.useRef(null);
   const rootAppearanceSnapshotRef = import_react13.useRef(null);
   const scenarioRef = import_react13.useRef(null);
+  const loadRecoveryLifecycle = import_react13.useMemo(() => createWorkbenchLoadRecoveryLifecycle(loadRecoveryOptions), [loadRecoveryOptions]);
   const activeBenchPathRef = import_react13.useRef(activeBenchPath);
   activeBenchPathRef.current = activeBenchPath;
   const activeBenchCanonicalPathRef = import_react13.useRef(activeBenchPath);
@@ -34343,21 +34491,23 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         return;
       restoredNestedNavigationPendingRef.current = false;
       directoryHydrationGenerationRef.current += 1;
-      benchRef.current = loaded.bench;
-      rootAppearanceSnapshotRef.current = loaded.bench;
+      benchRef.current = loaded.parseError ? null : loaded.bench;
+      rootAppearanceSnapshotRef.current = loaded.parseError ? null : loaded.bench;
       activeBenchCanonicalPathRef.current = loaded.benchPath;
       benchBaseContentRef.current = hasStableBenchRecordIds(loaded.bench) ? loaded.benchContent : undefined;
       loadedNestedBenchesRef.current = new Map(loaded.nestedBenches);
       nestedAppearanceSnapshotsRef.current = new Map(loaded.nestedBenches);
       benchEtagRef.current = loaded.benchEtag;
       textFileEtagsRef.current = new Map(loaded.scenario.elements.flatMap((element) => element.kind === "text-file" && element.resourceRevision ? [[element.resourcePath ?? element.path, element.resourceRevision]] : []));
-      scenarioRef.current = loaded.scenario;
-      setScenario(loaded.scenario);
+      const loadState = loadRecoveryLifecycle.succeed(loaded.scenario, `Loaded ${activeBenchLoadKey} from the main vault.`);
+      scenarioRef.current = loadState.scenario;
+      setError(loadState.error);
+      setScenario(loadState.scenario);
       setActivePreviewSvg(null);
       setShowActivePreviewSvg(false);
       setActivePreviewJpgOverlay(null);
       setShowActivePreviewJpg(false);
-      setStatus(`Loaded ${activeBenchLoadKey} from the main vault.`);
+      setStatus(loadState.status);
     }).catch((caught) => {
       if (cancelled)
         return;
@@ -34368,16 +34518,19 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         setStatus(`Stored bench navigation was unavailable. Loading ${benchPath}…`);
         return;
       }
-      setError(caught instanceof Error ? caught.message : "Unknown workbench load error");
+      const loadState = loadRecoveryLifecycle.fail(scenarioRef.current, caught, () => setReloadGeneration((current) => current + 1));
+      setError(loadState.error);
+      setStatus(loadState.status);
     });
     return () => {
       cancelled = true;
+      loadRecoveryLifecycle.cancelPendingRetry();
       if (saveTimerRef.current !== null)
         window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
+  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, loadRecoveryLifecycle, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
   import_react13.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
@@ -34703,9 +34856,10 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     saveTimerRef.current = null;
     pendingBenchSaveRef.current = null;
     setSaveError(null);
-    setError(null);
-    scenarioRef.current = null;
-    setScenario(null);
+    const loadState = loadRecoveryLifecycle.reload(scenarioRef.current);
+    setError(loadState.error);
+    setScenario(loadState.scenario);
+    setStatus(loadState.status);
     setReloadGeneration((current) => current + 1);
   }
   function requireDebugViewportApi() {
@@ -36036,64 +36190,67 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     setFocusElementId(source.commentId);
   };
-  const viewport = /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
-    transport: assetTransport,
-    children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
-      actorPanel: applicationChrome?.actorPanel,
-      applicationPanels: commentCollaborationClient ? [{
-        content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
-          onNavigate: handleCommentNavigate
+  const viewport = /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchViewportRecoveryFrame, {
+    status: status.startsWith("Connection trouble:") ? status : null,
+    children: /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
+      transport: assetTransport,
+      children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
+        actorPanel: applicationChrome?.actorPanel,
+        applicationPanels: commentCollaborationClient ? [{
+          content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
+            onNavigate: handleCommentNavigate
+          }),
+          id: "comments",
+          label: "Comments",
+          quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
+          quickAccessLabel: "Comments"
+        }] : [],
+        actorActivityFadeReferenceAt,
+        actorActivityFadeSeconds,
+        backHref: componentHref,
+        backLabel: `${componentName} scenarios`,
+        onBackNavigate: handleBackNavigate,
+        onActorActivitySelect: handleActorActivitySelect,
+        breadcrumbs,
+        debugApiRef: benchViewportDebugApiRef,
+        voiceCommentControllerRef,
+        elementTypeRegistry,
+        elementLayerHidden: !showBenchElements,
+        elementLayerOpacity: benchElementsOpacity,
+        elementAuthorId: applicationChrome?.commentActorId,
+        focusElementId,
+        focusViewportSource,
+        openViewportSource,
+        onFocusElementApplied: handleFocusElementApplied,
+        onBenchElementCreate: handleBenchElementCreate,
+        onBenchFileList: vaultFiles.listFiles,
+        onBenchElementLoad: handleBenchElementLoad,
+        onBenchElementOpen: handleBenchElementOpen,
+        onElementDelete: handleElementDelete,
+        onEdgesChange: handleEdgesChange,
+        onImagePaste: handleImagePaste,
+        onParentBenchOpen: handleParentBenchOpen,
+        nestedElementOpacity: nestedElementsOpacity,
+        onElementsChange: handleElementsChange,
+        onTextFileList: vaultFiles.listFiles,
+        onTextFilePathChange: handleTextFilePathChange,
+        scenario: visibleScenario,
+        showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
+        viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
+        viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
+          children: [
+            actorTimelineControls,
+            debugViewportOverlayControls
+          ]
         }),
-        id: "comments",
-        label: "Comments",
-        quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
-        quickAccessLabel: "Comments"
-      }] : [],
-      actorActivityFadeReferenceAt,
-      actorActivityFadeSeconds,
-      backHref: componentHref,
-      backLabel: `${componentName} scenarios`,
-      onBackNavigate: handleBackNavigate,
-      onActorActivitySelect: handleActorActivitySelect,
-      breadcrumbs,
-      debugApiRef: benchViewportDebugApiRef,
-      voiceCommentControllerRef,
-      elementTypeRegistry,
-      elementLayerHidden: !showBenchElements,
-      elementLayerOpacity: benchElementsOpacity,
-      elementAuthorId: applicationChrome?.commentActorId,
-      focusElementId,
-      focusViewportSource,
-      openViewportSource,
-      onFocusElementApplied: handleFocusElementApplied,
-      onBenchElementCreate: handleBenchElementCreate,
-      onBenchFileList: vaultFiles.listFiles,
-      onBenchElementLoad: handleBenchElementLoad,
-      onBenchElementOpen: handleBenchElementOpen,
-      onElementDelete: handleElementDelete,
-      onEdgesChange: handleEdgesChange,
-      onImagePaste: handleImagePaste,
-      onParentBenchOpen: handleParentBenchOpen,
-      nestedElementOpacity: nestedElementsOpacity,
-      onElementsChange: handleElementsChange,
-      onTextFileList: vaultFiles.listFiles,
-      onTextFilePathChange: handleTextFilePathChange,
-      scenario: visibleScenario,
-      showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
-      viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
-      viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
-        children: [
-          actorTimelineControls,
-          debugViewportOverlayControls
-        ]
-      }),
-      viewportResetKey: activeBenchPath,
-      wireframe,
-      wireframeLabels,
-      worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
-      worldOverlayImageOpacity: jpgPreviewOpacity,
-      worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
-      worldOverlaySvgOpacity: svgPreviewOpacity
+        viewportResetKey: activeBenchPath,
+        wireframe,
+        wireframeLabels,
+        worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
+        worldOverlayImageOpacity: jpgPreviewOpacity,
+        worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
+        worldOverlaySvgOpacity: svgPreviewOpacity
+      })
     })
   });
   return commentCollaborationClient && collaborationAuthority ? /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationRuntime, {
@@ -36236,7 +36393,53 @@ function formatCaughtError(caught) {
 }
 async function loadMainBenchScenario(benchPath = "main.bench.hjson", scenarioId = "main-bench", activeBenchAncestorPaths = [], preferredPreviewFormat = "svg", vaultFiles = mainVaultFileClient) {
   const benchFile = await vaultFiles.readFile(benchPath);
-  const bench = parseBenchDocument(benchFile.content, benchPath);
+  let bench;
+  try {
+    bench = parseBenchDocument(benchFile.content, benchPath);
+  } catch (caught) {
+    const parseError = `Could not parse ${benchFile.path}: ${formatCaughtError(caught)}`;
+    const repairRequest = [
+      "Repair this malformed Workbench Hjson document while preserving all intended content.",
+      "Return the complete corrected Hjson and briefly explain the syntax repair. Do not omit or invent document content.",
+      "",
+      `Source path: ${benchFile.path}`,
+      `Parse error/location: ${parseError}`,
+      "",
+      "Full raw source (verbatim):",
+      "<raw-hjson>",
+      benchFile.content,
+      "</raw-hjson>"
+    ].join(`
+`);
+    return {
+      bench: {},
+      benchContent: benchFile.content,
+      benchEtag: benchFile.etag,
+      benchPath: benchFile.path,
+      parseError,
+      scenario: {
+        description: `Fail-closed raw source for ${benchFile.path}.`,
+        elements: [{
+          error: parseError,
+          height: 520,
+          id: `broken-bench:${benchFile.path}`,
+          kind: "text-file",
+          label: benchFile.path,
+          path: benchFile.path,
+          readOnly: true,
+          repairRequest,
+          resourcePath: benchFile.path,
+          resourceRevision: benchFile.etag,
+          value: benchFile.content,
+          width: 720,
+          x: 0,
+          y: 0
+        }],
+        id: scenarioId,
+        name: `Broken bench: ${benchFile.path}`
+      }
+    };
+  }
   const persistedElements = assignGeneratedBenchElementIds(bench.elements ?? []);
   const elements = await Promise.all(persistedElements.map((element, index2) => loadBenchElement(element, index2, preferredPreviewFormat, vaultFiles)));
   const scenarioSummary = scenarios.find((scenario) => scenario.id === scenarioId);
@@ -37866,6 +38069,7 @@ function rejectBeforeStreaming(response, message) {
 var unavailableSnapshot = Object.freeze({ status: "unavailable" });
 var MAX_CATALOG_BYTES = 2 * 1024 * 1024;
 var MAX_EVENT_BUFFER_BYTES = 64 * 1024;
+var DEFAULT_CATALOG_REQUEST_TIMEOUT_MS = 1e4;
 function createLiveComponentRuntime(options2) {
   const listeners = new Set;
   const requested = new Set;
@@ -37873,23 +38077,34 @@ function createLiveComponentRuntime(options2) {
   const evaluate = options2.evaluate ?? evaluateComponentModule;
   const baseUrl = options2.baseUrl ?? globalThis.location?.href ?? "http://localhost/";
   const apiBase = new URL(options2.apiBasePath.replace(/\/$/, "") + "/", baseUrl);
+  const catalogRequestTimeoutMs = options2.catalogRequestTimeoutMs ?? DEFAULT_CATALOG_REQUEST_TIMEOUT_MS;
   const reconcileIntervalMs = options2.reconcileIntervalMs ?? 2000;
+  if (!Number.isFinite(catalogRequestTimeoutMs) || catalogRequestTimeoutMs < 10)
+    throw new TypeError("Live component catalog request timeout is invalid");
   if (!Number.isFinite(reconcileIntervalMs) || reconcileIntervalMs < 10)
     throw new TypeError("Live component reconciliation interval is invalid");
   const lifecycleAbort = new AbortController;
   let catalog = null;
   let closed = false;
   let eventAbort = null;
+  let eventRetryTimer = null;
+  let finishEventRetry = null;
   let reconcileTimer = null;
+  let startupRetryTimer = null;
   let started = false;
-  let refreshQueue = Promise.resolve();
+  let refreshInFlight = null;
+  let queuedRefresh = null;
+  let startupFailurePublished = false;
   const notify = () => {
     for (const listener of listeners)
       listener();
   };
   const setSnapshot = (typeId, snapshot) => {
+    if (closed)
+      return false;
     snapshots.set(typeId, Object.freeze(snapshot));
     notify();
+    return !closed;
   };
   const loadCandidate = async (descriptor, nextCatalog) => {
     if (descriptor.schemaVersion !== 1 || descriptor.hostApiRange !== "^1.0.0")
@@ -37924,59 +38139,122 @@ function createLiveComponentRuntime(options2) {
     }
     return Object.freeze({ component, cssText, implementationRevision: descriptor.implementationRevision, status: "ready" });
   };
-  const refreshNow = async () => {
-    if (closed)
-      return;
-    const response = await options2.fetcher.call(globalThis, new URL("catalog", apiBase), {
+  const loadCatalog = async () => {
+    const controller = new AbortController;
+    const onLifecycleAbort = () => controller.abort(lifecycleAbort.signal.reason);
+    lifecycleAbort.signal.addEventListener("abort", onLifecycleAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(new DOMException("Live component catalog request timed out", "TimeoutError")), catalogRequestTimeoutMs);
+    const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("catalog", apiBase), {
       cache: "no-store",
       headers: { accept: "application/json" },
       redirect: "error",
-      signal: lifecycleAbort.signal
-    });
-    if (response.status !== 200 || response.redirected)
-      throw new Error(`Live component catalog requires status 200, received ${response.status}`);
-    if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
-      throw new Error("Live component catalog has an invalid content type");
-    const nextCatalog = parseWorkbenchExtensionCatalog(await readBoundedJson(response, MAX_CATALOG_BYTES));
+      signal: controller.signal
+    }));
+    let response = null;
+    try {
+      response = await settleOnAbort2(responsePromise, controller.signal);
+      if (response.status !== 200 || response.redirected)
+        throw new Error(`Live component catalog requires status 200, received ${response.status}`);
+      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
+        throw new Error("Live component catalog has an invalid content type");
+      return parseWorkbenchExtensionCatalog(await readBoundedJson(response, MAX_CATALOG_BYTES, controller.signal));
+    } catch (error) {
+      if (response)
+        cancelResponseBody(response, error);
+      else if (controller.signal.aborted)
+        responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
+          return;
+        });
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      lifecycleAbort.signal.removeEventListener("abort", onLifecycleAbort);
+    }
+  };
+  const refreshNow = async () => {
+    if (closed)
+      return;
+    const nextCatalog = await loadCatalog();
+    if (closed)
+      return;
     if (catalog) {
       if (JSON.stringify(nextCatalog.authority) !== JSON.stringify(catalog.authority))
         throw new Error("Live component catalog authority changed");
       if (nextCatalog.sequence < catalog.sequence)
         throw new Error("Live component catalog sequence regressed");
       if (nextCatalog.sequence === catalog.sequence) {
-        if (nextCatalog.catalogRevision !== catalog.catalogRevision)
+        if (nextCatalog.catalogRevision !== catalog.catalogRevision || JSON.stringify(nextCatalog) !== JSON.stringify(catalog)) {
           throw new Error("Live component catalog equivocated at one sequence");
-      } else {
+        }
+      } else if (nextCatalog.sequence === catalog.sequence + 1) {
         if (nextCatalog.parentCatalogRevision !== catalog.catalogRevision)
           throw new Error("Live component catalog revision chain is discontinuous");
       }
     }
     catalog = nextCatalog;
     for (const typeId of requested) {
+      if (closed || catalog !== nextCatalog)
+        return;
       const descriptor = nextCatalog.components.find((component) => component.typeId === typeId);
       const previous = snapshots.get(typeId);
       if (!descriptor) {
-        setSnapshot(typeId, previous?.component ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: `Component type is not published: ${typeId}`, status: "error" });
+        if (!setSnapshot(typeId, previous?.component ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: `Component type is not published: ${typeId}`, status: "error" }))
+          return;
         continue;
       }
       if (previous?.component && previous.implementationRevision === descriptor.implementationRevision)
         continue;
-      if (!previous?.component)
-        setSnapshot(typeId, { status: "loading" });
+      if (!previous?.component && !setSnapshot(typeId, { status: "loading" }))
+        return;
       try {
-        setSnapshot(typeId, await loadCandidate(descriptor, nextCatalog));
+        const candidate = await loadCandidate(descriptor, nextCatalog);
+        if (closed || catalog !== nextCatalog)
+          return;
+        if (!setSnapshot(typeId, candidate))
+          return;
       } catch (error) {
+        if (closed || catalog !== nextCatalog)
+          return;
         const message = error instanceof Error ? error.message : String(error);
-        setSnapshot(typeId, previous?.component ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" });
+        if (!setSnapshot(typeId, previous?.component ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" }))
+          return;
       }
     }
   };
-  const refresh = () => {
-    const operation = refreshQueue.then(refreshNow);
-    refreshQueue = operation.catch(() => {
+  const runRefresh = () => {
+    const operation = refreshNow();
+    refreshInFlight = operation;
+    operation.finally(() => {
+      if (refreshInFlight !== operation)
+        return;
+      refreshInFlight = null;
+      const queued = queuedRefresh;
+      queuedRefresh = null;
+      if (!queued)
+        return;
+      if (closed) {
+        queued.resolve();
+        return;
+      }
+      runRefresh().then(queued.resolve, queued.reject);
+    }).catch(() => {
       return;
     });
     return operation;
+  };
+  const refresh = () => {
+    if (!refreshInFlight)
+      return runRefresh();
+    if (!queuedRefresh) {
+      let resolve2;
+      let reject;
+      const promise = new Promise((onResolve, onReject) => {
+        resolve2 = onResolve;
+        reject = onReject;
+      });
+      queuedRefresh = { promise, reject, resolve: resolve2 };
+    }
+    return queuedRefresh.promise;
   };
   const startReconciliation = () => {
     if (reconcileTimer !== null)
@@ -37989,6 +38267,8 @@ function createLiveComponentRuntime(options2) {
     }, reconcileIntervalMs);
   };
   const markBuildFailure = (event) => {
+    if (closed)
+      return;
     const dataLine = event.split(`
 `).find((line) => line.startsWith("data:"));
     if (!dataLine)
@@ -38002,25 +38282,44 @@ function createLiveComponentRuntime(options2) {
       setSnapshot(data.componentTypeId, previous?.component ? { ...previous, error, status: "stale" } : { error, status: "error" });
     } catch {}
   };
+  const waitForEventRetry = () => new Promise((resolve2) => {
+    const finish = () => {
+      if (eventRetryTimer !== null)
+        clearTimeout(eventRetryTimer);
+      eventRetryTimer = null;
+      if (finishEventRetry === finish)
+        finishEventRetry = null;
+      resolve2();
+    };
+    finishEventRetry = finish;
+    eventRetryTimer = setTimeout(finish, 500);
+  });
   const connectEvents = async () => {
     while (!closed) {
       const controller = new AbortController;
       eventAbort = controller;
+      let reader = null;
+      let pendingRead = null;
+      let response = null;
+      const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("events", apiBase), {
+        headers: { accept: "text/event-stream" },
+        redirect: "error",
+        signal: controller.signal
+      }));
       try {
-        const response = await options2.fetcher.call(globalThis, new URL("events", apiBase), {
-          headers: { accept: "text/event-stream" },
-          redirect: "error",
-          signal: controller.signal
-        });
+        response = await settleOnAbort2(responsePromise, controller.signal);
         if (response.status !== 200 || !response.body)
           throw new Error(`Live component event stream requires status 200, received ${response.status}`);
         if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
           throw new Error("Live component event stream has an invalid content type");
-        const reader = response.body.getReader();
+        reader = response.body.getReader();
         const decoder = new TextDecoder;
         let pending = "";
         while (!closed) {
-          const result = await reader.read();
+          const readPromise = reader.read();
+          pendingRead = readPromise;
+          const result = await settleOnAbort2(readPromise, controller.signal);
+          pendingRead = null;
           if (result.done)
             throw new Error("Live component event stream disconnected");
           pending += decoder.decode(result.value, { stream: true });
@@ -38042,13 +38341,43 @@ function createLiveComponentRuntime(options2) {
           }
         }
       } catch {
+        if (!reader) {
+          if (response)
+            cancelResponseBody(response, controller.signal.reason);
+          else if (controller.signal.aborted)
+            responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
+              return;
+            });
+        }
         if (closed || controller.signal.aborted)
           return;
       } finally {
+        if (reader) {
+          const ownedReader = reader;
+          const reason = controller.signal.aborted ? controller.signal.reason : new DOMException("Live component event reader closed", "AbortError");
+          try {
+            ownedReader.cancel(reason).catch(() => {
+              return;
+            });
+          } catch {}
+          if (pendingRead) {
+            pendingRead.finally(() => {
+              try {
+                ownedReader.releaseLock();
+              } catch {}
+            }).catch(() => {
+              return;
+            });
+          } else {
+            try {
+              ownedReader.releaseLock();
+            } catch {}
+          }
+        }
         if (eventAbort === controller)
           eventAbort = null;
       }
-      await new Promise((resolve2) => setTimeout(resolve2, 500));
+      await waitForEventRetry();
       if (!closed) {
         try {
           await refresh();
@@ -38056,14 +38385,46 @@ function createLiveComponentRuntime(options2) {
       }
     }
   };
+  const startTransport = () => {
+    refresh().then(() => {
+      if (closed)
+        return;
+      startReconciliation();
+      return connectEvents();
+    }).catch((error) => {
+      if (closed)
+        return;
+      if (!startupFailurePublished) {
+        startupFailurePublished = true;
+        const message = error instanceof Error ? error.message : String(error);
+        for (const requestedTypeId of requested) {
+          if (!setSnapshot(requestedTypeId, { error: message, status: "error" }))
+            return;
+        }
+      }
+      if (closed)
+        return;
+      startupRetryTimer = setTimeout(() => {
+        startupRetryTimer = null;
+        if (!closed)
+          startTransport();
+      }, reconcileIntervalMs);
+    });
+  };
   return Object.freeze({
     close() {
       closed = true;
       lifecycleAbort.abort();
       eventAbort?.abort();
+      finishEventRetry?.();
       if (reconcileTimer !== null)
         clearInterval(reconcileTimer);
+      if (startupRetryTimer !== null)
+        clearTimeout(startupRetryTimer);
+      queuedRefresh?.resolve();
+      queuedRefresh = null;
       reconcileTimer = null;
+      startupRetryTimer = null;
       listeners.clear();
     },
     ensure(typeId) {
@@ -38073,18 +38434,12 @@ function createLiveComponentRuntime(options2) {
       setSnapshot(typeId, { status: "loading" });
       if (!started) {
         started = true;
-        refresh().then(() => {
-          if (closed)
-            return;
-          startReconciliation();
-          return connectEvents();
-        }).catch((error) => {
-          const message = error instanceof Error ? error.message : String(error);
-          for (const requestedTypeId of requested)
-            setSnapshot(requestedTypeId, { error: message, status: "error" });
-        });
+        startTransport();
       } else if (catalog) {
-        refresh().catch((error) => setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" }));
+        refresh().catch((error) => {
+          if (!closed)
+            setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" });
+        });
       }
     },
     getSnapshot(typeId) {
@@ -38097,7 +38452,7 @@ function createLiveComponentRuntime(options2) {
     }
   });
 }
-async function readBoundedJson(response, maximumBytes) {
+async function readBoundedJson(response, maximumBytes, signal) {
   const declared = response.headers.get("content-length");
   if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
     throw new Error("Live component catalog exceeded the supported bound");
@@ -38106,9 +38461,13 @@ async function readBoundedJson(response, maximumBytes) {
   const reader = response.body.getReader();
   const chunks = [];
   let total = 0;
+  let pendingRead = null;
   try {
     while (true) {
-      const result = await reader.read();
+      const readPromise = reader.read();
+      pendingRead = readPromise;
+      const result = await settleOnAbort2(readPromise, signal);
+      pendingRead = null;
       if (result.done)
         break;
       total += result.value.byteLength;
@@ -38117,10 +38476,18 @@ async function readBoundedJson(response, maximumBytes) {
       chunks.push(result.value);
     }
   } catch (error) {
-    await reader.cancel(error).catch(() => {
+    reader.cancel(error).catch(() => {
       return;
     });
     throw error;
+  } finally {
+    if (pendingRead) {
+      pendingRead.finally(() => reader.releaseLock()).catch(() => {
+        return;
+      });
+    } else {
+      reader.releaseLock();
+    }
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -38129,6 +38496,33 @@ async function readBoundedJson(response, maximumBytes) {
     offset += chunk.byteLength;
   }
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
+function cancelResponseBody(response, reason) {
+  try {
+    response.body?.cancel(reason).catch(() => {
+      return;
+    });
+  } catch {}
+}
+function settleOnAbort2(promise, signal) {
+  if (!signal)
+    return promise;
+  if (signal.aborted)
+    return Promise.reject(signal.reason);
+  return new Promise((resolve2, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve2(value);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
 }
 function parseLiveElementComponent(input, descriptor) {
   if (!input || typeof input !== "object")
