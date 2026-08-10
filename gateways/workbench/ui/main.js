@@ -27271,6 +27271,7 @@ function BenchViewport({
   focusViewportSource,
   openViewportSource,
   onFocusElementApplied,
+  onOpenViewportApplied,
   onBenchElementCreate,
   onBenchFileList,
   onBenchElementLoad,
@@ -27511,7 +27512,7 @@ function BenchViewport({
       return;
     const rect = viewportRef.current?.getBoundingClientRect();
     const currentViewportSize = { height: rect?.height ?? viewportSize.height, width: rect?.width ?? viewportSize.width };
-    onBenchElementOpen(sourceElement, { sceneBounds, sourceElement, viewport: viewportLatestRef.current, viewportSize: currentViewportSize });
+    onBenchElementOpen(sourceElement, { fitAfterLoad: true, sceneBounds, sourceElement, viewport: viewportLatestRef.current, viewportSize: currentViewportSize });
   }
   function setCurrentRenderPlan(plan) {
     renderPlanLatestRef.current = plan;
@@ -27610,7 +27611,7 @@ function BenchViewport({
       }
       lastViewportInitSceneIdRef.current = resetKey;
       const persistedViewport = !focusElement && !openViewportSource && persistenceStorageKey && viewportPersistenceStorageRef.current ? readPersistedViewport(viewportPersistenceStorageRef.current, persistenceStorageKey) : null;
-      const nextViewport = focusElement ? focusViewportSource ? getViewportForElementScreenRect(focusElement, focusViewportSource.sceneBounds, focusViewportSource.viewport, rect) : getViewportForBenchElementFocus(focusElement, rect) : openViewportSource ? getViewportForBoundsInElementScreenRect(sceneBounds, openViewportSource.sourceElement, openViewportSource.viewport, rect) : persistedViewport ?? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect);
+      const nextViewport = focusElement ? focusViewportSource ? getViewportForElementScreenRect(focusElement, focusViewportSource.sceneBounds, focusViewportSource.viewport, rect) : getViewportForBenchElementFocus(focusElement, rect) : openViewportSource ? openViewportSource.fitAfterLoad ? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect) : getViewportForBoundsInElementScreenRect(sceneBounds, openViewportSource.sourceElement, openViewportSource.viewport, rect) : persistedViewport ?? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect);
       setViewport(nextViewport);
       setViewportState(nextViewport);
       benchNavigationZoomBaselineRef.current = nextViewport.zoom;
@@ -27618,11 +27619,13 @@ function BenchViewport({
       setCurrentRenderPlan(computeRenderPlan(worldSceneElements, buildSpatialIndex(worldSceneElements, spatialCellSize), nextViewport, rect, scene.previewGroups, lodRasterPyramid));
       if (focusElement)
         queueMicrotask(() => onFocusElementApplied?.());
+      if (!focusElement && openViewportSource)
+        queueMicrotask(() => onOpenViewportApplied?.(openViewportSource));
     } else {
       setCurrentRenderPlan([]);
       lastRenderViewportRef.current = null;
     }
-  }, [elementTypeRegistry, focusElementId, focusViewportSource, onFocusElementApplied, openViewportSource, scene.edges, scene.id, scene.elements, scene.previewGroups, viewportPersistenceKey, viewportResetKey]);
+  }, [elementTypeRegistry, focusElementId, focusViewportSource, onFocusElementApplied, onOpenViewportApplied, openViewportSource, scene.edges, scene.id, scene.elements, scene.previewGroups, viewportPersistenceKey, viewportResetKey]);
   import_react9.useEffect(() => {
     const flushViewport = () => viewportPersistenceControllerRef.current?.flush();
     window.addEventListener("pagehide", flushViewport);
@@ -35666,6 +35669,9 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setFocusElementId(undefined);
     setFocusViewportSource(undefined);
   }, []);
+  const handleOpenViewportApplied = import_react13.useCallback((appliedSource) => {
+    setOpenViewportSource((currentSource) => currentSource === appliedSource ? undefined : currentSource);
+  }, []);
   const authoredVisibleScenario = import_react13.useMemo(() => scenario ? createBenchDebugVisibleScenario(scenario, {
     showElements: showBenchElements,
     showLoadedNestedBenchElements: showNestedBenchElements
@@ -36244,6 +36250,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         focusViewportSource,
         openViewportSource,
         onFocusElementApplied: handleFocusElementApplied,
+        onOpenViewportApplied: handleOpenViewportApplied,
         onBenchElementCreate: handleBenchElementCreate,
         onBenchFileList: vaultFiles.listFiles,
         onBenchElementLoad: handleBenchElementLoad,
