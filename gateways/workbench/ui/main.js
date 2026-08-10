@@ -34334,7 +34334,75 @@ async function createEmptyBenchFile(path, vaultFiles) {
 function hasStableBenchRecordIds(bench) {
   return [bench.elements ?? [], bench.edges ?? []].every((records) => records.every((record) => typeof record.id === "string" && record.id.length > 0));
 }
-function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
+function createWorkbenchLoadRecoveryLifecycle({
+  maxRetries = 3,
+  retryDelayMs = 500,
+  scheduleRetry = (callback, delay) => {
+    const timer = window.setTimeout(callback, delay);
+    return () => window.clearTimeout(timer);
+  }
+} = {}) {
+  let failureCount = 0;
+  let pendingGeneration = 0;
+  let cancelScheduledRetry = null;
+  const cancelPendingRetry = () => {
+    pendingGeneration += 1;
+    cancelScheduledRetry?.();
+    cancelScheduledRetry = null;
+  };
+  return {
+    cancelPendingRetry,
+    fail(scenario, caught, retry) {
+      cancelPendingRetry();
+      const message = formatCaughtError(caught);
+      if (!scenario) {
+        failureCount = 0;
+        return { error: message, retryScheduled: false, scenario, status: `Workbench load failed: ${message}` };
+      }
+      failureCount += 1;
+      const retryScheduled = failureCount <= maxRetries;
+      if (retryScheduled) {
+        const generation = pendingGeneration;
+        cancelScheduledRetry = scheduleRetry(() => {
+          if (generation !== pendingGeneration)
+            return;
+          cancelScheduledRetry = null;
+          retry();
+        }, retryDelayMs);
+      }
+      return {
+        error: null,
+        retryScheduled,
+        scenario,
+        status: retryScheduled ? `Connection trouble: ${message}. Keeping the visible Workbench scene while retrying (${failureCount}/${maxRetries}).` : `Connection trouble: ${message}. Keeping the visible Workbench scene. Automatic retries stopped after ${maxRetries} attempts.`
+      };
+    },
+    reload(scenario) {
+      cancelPendingRetry();
+      failureCount = 0;
+      return { error: null, retryScheduled: false, scenario, status: "Reloading Workbench from disk…" };
+    },
+    succeed(scenario, status) {
+      cancelPendingRetry();
+      failureCount = 0;
+      return { error: null, retryScheduled: false, scenario, status };
+    }
+  };
+}
+function WorkbenchViewportRecoveryFrame({ children, status }) {
+  return /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
+    children: [
+      status ? /* @__PURE__ */ jsx_runtime24.jsx("div", {
+        "aria-live": "polite",
+        className: "pointer-events-none absolute left-1/2 top-3 z-[60] max-w-[min(42rem,calc(100%-2rem))] -translate-x-1/2 rounded border border-amber-300/40 bg-amber-950/95 px-3 py-2 text-sm text-amber-50 shadow-lg",
+        role: "status",
+        children: status
+      }) : null,
+      children
+    ]
+  });
+}
+function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, loadRecoveryOptions, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
   const vaultFiles = import_react13.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
   const assetTransport = import_react13.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
@@ -34388,6 +34456,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   const benchRef = import_react13.useRef(null);
   const rootAppearanceSnapshotRef = import_react13.useRef(null);
   const scenarioRef = import_react13.useRef(null);
+  const loadRecoveryLifecycle = import_react13.useMemo(() => createWorkbenchLoadRecoveryLifecycle(loadRecoveryOptions), [loadRecoveryOptions]);
   const activeBenchPathRef = import_react13.useRef(activeBenchPath);
   activeBenchPathRef.current = activeBenchPath;
   const activeBenchCanonicalPathRef = import_react13.useRef(activeBenchPath);
@@ -34430,13 +34499,15 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       nestedAppearanceSnapshotsRef.current = new Map(loaded.nestedBenches);
       benchEtagRef.current = loaded.benchEtag;
       textFileEtagsRef.current = new Map(loaded.scenario.elements.flatMap((element) => element.kind === "text-file" && element.resourceRevision ? [[element.resourcePath ?? element.path, element.resourceRevision]] : []));
-      scenarioRef.current = loaded.scenario;
-      setScenario(loaded.scenario);
+      const loadState = loadRecoveryLifecycle.succeed(loaded.scenario, `Loaded ${activeBenchLoadKey} from the main vault.`);
+      scenarioRef.current = loadState.scenario;
+      setError(loadState.error);
+      setScenario(loadState.scenario);
       setActivePreviewSvg(null);
       setShowActivePreviewSvg(false);
       setActivePreviewJpgOverlay(null);
       setShowActivePreviewJpg(false);
-      setStatus(`Loaded ${activeBenchLoadKey} from the main vault.`);
+      setStatus(loadState.status);
     }).catch((caught) => {
       if (cancelled)
         return;
@@ -34447,16 +34518,19 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         setStatus(`Stored bench navigation was unavailable. Loading ${benchPath}…`);
         return;
       }
-      setError(caught instanceof Error ? caught.message : "Unknown workbench load error");
+      const loadState = loadRecoveryLifecycle.fail(scenarioRef.current, caught, () => setReloadGeneration((current) => current + 1));
+      setError(loadState.error);
+      setStatus(loadState.status);
     });
     return () => {
       cancelled = true;
+      loadRecoveryLifecycle.cancelPendingRetry();
       if (saveTimerRef.current !== null)
         window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
+  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, loadRecoveryLifecycle, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
   import_react13.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
@@ -34782,9 +34856,10 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     saveTimerRef.current = null;
     pendingBenchSaveRef.current = null;
     setSaveError(null);
-    setError(null);
-    scenarioRef.current = null;
-    setScenario(null);
+    const loadState = loadRecoveryLifecycle.reload(scenarioRef.current);
+    setError(loadState.error);
+    setScenario(loadState.scenario);
+    setStatus(loadState.status);
     setReloadGeneration((current) => current + 1);
   }
   function requireDebugViewportApi() {
@@ -36115,64 +36190,67 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     setFocusElementId(source.commentId);
   };
-  const viewport = /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
-    transport: assetTransport,
-    children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
-      actorPanel: applicationChrome?.actorPanel,
-      applicationPanels: commentCollaborationClient ? [{
-        content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
-          onNavigate: handleCommentNavigate
+  const viewport = /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchViewportRecoveryFrame, {
+    status: status.startsWith("Connection trouble:") ? status : null,
+    children: /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
+      transport: assetTransport,
+      children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
+        actorPanel: applicationChrome?.actorPanel,
+        applicationPanels: commentCollaborationClient ? [{
+          content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
+            onNavigate: handleCommentNavigate
+          }),
+          id: "comments",
+          label: "Comments",
+          quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
+          quickAccessLabel: "Comments"
+        }] : [],
+        actorActivityFadeReferenceAt,
+        actorActivityFadeSeconds,
+        backHref: componentHref,
+        backLabel: `${componentName} scenarios`,
+        onBackNavigate: handleBackNavigate,
+        onActorActivitySelect: handleActorActivitySelect,
+        breadcrumbs,
+        debugApiRef: benchViewportDebugApiRef,
+        voiceCommentControllerRef,
+        elementTypeRegistry,
+        elementLayerHidden: !showBenchElements,
+        elementLayerOpacity: benchElementsOpacity,
+        elementAuthorId: applicationChrome?.commentActorId,
+        focusElementId,
+        focusViewportSource,
+        openViewportSource,
+        onFocusElementApplied: handleFocusElementApplied,
+        onBenchElementCreate: handleBenchElementCreate,
+        onBenchFileList: vaultFiles.listFiles,
+        onBenchElementLoad: handleBenchElementLoad,
+        onBenchElementOpen: handleBenchElementOpen,
+        onElementDelete: handleElementDelete,
+        onEdgesChange: handleEdgesChange,
+        onImagePaste: handleImagePaste,
+        onParentBenchOpen: handleParentBenchOpen,
+        nestedElementOpacity: nestedElementsOpacity,
+        onElementsChange: handleElementsChange,
+        onTextFileList: vaultFiles.listFiles,
+        onTextFilePathChange: handleTextFilePathChange,
+        scenario: visibleScenario,
+        showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
+        viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
+        viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
+          children: [
+            actorTimelineControls,
+            debugViewportOverlayControls
+          ]
         }),
-        id: "comments",
-        label: "Comments",
-        quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
-        quickAccessLabel: "Comments"
-      }] : [],
-      actorActivityFadeReferenceAt,
-      actorActivityFadeSeconds,
-      backHref: componentHref,
-      backLabel: `${componentName} scenarios`,
-      onBackNavigate: handleBackNavigate,
-      onActorActivitySelect: handleActorActivitySelect,
-      breadcrumbs,
-      debugApiRef: benchViewportDebugApiRef,
-      voiceCommentControllerRef,
-      elementTypeRegistry,
-      elementLayerHidden: !showBenchElements,
-      elementLayerOpacity: benchElementsOpacity,
-      elementAuthorId: applicationChrome?.commentActorId,
-      focusElementId,
-      focusViewportSource,
-      openViewportSource,
-      onFocusElementApplied: handleFocusElementApplied,
-      onBenchElementCreate: handleBenchElementCreate,
-      onBenchFileList: vaultFiles.listFiles,
-      onBenchElementLoad: handleBenchElementLoad,
-      onBenchElementOpen: handleBenchElementOpen,
-      onElementDelete: handleElementDelete,
-      onEdgesChange: handleEdgesChange,
-      onImagePaste: handleImagePaste,
-      onParentBenchOpen: handleParentBenchOpen,
-      nestedElementOpacity: nestedElementsOpacity,
-      onElementsChange: handleElementsChange,
-      onTextFileList: vaultFiles.listFiles,
-      onTextFilePathChange: handleTextFilePathChange,
-      scenario: visibleScenario,
-      showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
-      viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
-      viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
-        children: [
-          actorTimelineControls,
-          debugViewportOverlayControls
-        ]
-      }),
-      viewportResetKey: activeBenchPath,
-      wireframe,
-      wireframeLabels,
-      worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
-      worldOverlayImageOpacity: jpgPreviewOpacity,
-      worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
-      worldOverlaySvgOpacity: svgPreviewOpacity
+        viewportResetKey: activeBenchPath,
+        wireframe,
+        wireframeLabels,
+        worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
+        worldOverlayImageOpacity: jpgPreviewOpacity,
+        worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
+        worldOverlaySvgOpacity: svgPreviewOpacity
+      })
     })
   });
   return commentCollaborationClient && collaborationAuthority ? /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationRuntime, {
