@@ -11,6 +11,23 @@ const USER = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u;
 
 export type RealmDirectoryInvocation = StartRealmArgs & Readonly<{ realmDirectory: string }>;
 export type LatestSdkExecution = Readonly<{ mode: "current" | "delegate"; revision: string }>;
+export type SdkChannel = "production" | "staging";
+export type SdkChannelArgs = Readonly<{ channel: SdkChannel; realmArgs: readonly string[] }>;
+
+export function resolveSdkChannelArgs(args: readonly string[]): SdkChannelArgs {
+  const stagingCount = args.filter((argument) => argument === "--staging").length;
+  if (stagingCount > 1) throw new TypeError("--staging may be specified once");
+  const stagingIndex = args.indexOf("--staging");
+  if (stagingIndex > 0) throw new TypeError("--staging must be the first argument");
+  return Object.freeze({
+    channel: stagingIndex === 0 ? "staging" : "production",
+    realmArgs: Object.freeze(stagingIndex === 0 ? args.slice(1) : [...args]),
+  });
+}
+
+export function sdkRemoteRef(channel: SdkChannel): "HEAD" | "refs/heads/staging" {
+  return channel === "staging" ? "refs/heads/staging" : "HEAD";
+}
 
 export function planLatestSdkExecution(latestRevision: string, pinnedRevision?: string): LatestSdkExecution {
   if (!/^[a-f0-9]{40}$/u.test(latestRevision)) throw new TypeError("latest SDK revision is invalid");
@@ -29,7 +46,7 @@ export function resolveRealmDirectoryArgs(args: readonly string[], cwd = process
     || (command === "registration-url" && effectiveArgs.length !== 2)
     || (command === "registration-url" && forcePriorDirectory)
     || !directoryArgument) {
-    throw new TypeError("Usage: start-realm [--force] <realm-directory> | start-realm registration-url <realm-directory>");
+    throw new TypeError("Usage: start-realm [--staging] [--force] <realm-directory> | start-realm [--staging] registration-url <realm-directory>");
   }
   if (directoryArgument.split(/[\\/]/u).some((component) => component === "..")) {
     throw new TypeError("Realm directory name must not contain parent traversal");
