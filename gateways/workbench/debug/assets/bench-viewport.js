@@ -13929,23 +13929,41 @@ function CommentCollaborationPopup({ commentId }) {
 // packages/react/src/elementTypes/BufferedElementTextarea.tsx
 var import_react5 = __toESM(require_react(), 1);
 var jsx_runtime8 = __toESM(require_jsx_runtime(), 1);
+var BUFFERED_ELEMENT_TEXTAREA_COMMIT_DELAY_MS = 250;
 function BufferedElementTextarea({ onBlur, onCommit, onFocus, value, ...props }) {
   const [draft, setDraft] = import_react5.useState(value);
   const committedValueRef = import_react5.useRef(value);
   const draftRef = import_react5.useRef(value);
   const focusedRef = import_react5.useRef(false);
+  const editedWhileFocusedRef = import_react5.useRef(false);
   const onCommitRef = import_react5.useRef(onCommit);
+  const commitTimerRef = import_react5.useRef(null);
   onCommitRef.current = onCommit;
+  function clearPendingCommit() {
+    if (commitTimerRef.current === null)
+      return;
+    window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = null;
+  }
   function commitDraft() {
+    clearPendingCommit();
     const nextValue = draftRef.current;
     if (nextValue === committedValueRef.current)
       return;
     committedValueRef.current = nextValue;
     onCommitRef.current(nextValue);
   }
+  function scheduleDraftCommit(nextValue) {
+    clearPendingCommit();
+    if (nextValue === committedValueRef.current)
+      return;
+    commitTimerRef.current = window.setTimeout(commitDraft, BUFFERED_ELEMENT_TEXTAREA_COMMIT_DELAY_MS);
+  }
   import_react5.useEffect(() => {
     const previousValue = committedValueRef.current;
     if (value === previousValue)
+      return;
+    if (focusedRef.current && editedWhileFocusedRef.current && value !== draftRef.current)
       return;
     committedValueRef.current = value;
     if (focusedRef.current && draftRef.current !== previousValue)
@@ -13954,18 +13972,26 @@ function BufferedElementTextarea({ onBlur, onCommit, onFocus, value, ...props })
     setDraft(value);
   }, [value]);
   import_react5.useLayoutEffect(() => () => commitDraft(), []);
+  import_react5.useEffect(() => {
+    const commitBeforePageTeardown = () => commitDraft();
+    window.addEventListener("pagehide", commitBeforePageTeardown);
+    return () => window.removeEventListener("pagehide", commitBeforePageTeardown);
+  }, []);
   return /* @__PURE__ */ jsx_runtime8.jsx("textarea", {
     ...props,
     value: draft,
     onBlur: (event) => {
       focusedRef.current = false;
+      editedWhileFocusedRef.current = false;
       commitDraft();
       onBlur?.(event);
     },
     onChange: (event) => {
       const nextValue = event.currentTarget.value;
+      editedWhileFocusedRef.current = true;
       draftRef.current = nextValue;
       setDraft(nextValue);
+      scheduleDraftCommit(nextValue);
     },
     onFocus: (event) => {
       focusedRef.current = true;
@@ -23886,6 +23912,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
   const [isRenaming, setIsRenaming] = import_react8.useState(false);
   const [resourceContent, setResourceContent] = import_react8.useState(null);
   const [resourceError, setResourceError] = import_react8.useState(null);
+  const [repairCopyStatus, setRepairCopyStatus] = import_react8.useState(null);
   const resourceKey = `${element.id}\x1F${element.rootId ?? ""}\x1F${element.vaultId ?? ""}\x1F${element.path}\x1F${element.resourceRevision ?? ""}`;
   const hasLoadedResourceContent = resourceContent?.key === resourceKey && resourceContent.loadContent === element.loadContent;
   import_react8.useEffect(() => {
@@ -24037,6 +24064,49 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
           }
         })
       }),
+      element.repairRequest ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
+        className: "shrink-0 border-b border-amber-700/60 bg-amber-950/80 p-2 text-xs text-amber-100",
+        role: "alert",
+        children: [
+          /* @__PURE__ */ jsx_runtime17.jsx("strong", {
+            className: "block text-sm text-amber-200",
+            children: "Malformed bench document"
+          }),
+          /* @__PURE__ */ jsx_runtime17.jsx("p", {
+            className: "mt-1 whitespace-pre-wrap font-mono",
+            children: element.error
+          }),
+          /* @__PURE__ */ jsx_runtime17.jsxs("div", {
+            className: "mt-2 flex items-center gap-2",
+            children: [
+              /* @__PURE__ */ jsx_runtime17.jsx("button", {
+                "aria-label": "Copy repair request",
+                className: "rounded border border-amber-500/70 bg-amber-900/70 px-2 py-1 font-semibold text-amber-50 hover:bg-amber-800/80",
+                onClick: async (event) => {
+                  event.stopPropagation();
+                  try {
+                    await navigator.clipboard.writeText(element.repairRequest);
+                    setRepairCopyStatus("copied");
+                  } catch {
+                    setRepairCopyStatus("failed");
+                  }
+                },
+                onPointerDown: (event) => event.stopPropagation(),
+                type: "button",
+                children: "Copy repair request"
+              }),
+              repairCopyStatus === "copied" ? /* @__PURE__ */ jsx_runtime17.jsx("span", {
+                role: "status",
+                children: "Copied."
+              }) : null,
+              repairCopyStatus === "failed" ? /* @__PURE__ */ jsx_runtime17.jsx("span", {
+                role: "status",
+                children: "Copy failed. Check clipboard permissions."
+              }) : null
+            ]
+          })
+        ]
+      }) : null,
       element.readOnly ? shouldRenderLowResolutionTextProjection(element, hasLoadedResourceContent, viewportZoom) ? lodPreviewImage ? /* @__PURE__ */ jsx_runtime17.jsxs("div", {
         className: "relative min-h-0 flex-1 overflow-hidden",
         children: [
@@ -25152,6 +25222,27 @@ function isWorkbenchNoWheelTarget(target) {
   return hasWorkbenchInteractionMarker(target, "nowheel");
 }
 
+// packages/react/src/editableInteraction.ts
+var NATIVE_EDITABLE_CONTROL_SELECTOR = "input, textarea, select";
+var CONTENTEDITABLE_SELECTOR = "[contenteditable]";
+function isEditableElement(target) {
+  if (target.matches?.(NATIVE_EDITABLE_CONTROL_SELECTOR))
+    return true;
+  if (target.isContentEditable === true)
+    return true;
+  const contentEditableHost = target.closest?.(CONTENTEDITABLE_SELECTOR);
+  if (!contentEditableHost)
+    return false;
+  return contentEditableHost.getAttribute?.("contenteditable") !== "false";
+}
+function isEditableInteractionEvent(event, activeElement2) {
+  return [...event.composedPath(), event.target, activeElement2].some((target) => {
+    if (!target || typeof target !== "object")
+      return false;
+    return isEditableElement(target);
+  });
+}
+
 // packages/react/src/BenchViewport.tsx
 var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
 var defaultElementTypeRegistry = createDefaultElementTypeRegistry();
@@ -25270,6 +25361,20 @@ function shouldCanvasControlClickOverride(event) {
 }
 function shouldHandleViewportWheel(event, isNoWheelTarget) {
   return event.ctrlKey || !isNoWheelTarget;
+}
+var VIEWPORT_WHEEL_LINE_HEIGHT = 16;
+var VIEWPORT_WHEEL_MAX_PIXEL_DELTA = 100;
+var VIEWPORT_WHEEL_ZOOM_SENSITIVITY = 0.001;
+function getViewportWheelZoomFactor(event, pageHeight) {
+  const pixelDelta = event.deltaY * (event.deltaMode === 1 ? VIEWPORT_WHEEL_LINE_HEIGHT : event.deltaMode === 2 ? pageHeight : 1);
+  const boundedPixelDelta = Math.max(-VIEWPORT_WHEEL_MAX_PIXEL_DELTA, Math.min(VIEWPORT_WHEEL_MAX_PIXEL_DELTA, pixelDelta));
+  return 1 - boundedPixelDelta * VIEWPORT_WHEEL_ZOOM_SENSITIVITY;
+}
+function shouldHandleWorkbenchDeleteShortcut(event, activeElement2) {
+  return event.key === "Delete" && !isEditableInteractionEvent(event, activeElement2);
+}
+function shouldHandleWorkbenchPaste(event, activeElement2) {
+  return !isEditableInteractionEvent(event, activeElement2);
 }
 function shouldClearViewportSelectionForEvent(event) {
   return event.type === "pointerdown";
@@ -26428,10 +26533,8 @@ function BenchViewport({
   }, []);
   import_react9.useEffect(() => {
     function handleKeyDown(event) {
-      if (event.key !== "Delete")
-        return;
       const activeElement2 = document.activeElement;
-      if (isEditableInteractionEvent(event, activeElement2))
+      if (!shouldHandleWorkbenchDeleteShortcut(event, activeElement2))
         return;
       const selectedEdgeId2 = selectedEdgeIdLatestRef.current;
       if (selectedEdgeId2) {
@@ -26451,7 +26554,7 @@ function BenchViewport({
   import_react9.useEffect(() => {
     async function handlePaste(event) {
       const activeElement2 = document.activeElement;
-      if (isEditableInteractionEvent(event, activeElement2))
+      if (!shouldHandleWorkbenchPaste(event, activeElement2))
         return;
       const imageFile = getClipboardImageFile(event.clipboardData);
       if (imageFile && onImagePaste) {
@@ -27421,7 +27524,7 @@ function BenchViewport({
           const centerX = rect.width / 2;
           const centerY = rect.height / 2;
           setViewport((current) => {
-            const nextZoom = current.zoom * (event.deltaY > 0 ? 0.9 : 1.1);
+            const nextZoom = current.zoom * getViewportWheelZoomFactor(event, rect.height);
             const worldX = (pointerX - centerX - current.x) / current.zoom;
             const worldY = (pointerY - centerY - current.y) / current.zoom;
             const nextViewport = {
@@ -29341,21 +29444,6 @@ function isIOSBrowser() {
   const userAgent = navigator.userAgent || "";
   const touchMac = platform === "MacIntel" && navigator.maxTouchPoints > 1;
   return /iPad|iPhone|iPod/.test(userAgent) || touchMac;
-}
-function isEditableElement(element) {
-  if (element.matches?.("input, textarea, select"))
-    return true;
-  const editableElement = element;
-  if (typeof editableElement.isContentEditable === "boolean")
-    return editableElement.isContentEditable;
-  return Boolean(element.closest?.("[contenteditable]:not([contenteditable='false'])"));
-}
-function isEditableInteractionEvent(event, activeElement2) {
-  return [...event.composedPath(), event.target, activeElement2].some((target) => {
-    if (!target || typeof target !== "object")
-      return false;
-    return isEditableElement(target);
-  });
 }
 function blurActiveEditableInViewport(viewportNode) {
   const activeElement2 = document.activeElement;
