@@ -13690,7 +13690,7 @@ var benchElementType = {
   getWidth(element) {
     return element.width;
   },
-  render({ activeEdgeHandleSide, edgeHandles, element, isGroupDropTarget, isSelected, onBenchElementLoad, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementSelect, selectedCount, viewportZoom }) {
+  render({ activeEdgeHandleSide, edgeHandles, element, isGroupDropTarget, isSelected, onBenchElementLoad, onBenchElementOpen, onElementChange, onElementDelete, onElementHandlePointerDown, onElementMoveStart, onElementSelect, selectedCount, viewportZoom }) {
     const title = element.label || element.path || "Bench";
     return /* @__PURE__ */ jsx_runtime6.jsx(NodeWrapper, {
       activeEdgeHandleSide,
@@ -13714,6 +13714,12 @@ var benchElementType = {
         "aria-label": title,
         className: "relative flex h-full w-full items-center justify-center overflow-hidden",
         "data-bench-id": element.id,
+        onDoubleClick: onBenchElementOpen ? (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!element.error && element.path)
+            onBenchElementOpen(element.id);
+        } : undefined,
         children: [
           /* @__PURE__ */ jsx_runtime6.jsx("div", {
             className: "pointer-events-none absolute left-2 top-2 z-10 max-w-none whitespace-nowrap rounded border border-violet-300/20 bg-slate-950/70 px-2 py-1 text-xs font-medium text-violet-50 shadow",
@@ -13748,6 +13754,7 @@ var benchElementType = {
               event.stopPropagation();
               onBenchElementLoad(element.id);
             },
+            onDoubleClick: (event) => event.stopPropagation(),
             onPointerDown: (event) => event.stopPropagation(),
             children: "Load"
           }) : null
@@ -27496,6 +27503,16 @@ function BenchViewport({
     }
     return [...byId.values()];
   }
+  function openBenchElement(elementId) {
+    if (!onBenchElementOpen)
+      return;
+    const sourceElement = getCurrentZoomOpenElements().find((element) => element.id === elementId && element.kind === "bench" && !element.error && Boolean(element.path));
+    if (!sourceElement)
+      return;
+    const rect = viewportRef.current?.getBoundingClientRect();
+    const currentViewportSize = { height: rect?.height ?? viewportSize.height, width: rect?.width ?? viewportSize.width };
+    onBenchElementOpen(sourceElement, { sceneBounds, sourceElement, viewport: viewportLatestRef.current, viewportSize: currentViewportSize });
+  }
   function setCurrentRenderPlan(plan) {
     renderPlanLatestRef.current = plan;
     setRenderPlan(plan);
@@ -28843,6 +28860,7 @@ function BenchViewport({
                     nestedElementOpacity,
                     onElementChange: updateElement,
                     onBenchElementLoad,
+                    onBenchElementOpen: onBenchElementOpen ? openBenchElement : undefined,
                     onElementDelete: deleteElement,
                     onElementHandlePointerDown: startElementHandlePointerDown,
                     onEditorAutoFocusApplied: (elementId) => setEditorAutoFocusId((current) => current === elementId ? null : current),
@@ -30228,6 +30246,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   nestedElementOpacity,
   onElementChange,
   onBenchElementLoad,
+  onBenchElementOpen,
   onElementDelete,
   onElementHandlePointerDown,
   onEditorAutoFocusApplied,
@@ -30300,6 +30319,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
               lodPreviewImage: item.previewImage,
               onElementChange,
               onBenchElementLoad,
+              onBenchElementOpen,
               onElementDelete,
               onElementHandlePointerDown,
               onEditorAutoFocusApplied: () => onEditorAutoFocusApplied(item.element.id),
@@ -30376,6 +30396,7 @@ function ViewportElement({
   lodPreviewImage,
   onElementChange,
   onBenchElementLoad,
+  onBenchElementOpen,
   onElementDelete,
   onElementHandlePointerDown,
   onEditorAutoFocusApplied,
@@ -30403,6 +30424,7 @@ function ViewportElement({
     lodPreviewImage,
     onElementChange,
     onBenchElementLoad,
+    onBenchElementOpen,
     onElementDelete,
     onElementHandlePointerDown,
     onEditorAutoFocusApplied,
