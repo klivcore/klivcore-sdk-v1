@@ -2689,6 +2689,9 @@ async function createLiveComponentGateway(options) {
   const subscribers = new Set;
   const watchers = new Map;
   const debounceTimers = new Map;
+  const watcherRetryTimers = new Map;
+  const watcherRetryAttempts = new Map;
+  const watcherFallbackDirectories = new Map;
   let closed = false;
   const lineageFile = options.lineageFile ? resolve2(options.lineageFile) : undefined;
   const persistedLineage = lineageFile ? await readLineage(lineageFile, options.authority) : null;
@@ -2825,8 +2828,8 @@ data: ${JSON.stringify({
       }
     }
   };
-  const rebuild = (typeId) => {
-    const operation = rebuildQueue.then(() => rebuildNow(typeId));
+  const rebuild = (typeId, tolerateCandidateFailure = false) => {
+    const operation = rebuildQueue.then(() => rebuildNow(typeId, tolerateCandidateFailure));
     rebuildQueue = operation.catch(() => {
       return;
     });
@@ -2844,59 +2847,121 @@ data: ${JSON.stringify({
       });
     }, 40));
   }
+  function scheduleWatcherRetry(registration, error) {
+    if (closed || watcherRetryTimers.has(registration.typeId))
+      return;
+    const attempt = (watcherRetryAttempts.get(registration.typeId) ?? 0) + 1;
+    watcherRetryAttempts.set(registration.typeId, attempt);
+    const delay = Math.min(30000, 250 * 2 ** Math.min(attempt - 1, 7));
+    console.error(`Live component watcher unavailable for ${registration.typeId}; retrying in ${delay}ms.`, error);
+    const timer = setTimeout(() => {
+      watcherRetryTimers.delete(registration.typeId);
+      if (installWatcher(registration))
+        rebuild(registration.typeId).catch(() => {
+          return;
+        });
+    }, delay);
+    timer.unref?.();
+    watcherRetryTimers.set(registration.typeId, timer);
+  }
   function installWatcher(registration) {
     if (closed)
-      return;
+      return false;
     const targetDirectory = dirname3(registration.entry);
     let watchedDirectory = targetDirectory;
+    let fallbackError;
+    let retryFallback = false;
     while (true) {
+      const relativeTarget = relative2(watchedDirectory, targetDirectory);
+      const relevantChild = relativeTarget ? relativeTarget.split(sep2)[0] : undefined;
+      let watcher;
       try {
-        const relativeTarget = relative2(watchedDirectory, targetDirectory);
-        const relevantChild = relativeTarget ? relativeTarget.split(sep2)[0] : undefined;
-        const watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
+        watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
           if (relevantChild && filename && filename.toString() !== relevantChild)
             return;
           scheduleCandidateRefresh(registration);
         });
-        const previous = watchers.get(registration.typeId);
-        watchers.set(registration.typeId, watcher);
-        previous?.close();
-        return;
-      } catch {
+      } catch (error) {
+        fallbackError ??= error;
+        const code = error.code;
+        if (code === "EACCES" || code === "EPERM")
+          retryFallback = true;
         const parent = dirname3(watchedDirectory);
-        if (parent === watchedDirectory)
-          return;
+        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "EACCES" && code !== "EPERM" || parent === watchedDirectory) {
+          scheduleWatcherRetry(registration, error);
+          return false;
+        }
         watchedDirectory = parent;
+        continue;
       }
+      watcher.on("error", (error) => {
+        if (watchers.get(registration.typeId) !== watcher)
+          return;
+        watchers.delete(registration.typeId);
+        try {
+          watcher.close();
+        } catch {}
+        scheduleWatcherRetry(registration, error);
+      });
+      const previous = watchers.get(registration.typeId);
+      watchers.set(registration.typeId, watcher);
+      previous?.close();
+      if (watchedDirectory === targetDirectory) {
+        const retryTimer = watcherRetryTimers.get(registration.typeId);
+        if (retryTimer)
+          clearTimeout(retryTimer);
+        watcherRetryTimers.delete(registration.typeId);
+        watcherRetryAttempts.delete(registration.typeId);
+        watcherFallbackDirectories.delete(registration.typeId);
+        return true;
+      }
+      if (watcherFallbackDirectories.get(registration.typeId) !== watchedDirectory) {
+        watcherFallbackDirectories.set(registration.typeId, watchedDirectory);
+        console.warn(`Live component watcher for ${registration.typeId} is attached to ancestor ${watchedDirectory}.`);
+      }
+      if (retryFallback)
+        scheduleWatcherRetry(registration, fallbackError);
+      return false;
     }
   }
-  for (const typeId of registrations.keys())
-    await rebuildNow(typeId, true);
-  if (!catalog)
-    await publishCatalog();
-  if (options.watch !== false) {
-    for (const registration of registrations.values())
-      installWatcher(registration);
+  async function shutdown() {
+    if (closed)
+      return;
+    closed = true;
+    for (const timer of debounceTimers.values())
+      clearTimeout(timer);
+    debounceTimers.clear();
+    for (const timer of watcherRetryTimers.values())
+      clearTimeout(timer);
+    watcherRetryTimers.clear();
+    watcherRetryAttempts.clear();
+    watcherFallbackDirectories.clear();
+    for (const watcher of watchers.values())
+      watcher.close();
+    watchers.clear();
+    for (const subscriber of subscribers) {
+      try {
+        subscriber.close();
+      } catch {}
+    }
+    subscribers.clear();
+    await rebuildQueue;
+  }
+  try {
+    if (options.watch !== false) {
+      for (const registration of registrations.values())
+        installWatcher(registration);
+    }
+    for (const typeId of registrations.keys())
+      await rebuild(typeId, true);
+    if (!catalog)
+      await publishCatalog();
+  } catch (error) {
+    await shutdown();
+    throw error;
   }
   return Object.freeze({
-    async close() {
-      if (closed)
-        return;
-      closed = true;
-      for (const timer of debounceTimers.values())
-        clearTimeout(timer);
-      debounceTimers.clear();
-      for (const watcher of watchers.values())
-        watcher.close();
-      watchers.clear();
-      for (const subscriber of subscribers) {
-        try {
-          subscriber.close();
-        } catch {}
-      }
-      subscribers.clear();
-      await rebuildQueue;
-    },
+    close: shutdown,
     async fetch(request) {
       if (closed)
         return new Response("Gateway closed", { status: 503 });
