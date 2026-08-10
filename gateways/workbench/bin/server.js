@@ -1620,7 +1620,7 @@ function stringifyHjsonBenchValue(value, depth) {
   if (value === null)
     return "null";
   if (typeof value === "string")
-    return quoteHjsonString(value);
+    return quoteHjsonString(value, indent);
   if (typeof value === "number" || typeof value === "boolean")
     return JSON.stringify(value);
   if (Array.isArray(value)) {
@@ -1637,10 +1637,11 @@ ${indent}]`;
       return "{}";
     return `{
 ${entries.map(([key, child]) => {
-      const rendered = stringifyHjsonBenchValue(child, depth + 1);
+      const rendered = typeof child === "string" ? quoteHjsonString(child, childIndent, true) : stringifyHjsonBenchValue(child, depth + 1);
       const lines = rendered.split(`
 `);
-      const firstLine = `${childIndent}${formatHjsonKey(key)}: ${lines[0]}`;
+      const firstLine = `${childIndent}${formatHjsonKey(key)}:${rendered.startsWith(`
+`) ? "" : " "}${lines[0]}`;
       return withHjsonComments(value, key, addTrailingComma([firstLine, ...lines.slice(1)].join(`
 `)), childIndent);
     }).join(`
@@ -1665,15 +1666,21 @@ function addTrailingComma(value) {
 function formatHjsonKey(key) {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && !hjsonReservedKeys.has(key) ? key : JSON.stringify(key);
 }
-function quoteHjsonString(value) {
-  const hasSignificantIndentation = value.split(`
-`).some((line) => /^[\t ]/.test(line));
-  if (value.includes(`
-`) && !value.includes("'''") && !hasSignificantIndentation)
-    return `'''
-${value}
-'''`;
-  return JSON.stringify(value);
+function quoteHjsonString(value, multilineIndent, startOnNextLine = false) {
+  const quoted = JSON.stringify(value);
+  const requiresEscape = quoted.slice(1, -1).includes("\\");
+  const hasUnsupportedMultilineControl = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\r]/.test(value);
+  if (requiresEscape && !value.includes("'''") && !hasUnsupportedMultilineControl) {
+    const content = value.split(`
+`).map((line) => line ? `${multilineIndent}${line}` : "").join(`
+`);
+    const block = `'''
+${content}
+${multilineIndent}'''`;
+    return startOnNextLine ? `
+${multilineIndent}${block}` : block;
+  }
+  return quoted;
 }
 var hjsonReservedKeys = new Set(["true", "false", "null"]);
 function withHjsonComments(container, key, rendered, indent) {
@@ -2652,7 +2659,7 @@ function isPathConflictError(error) {
 import { createHash as createHash2 } from "crypto";
 import { watch } from "fs";
 import { mkdir as mkdir3, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname3, isAbsolute, resolve as resolve2 } from "path";
+import { dirname as dirname3, isAbsolute, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
 var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
 var SHA256 = /^[a-f0-9]{64}$/u;
@@ -2680,7 +2687,7 @@ async function createLiveComponentGateway(options) {
   const active = new Map;
   const immutableArtifacts = new Map;
   const subscribers = new Set;
-  const watchers = [];
+  const watchers = new Map;
   const debounceTimers = new Map;
   let closed = false;
   const lineageFile = options.lineageFile ? resolve2(options.lineageFile) : undefined;
@@ -2730,21 +2737,23 @@ async function createLiveComponentGateway(options) {
     sequence = nextSequence;
     catalog = nextCatalog;
     previousCatalogRevision = nextCatalog.catalogRevision;
-    const event = encoder.encode(`event: component-revision-activated
+    if (changedTypeId) {
+      const event = encoder.encode(`event: component-revision-activated
 data: ${JSON.stringify({
-      catalogRevision: catalog.catalogRevision,
-      componentTypeId: changedTypeId,
-      implementationRevision: active.get(changedTypeId)?.implementationRevision,
-      sequence,
-      type: "component-revision-activated"
-    })}
+        catalogRevision: catalog.catalogRevision,
+        componentTypeId: changedTypeId,
+        implementationRevision: active.get(changedTypeId)?.implementationRevision,
+        sequence,
+        type: "component-revision-activated"
+      })}
 
 `);
-    for (const subscriber of [...subscribers]) {
-      try {
-        subscriber.enqueue(event);
-      } catch {
-        subscribers.delete(subscriber);
+      for (const subscriber of [...subscribers]) {
+        try {
+          subscriber.enqueue(event);
+        } catch {
+          subscribers.delete(subscriber);
+        }
       }
     }
   };
@@ -2765,13 +2774,21 @@ data: ${JSON.stringify({
       }
     }
   };
-  const rebuildNow = async (typeId) => {
+  const rebuildNow = async (typeId, tolerateCandidateFailure = false) => {
     if (closed)
       throw new Error("Live component Gateway is closed");
     const registration = registrations.get(typeId);
     if (!registration)
       throw new TypeError(`Unknown live component: ${typeId}`);
-    const built = await buildReactComponent(registration);
+    let built;
+    try {
+      built = await buildReactComponent(registration);
+    } catch (error) {
+      publishBuildFailure(typeId);
+      if (tolerateCandidateFailure)
+        return;
+      throw error;
+    }
     const previous = active.get(typeId);
     if (previous?.implementationRevision === built.implementationRevision)
       return;
@@ -2809,32 +2826,57 @@ data: ${JSON.stringify({
     }
   };
   const rebuild = (typeId) => {
-    const operation = rebuildQueue.then(() => rebuildNow(typeId)).catch((error) => {
-      publishBuildFailure(typeId);
-      throw error;
-    });
+    const operation = rebuildQueue.then(() => rebuildNow(typeId));
     rebuildQueue = operation.catch(() => {
       return;
     });
     return operation;
   };
-  for (const typeId of registrations.keys())
-    await rebuild(typeId);
-  if (options.watch !== false) {
-    for (const registration of registrations.values()) {
-      const watcher = watch(dirname3(registration.entry), { persistent: false }, () => {
-        const timer = debounceTimers.get(registration.typeId);
-        if (timer)
-          clearTimeout(timer);
-        debounceTimers.set(registration.typeId, setTimeout(() => {
-          debounceTimers.delete(registration.typeId);
-          rebuild(registration.typeId).catch(() => {
-            return;
-          });
-        }, 40));
+  function scheduleCandidateRefresh(registration) {
+    const timer = debounceTimers.get(registration.typeId);
+    if (timer)
+      clearTimeout(timer);
+    debounceTimers.set(registration.typeId, setTimeout(() => {
+      debounceTimers.delete(registration.typeId);
+      installWatcher(registration);
+      rebuild(registration.typeId).catch(() => {
+        return;
       });
-      watchers.push(watcher);
+    }, 40));
+  }
+  function installWatcher(registration) {
+    if (closed)
+      return;
+    const targetDirectory = dirname3(registration.entry);
+    let watchedDirectory = targetDirectory;
+    while (true) {
+      try {
+        const relativeTarget = relative2(watchedDirectory, targetDirectory);
+        const relevantChild = relativeTarget ? relativeTarget.split(sep2)[0] : undefined;
+        const watcher = watch(watchedDirectory, { persistent: false }, (_eventType, filename) => {
+          if (relevantChild && filename && filename.toString() !== relevantChild)
+            return;
+          scheduleCandidateRefresh(registration);
+        });
+        const previous = watchers.get(registration.typeId);
+        watchers.set(registration.typeId, watcher);
+        previous?.close();
+        return;
+      } catch {
+        const parent = dirname3(watchedDirectory);
+        if (parent === watchedDirectory)
+          return;
+        watchedDirectory = parent;
+      }
     }
+  }
+  for (const typeId of registrations.keys())
+    await rebuildNow(typeId, true);
+  if (!catalog)
+    await publishCatalog();
+  if (options.watch !== false) {
+    for (const registration of registrations.values())
+      installWatcher(registration);
   }
   return Object.freeze({
     async close() {
@@ -2844,8 +2886,9 @@ data: ${JSON.stringify({
       for (const timer of debounceTimers.values())
         clearTimeout(timer);
       debounceTimers.clear();
-      for (const watcher of watchers)
+      for (const watcher of watchers.values())
         watcher.close();
+      watchers.clear();
       for (const subscriber of subscribers) {
         try {
           subscriber.close();

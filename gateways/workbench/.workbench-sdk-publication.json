@@ -7,14 +7,14 @@
   "files": [
     {
       "path": "bin/bench.js",
-      "bytes": 79786,
-      "sha256": "dd23ff7e26cab952a4eac8983eaf86ce983a532c00b442f86f8c3f38170a2236",
+      "bytes": 80245,
+      "sha256": "b1ea7deaf1721e6e405ed3eb4e2e9d13e0646acac960ec1d322747a4a5fa0561",
       "mode": 420
     },
     {
       "path": "bin/server.js",
-      "bytes": 136937,
-      "sha256": "d9d8846384a96609922c8054eb8d252c6f3075dc608132fb6183a25886667ec9",
+      "bytes": 138615,
+      "sha256": "0e4713d3974ce5075ea794c2cc374a278169a7ca7ab29173fa5e0ae876d27c33",
       "mode": 420
     },
     {
@@ -73,8 +73,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 1977690,
-      "sha256": "57e9dd04c6758b11849eeba9ea49251c3f9aac876d33fb9bbe3a1fd3d00dda72",
+      "bytes": 1978149,
+      "sha256": "8966307142587c77fc7705f72044f86443513ea8868cb0184560ef0900a55ab6",
       "mode": 420
     }
   ]

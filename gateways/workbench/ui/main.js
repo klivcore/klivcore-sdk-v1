@@ -25382,7 +25382,7 @@ function stringifyHjsonBenchValue(value, depth) {
   if (value === null)
     return "null";
   if (typeof value === "string")
-    return quoteHjsonString(value);
+    return quoteHjsonString(value, indent);
   if (typeof value === "number" || typeof value === "boolean")
     return JSON.stringify(value);
   if (Array.isArray(value)) {
@@ -25399,10 +25399,11 @@ ${indent}]`;
       return "{}";
     return `{
 ${entries.map(([key, child]) => {
-      const rendered = stringifyHjsonBenchValue(child, depth + 1);
+      const rendered = typeof child === "string" ? quoteHjsonString(child, childIndent, true) : stringifyHjsonBenchValue(child, depth + 1);
       const lines = rendered.split(`
 `);
-      const firstLine = `${childIndent}${formatHjsonKey(key)}: ${lines[0]}`;
+      const firstLine = `${childIndent}${formatHjsonKey(key)}:${rendered.startsWith(`
+`) ? "" : " "}${lines[0]}`;
       return withHjsonComments(value, key, addTrailingComma([firstLine, ...lines.slice(1)].join(`
 `)), childIndent);
     }).join(`
@@ -25427,15 +25428,21 @@ function addTrailingComma(value) {
 function formatHjsonKey(key) {
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) && !hjsonReservedKeys.has(key) ? key : JSON.stringify(key);
 }
-function quoteHjsonString(value) {
-  const hasSignificantIndentation = value.split(`
-`).some((line) => /^[\t ]/.test(line));
-  if (value.includes(`
-`) && !value.includes("'''") && !hasSignificantIndentation)
-    return `'''
-${value}
-'''`;
-  return JSON.stringify(value);
+function quoteHjsonString(value, multilineIndent, startOnNextLine = false) {
+  const quoted = JSON.stringify(value);
+  const requiresEscape = quoted.slice(1, -1).includes("\\");
+  const hasUnsupportedMultilineControl = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\r]/.test(value);
+  if (requiresEscape && !value.includes("'''") && !hasUnsupportedMultilineControl) {
+    const content = value.split(`
+`).map((line) => line ? `${multilineIndent}${line}` : "").join(`
+`);
+    const block = `'''
+${content}
+${multilineIndent}'''`;
+    return startOnNextLine ? `
+${multilineIndent}${block}` : block;
+  }
+  return quoted;
 }
 var hjsonReservedKeys = new Set(["true", "false", "null"]);
 function withHjsonComments(container, key, rendered, indent) {
