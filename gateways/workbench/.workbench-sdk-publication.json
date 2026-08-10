@@ -25,8 +25,8 @@
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1602264,
-      "sha256": "38eb7fed7e5cb0fbb32bb2f3c6c5050486ec01f1e8c2005da49b71f0ec690a60",
+      "bytes": 1603405,
+      "sha256": "23e967456fe6a37ea44e3c807eed2928e6745c8296eb541cabd26a0606451469",
       "mode": 420
     },
     {
@@ -73,8 +73,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 1992688,
-      "sha256": "f48f65c055967b31117a39ab2f66d6cc44127d4d880090644d7456c6580ed96a",
+      "bytes": 1993829,
+      "sha256": "1f49dba0dabadbd823439ed91a04190dac3554621e52a1f8784efc7312c389ac",
       "mode": 420
     }
   ]
