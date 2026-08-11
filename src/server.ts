@@ -292,7 +292,7 @@ async function boundedJsonObject(request: Request, maxBytes = 4 * 1024): Promise
 }
 
 const relayRequestHeaderNames = Object.freeze(["accept", "authorization", "content-type"]);
-const relayResponseHeaderNames = Object.freeze(["cache-control", "content-length", "content-type", "etag", "last-modified"]);
+const relayResponseHeaderNames = Object.freeze(["cache-control", "content-length", "content-type", "etag", "last-modified", "x-content-sha256"]);
 
 function selectedHeaders(headers: Headers, names: readonly string[]): Headers {
   const selected = new Headers();

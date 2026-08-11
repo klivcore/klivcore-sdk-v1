@@ -19,8 +19,8 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 164116,
-      "sha256": "f67f41c8c653d48a07944cb24514cfee2c28ce77aadbe324a05dfc35e864a061",
+      "bytes": 164112,
+      "sha256": "720c42887c4ab528efdbb7b032b950106eb1f24a0ad565548b1f66cae8b65386",
       "mode": 420
     },
     {
@@ -73,8 +73,8 @@
     },
     {
       "path": "ui/live-component-frame-runtime.js",
-      "bytes": 531254,
-      "sha256": "afaee8da9480a803c833595cdc7e2789f29ef98b92d84ca68a0bca4e7c05b7b2",
+      "bytes": 530478,
+      "sha256": "0ad2b9ed3fcbd41cf99207c68590abec58a1d9f49830c0d09a4385ebf81315c6",
       "mode": 420
     },
     {
@@ -85,8 +85,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 2031017,
-      "sha256": "a828c5106c9ea0ebb8aaff86f89047d9aa5578e6d6f66b69e814614d1e14558d",
+      "bytes": 2031036,
+      "sha256": "0086aba5155b1c26a0836a97e53c4b37e96d9a84e75ce8039bf71db34c5a64b8",
       "mode": 420
     }
   ]

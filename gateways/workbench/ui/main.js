@@ -39250,7 +39250,7 @@ async function readBoundedSourceResponse(response) {
 }
 async function loadFrameRuntime(fetcher, apiBase, signal) {
   const response = await fetcher.call(globalThis, new URL("frame-runtime.js", apiBase), {
-    cache: "force-cache",
+    cache: "no-store",
     headers: { accept: "text/javascript" },
     redirect: "error",
     signal
@@ -39260,8 +39260,8 @@ async function loadFrameRuntime(fetcher, apiBase, signal) {
       throw new Error(`Live component frame runtime requires status 200, received ${response.status}`);
     if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/javascript"))
       throw new Error("Live component frame runtime has an invalid content type");
-    if (!response.headers.get("cache-control")?.toLowerCase().includes("immutable"))
-      throw new Error("Live component frame runtime is not immutable");
+    if (response.headers.get("cache-control")?.toLowerCase() !== "private, no-store, no-transform")
+      throw new Error("Live component frame runtime cache policy is invalid");
     const expectedSha256 = response.headers.get("x-content-sha256");
     if (!expectedSha256 || !/^[a-f0-9]{64}$/u.test(expectedSha256))
       throw new Error("Live component frame runtime hash is invalid");

@@ -3853,7 +3853,7 @@ function requestHandler(server, debugAssets, liveComponents, frameRuntime) {
       }
       return new Response(request.method === "HEAD" ? null : frameRuntime.bytes.slice(), {
         headers: {
-          "cache-control": "public, max-age=31536000, immutable",
+          "cache-control": "private, no-store, no-transform",
           "content-length": String(frameRuntime.bytes.byteLength),
           "content-type": "text/javascript; charset=utf-8",
           etag: frameRuntime.etag,
