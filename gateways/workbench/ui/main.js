@@ -27324,7 +27324,7 @@ function BenchViewport({
   const [selectedEdgeId, setSelectedEdgeId] = import_react9.useState(null);
   const [selectedIds, setSelectedIds] = import_react9.useState(() => new Set);
   const [editorAutoFocusId, setEditorAutoFocusId] = import_react9.useState(null);
-  const [fullscreenElementHostId, setFullscreenElementHostId] = import_react9.useState(null);
+  const [fullViewportElementHostId, setFullViewportElementHostId] = import_react9.useState(null);
   const [openActorId, setOpenActorId] = import_react9.useState(null);
   const [openApplicationPanelId, setOpenApplicationPanelId] = import_react9.useState(null);
   const [lastActorId, setLastActorId] = import_react9.useState(null);
@@ -27634,16 +27634,6 @@ function BenchViewport({
       window.removeEventListener("pagehide", flushViewport);
       viewportPersistenceControllerRef.current?.dispose();
     };
-  }, []);
-  import_react9.useEffect(() => {
-    const syncFullscreenElement = () => {
-      const fullscreenElement = document.fullscreenElement;
-      const hostId = fullscreenElement instanceof HTMLElement && viewportRef.current?.contains(fullscreenElement) ? fullscreenElement.getAttribute("data-workbench-element-host") : null;
-      setFullscreenElementHostId(hostId);
-    };
-    document.addEventListener("fullscreenchange", syncFullscreenElement);
-    syncFullscreenElement();
-    return () => document.removeEventListener("fullscreenchange", syncFullscreenElement);
   }, []);
   import_react9.useEffect(() => {
     lodRasterPyramid.resume();
@@ -28654,14 +28644,14 @@ function BenchViewport({
           if (!elementId || !host || host.getAttribute("data-workbench-element-host") !== elementId || !event.currentTarget.contains(host))
             return;
           const element = getCurrentZoomOpenElements().find((candidate) => candidate.id === elementId);
-          if (element?.kind === "bench" && onBenchElementOpen)
-            return;
           event.preventDefault();
           event.stopPropagation();
           setAddNodeMenu(null);
-          host.requestFullscreen?.().catch(() => {
+          if (element?.kind === "bench" && onBenchElementOpen) {
+            openBenchElement(elementId);
             return;
-          });
+          }
+          setFullViewportElementHostId(elementId);
         },
         onDoubleClick: (event) => {
           event.preventDefault();
@@ -28851,6 +28841,7 @@ function BenchViewport({
             }, `${item.path}:${index2}`))
           }) : null,
           /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
+            fullViewportActive: fullViewportElementHostId !== null,
             layerRef: transformLayerRef,
             children: [
               /* @__PURE__ */ jsx_runtime20.jsx(ViewportWorldGrid, {}),
@@ -28889,7 +28880,7 @@ function BenchViewport({
                     elementTypeRegistry,
                     edges,
                     elements,
-                    fullscreenElementHostId,
+                    fullViewportElementHostId,
                     highlightedGroupId,
                     nestedElementOpacity,
                     onElementChange: updateElement,
@@ -28905,6 +28896,7 @@ function BenchViewport({
                     onElementMoveStart: startElementMove,
                     onElementRuntimePreview: updateRuntimeCodePreview,
                     onElementSelect: selectElement,
+                    onFullViewportExit: () => setFullViewportElementHostId(null),
                     onTextFileList,
                     onTextFilePathChange,
                     renderPlan: wireframe ? createWireframeRenderPlan(worldElements) : renderPlan,
@@ -30147,10 +30139,11 @@ function BenchViewportRunChecksPanel({ onToggleStress, stressStats }) {
     ]
   });
 }
-function ViewportTransformLayer({ children, layerRef }) {
+function ViewportTransformLayer({ children, fullViewportActive, layerRef }) {
   return /* @__PURE__ */ jsx_runtime20.jsx("div", {
     ref: layerRef,
     className: "absolute left-0 top-0 h-full w-full",
+    "data-workbench-full-viewport-active": fullViewportActive ? "true" : undefined,
     "data-workbench-transform-layer": "true",
     style: { transformOrigin: "0 0" },
     children
@@ -30276,7 +30269,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   elementTypeRegistry,
   edges,
   elements,
-  fullscreenElementHostId,
+  fullViewportElementHostId,
   highlightedGroupId,
   nestedElementOpacity,
   onElementChange,
@@ -30289,6 +30282,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   onElementMoveStart,
   onElementRuntimePreview,
   onElementSelect,
+  onFullViewportExit,
   onTextFileList,
   onTextFilePathChange,
   renderPlan,
@@ -30303,7 +30297,10 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
     children: [
       /* @__PURE__ */ jsx_runtime20.jsx("style", {
         children: `
-        [data-workbench-element-fullscreen="true"] > [data-workbench-element-id] {
+        [data-workbench-transform-layer="true"][data-workbench-full-viewport-active="true"] {
+          transform: none !important;
+        }
+        [data-workbench-element-full-viewport="true"] > [data-workbench-element-id] {
           inset: 0 !important;
           height: 100% !important;
           transform: none !important;
@@ -30330,7 +30327,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           }, item.id);
         }
         const elementOpacity = item.element.id.includes("::") ? nestedElementOpacity : 1;
-        const isFullscreen = fullscreenElementHostId === item.element.id;
+        const isFullViewport = fullViewportElementHostId === item.element.id;
         if (wireframe && item.element.kind !== "actor") {
           return /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
@@ -30345,12 +30342,12 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           }, item.element.id);
         }
         return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-          className: `absolute left-0 top-0 ${isFullscreen ? "overflow-hidden bg-slate-950" : "h-0 w-0 overflow-visible"}`,
-          "data-workbench-element-fullscreen": isFullscreen ? "true" : undefined,
+          className: `absolute left-0 top-0 ${isFullViewport ? "overflow-hidden bg-slate-950" : "h-0 w-0 overflow-visible"}`,
+          "data-workbench-element-full-viewport": isFullViewport ? "true" : undefined,
           "data-workbench-element-host": item.element.id,
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
           "data-workbench-stack-index": elementZIndexes.get(item.element.id),
-          style: isFullscreen ? { height: "100%", left: 0, opacity: elementOpacity, top: 0, width: "100%", zIndex: elementZIndexes.get(item.element.id) } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
+          style: isFullViewport ? { height: "100vh", left: 0, opacity: elementOpacity, position: "fixed", top: 0, width: "100vw", zIndex: 2147483646 } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
             /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
               element: item.element,
@@ -30382,16 +30379,14 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
                 viewportZoom
               })
             }),
-            isFullscreen ? /* @__PURE__ */ jsx_runtime20.jsx("button", {
-              "aria-label": "Back from fullscreen",
+            isFullViewport ? /* @__PURE__ */ jsx_runtime20.jsx("button", {
+              "aria-label": "Back from full viewport",
               className: "fixed left-4 top-4 z-[2147483647] rounded border border-slate-600 bg-slate-950/90 px-3 py-2 text-sm font-semibold text-slate-100 shadow-xl hover:border-cyan-400",
               "data-workbench-viewport-controls": "true",
               onClick: (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                document.exitFullscreen?.().catch(() => {
-                  return;
-                });
+                onFullViewportExit();
               },
               onDoubleClick: (event) => event.stopPropagation(),
               onPointerDown: (event) => event.stopPropagation(),
