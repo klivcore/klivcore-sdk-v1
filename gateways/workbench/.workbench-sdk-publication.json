@@ -19,14 +19,14 @@
     },
     {
       "path": "debug/assets/bench-viewport.css",
-      "bytes": 38481,
-      "sha256": "b2957b22b55cef422d45dd2ec0c149bad0c43d44205d0539faace3648b7691ff",
+      "bytes": 38518,
+      "sha256": "74691d42a52ada553fb0297aa13e8643be1b98ffacd070d958ba1ee6d426dfd1",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1603739,
-      "sha256": "074cfc2a76fde4189b58fca9b54500576c0bb58945c16c432b4d1ea08793a4ab",
+      "bytes": 1607086,
+      "sha256": "913f78dbc65de7435ccfb9eecc6d8d232027733da074da21fee33c490810c9e6",
       "mode": 420
     },
     {
@@ -43,8 +43,8 @@
     },
     {
       "path": "ui/debug-index.css",
-      "bytes": 38481,
-      "sha256": "b2957b22b55cef422d45dd2ec0c149bad0c43d44205d0539faace3648b7691ff",
+      "bytes": 38518,
+      "sha256": "74691d42a52ada553fb0297aa13e8643be1b98ffacd070d958ba1ee6d426dfd1",
       "mode": 420
     },
     {
@@ -67,14 +67,14 @@
     },
     {
       "path": "ui/main.css",
-      "bytes": 33722,
-      "sha256": "3141e639f5bcabd7b7081f75eb088eb2edb56678df50404e097556923dc25582",
+      "bytes": 33777,
+      "sha256": "841d7e525b638a4aa79af96b7262186819cb2e826464b03787202207c9d5b1c5",
       "mode": 420
     },
     {
       "path": "ui/main.js",
-      "bytes": 1994422,
-      "sha256": "a10e8a3942a4be85560bbc781076e53955f9832b364681dee73e685a64cbced5",
+      "bytes": 1997769,
+      "sha256": "3ec719fb1b856c3c14655fb8dad1d64edfd3a0970a4faa9b1ffd83040f19cb9d",
       "mode": 420
     }
   ]
