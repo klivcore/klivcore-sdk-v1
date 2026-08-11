@@ -29375,7 +29375,7 @@ function BenchViewport({
                 className: "absolute inset-x-0 bottom-0 overflow-hidden",
                 "data-workbench-detail-content": "true",
                 ref: setDetailPortalTarget,
-                style: { top: 48 }
+                style: { isolation: "isolate", top: 48 }
               })
             ]
           }) : null
