@@ -3868,6 +3868,13 @@ function requestHandler(server, debugAssets, liveComponents, frameRuntime) {
       canonicalUrl.pathname = `/extensions/artifacts/${serviceArtifact[1]}`;
       return liveComponents.fetch(new Request(canonicalUrl, request));
     }
+    if (liveComponents && request.method === "POST" && url.pathname === "/v1/components/sources/ensure") {
+      const logicalRequest = publishedSourceEnsureRequest(request, url);
+      if (!logicalRequest) {
+        return Response.json({ error: "Live component source request origin is not authorized" }, { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" }, status: 403 });
+      }
+      return liveComponents.fetch(logicalRequest);
+    }
     if (liveComponents && (url.pathname.startsWith("/v1/components/") || url.pathname.startsWith("/extensions/artifacts/"))) {
       return liveComponents.fetch(request);
     }
@@ -3899,6 +3906,22 @@ function requestHandler(server, debugAssets, liveComponents, frameRuntime) {
       ]);
     }
   });
+}
+function publishedSourceEnsureRequest(request, url) {
+  const forwardedHost = request.headers.get("x-forwarded-host");
+  const forwardedProto = request.headers.get("x-forwarded-proto");
+  if (!forwardedHost || !forwardedProto || forwardedHost.includes(",") || forwardedProto.includes(",") || forwardedProto !== "http" && forwardedProto !== "https")
+    return;
+  let publicUrl;
+  try {
+    publicUrl = new URL(`${forwardedProto}://${forwardedHost}`);
+  } catch {
+    return;
+  }
+  if (publicUrl.host !== forwardedHost || publicUrl.protocol !== `${forwardedProto}:` || publicUrl.username || publicUrl.password || publicUrl.pathname !== "/" || publicUrl.search || publicUrl.hash || request.headers.get("origin") !== publicUrl.origin)
+    return;
+  const logicalUrl = new URL(`${publicUrl.origin}${url.pathname}${url.search}${url.hash}`);
+  return new Request(logicalUrl, request);
 }
 async function seed(path, content) {
   await mkdir4(dirname4(path), { recursive: true, mode: 448 });

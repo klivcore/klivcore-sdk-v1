@@ -991,10 +991,19 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
           if (body.byteLength > maxRequestBytes) return json({ error: "request too large" }, 413);
         }
         const upstreamUrl = new URL(`http://127.0.0.1:${relay.port}${upstreamPath}${url.search}`);
+        const upstreamHeaders = selectedHeaders(request.headers, relayRequestHeaderNames);
+        if (mutation) {
+          const publicOrigin = new URL(config.auth!.publicOrigin);
+          upstreamHeaders.set("origin", request.headers.get("origin")!);
+          const fetchSite = request.headers.get("sec-fetch-site");
+          if (fetchSite !== null) upstreamHeaders.set("sec-fetch-site", fetchSite);
+          upstreamHeaders.set("x-forwarded-host", publicOrigin.host);
+          upstreamHeaders.set("x-forwarded-proto", publicOrigin.protocol.slice(0, -1));
+        }
         try {
           const upstream = await fetch(upstreamUrl, {
             method: request.method,
-            headers: selectedHeaders(request.headers, relayRequestHeaderNames),
+            headers: upstreamHeaders,
             ...(body === undefined ? {} : { body }),
             redirect: "manual",
             signal: AbortSignal.any([request.signal, AbortSignal.timeout(relay.timeoutMs ?? 10_000)]),
