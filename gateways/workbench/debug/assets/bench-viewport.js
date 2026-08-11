@@ -12710,6 +12710,7 @@ var import_client = __toESM(require_client(), 1);
 
 // packages/react/src/BenchViewport.tsx
 var import_react9 = __toESM(require_react(), 1);
+var import_react_dom2 = __toESM(require_react_dom(), 1);
 
 // packages/react/src/ElementAddMenu.tsx
 var jsx_runtime = __toESM(require_jsx_runtime(), 1);
@@ -26126,6 +26127,9 @@ function BenchViewport({
   const [editorAutoFocusId, setEditorAutoFocusId] = import_react9.useState(null);
   const [fullViewportElementHostId, setFullViewportElementHostId] = import_react9.useState(null);
   const [detailLayout, setDetailLayout] = import_react9.useState(() => typeof window !== "undefined" && window.innerWidth > 1024 ? "dock-right" : "full-viewport");
+  const [detailPortalTarget, setDetailPortalTarget] = import_react9.useState(null);
+  const [detailInteractionOwner, setDetailInteractionOwner] = import_react9.useState("bench");
+  const benchInteractionEnabledRef = import_react9.useRef(true);
   const [openActorId, setOpenActorId] = import_react9.useState(null);
   const [openApplicationPanelId, setOpenApplicationPanelId] = import_react9.useState(null);
   const [lastActorId, setLastActorId] = import_react9.useState(null);
@@ -26582,6 +26586,8 @@ function BenchViewport({
   }, []);
   import_react9.useEffect(() => {
     function handleKeyDown(event) {
+      if (!benchInteractionEnabledRef.current)
+        return;
       const activeElement2 = document.activeElement;
       if (!shouldHandleWorkbenchDeleteShortcut(event, activeElement2))
         return;
@@ -26602,6 +26608,8 @@ function BenchViewport({
   }, []);
   import_react9.useEffect(() => {
     async function handlePaste(event) {
+      if (!benchInteractionEnabledRef.current)
+        return;
       const activeElement2 = document.activeElement;
       if (!shouldHandleWorkbenchPaste(event, activeElement2))
         return;
@@ -27191,6 +27199,11 @@ function BenchViewport({
       setCurrentRenderPlan(computeRenderPlan(worldElements, spatialIndex, currentViewport, rect, scene.previewGroups, lodRasterPyramid));
     }, options2?.force ? 0 : renderThrottleMs);
   }
+  import_react9.useLayoutEffect(() => {
+    if (viewportSize.width <= 0 || viewportSize.height <= 0)
+      return;
+    scheduleRenderPlanUpdate({ force: true });
+  }, [viewportSize.height, viewportSize.width]);
   function toggleStressAnimation() {
     if (stressAnimationRef.current) {
       cancelAnimationFrame(stressAnimationRef.current);
@@ -27302,6 +27315,9 @@ function BenchViewport({
     }
     pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
   }
+  const detailSplitStyles = getDetailSplitStyles(detailLayout, fullViewportElementHostId !== null);
+  const benchInteractionEnabled = fullViewportElementHostId === null || detailLayout !== "full-viewport" && detailInteractionOwner === "bench";
+  benchInteractionEnabledRef.current = benchInteractionEnabled;
   return /* @__PURE__ */ jsx_runtime20.jsxs("main", {
     className: "flex h-screen flex-col bg-slate-950 text-slate-100",
     children: [
@@ -27432,449 +27448,537 @@ function BenchViewport({
           })
         ]
       }) : null,
-      /* @__PURE__ */ jsx_runtime20.jsxs("section", {
-        ref: viewportRef,
-        className: "relative flex-1 cursor-grab touch-none select-none overflow-hidden overscroll-none bg-slate-950 active:cursor-grabbing",
-        onDoubleClickCapture: (event) => {
-          const target = event.target instanceof Element ? event.target : null;
-          const elementNode = target?.closest("[data-workbench-element-id]");
-          if (!elementNode)
-            return;
-          const elementId = elementNode.getAttribute("data-workbench-element-id");
-          const host = elementNode.parentElement?.closest("[data-workbench-element-host]");
-          if (!elementId || !host || host.getAttribute("data-workbench-element-host") !== elementId || !event.currentTarget.contains(host))
-            return;
-          const element = getCurrentZoomOpenElements().find((candidate) => candidate.id === elementId);
-          event.preventDefault();
-          event.stopPropagation();
-          setAddNodeMenu(null);
-          if (element?.kind === "bench" && onBenchElementOpen) {
-            openBenchElement(elementId);
-            return;
-          }
-          setFullViewportElementHostId(elementId);
-        },
-        onDoubleClick: (event) => {
-          event.preventDefault();
-          if (event.ctrlKey)
-            return;
-          openAddNodeMenu(event.clientX, event.clientY);
-        },
-        onClickCapture: (event) => {
-          if (!shouldCanvasControlClickOverride(event))
-            return;
-          event.preventDefault();
-          event.stopPropagation();
-        },
-        onPointerDownCapture: (event) => {
-          if (shouldCanvasControlPointerOverride(event)) {
-            blurActiveEditableInViewport(event.currentTarget);
-            clearViewportSelection();
-            startViewportPointerInteraction(event);
-            event.stopPropagation();
-            return;
-          }
-          if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
-            return;
-          blurActiveEditableInViewport(event.currentTarget);
-          clearViewportSelection();
-        },
-        onPointerDown: (event) => {
-          if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
-            return;
-          startViewportPointerInteraction(event);
-        },
-        onPointerMove: (event) => {
-          if (!pointersRef.current.has(event.pointerId)) {
-            recordLastPastePoint(event.clientX, event.clientY);
-            return;
-          }
-          event.preventDefault();
-          const longPressStart = longPressStartRef.current;
-          if (longPressStart?.pointerId === event.pointerId) {
-            const distance = Math.hypot(event.clientX - longPressStart.screenX, event.clientY - longPressStart.screenY);
-            if (distance > 8)
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        className: "relative flex min-h-0 flex-1",
+        "data-workbench-detail-split": "true",
+        style: detailSplitStyles.container,
+        children: [
+          /* @__PURE__ */ jsx_runtime20.jsxs("section", {
+            ref: viewportRef,
+            className: "relative cursor-grab touch-none select-none overflow-hidden overscroll-none bg-slate-950 active:cursor-grabbing",
+            "data-workbench-canvas": "true",
+            "data-workbench-interaction-enabled": benchInteractionEnabled ? "true" : "false",
+            style: detailSplitStyles.canvas,
+            onMouseEnter: (event) => {
+              if (fullViewportElementHostId && detailLayout !== "full-viewport" && event.currentTarget.contains(event.target))
+                setDetailInteractionOwner("bench");
+            },
+            onDoubleClickCapture: (event) => {
+              if (!event.currentTarget.contains(event.target))
+                return;
+              const target = event.target instanceof Element ? event.target : null;
+              const elementNode = target?.closest("[data-workbench-element-id]");
+              if (!elementNode)
+                return;
+              const elementId = elementNode.getAttribute("data-workbench-element-id");
+              const host = elementNode.parentElement?.closest("[data-workbench-element-host]");
+              if (!elementId || !host || host.getAttribute("data-workbench-element-host") !== elementId || !event.currentTarget.contains(host))
+                return;
+              const element = getCurrentZoomOpenElements().find((candidate) => candidate.id === elementId);
+              event.preventDefault();
+              event.stopPropagation();
+              setAddNodeMenu(null);
+              if (element?.kind === "bench" && onBenchElementOpen) {
+                openBenchElement(elementId);
+                return;
+              }
+              setDetailInteractionOwner("detail");
+              setFullViewportElementHostId(elementId);
+            },
+            onDoubleClick: (event) => {
+              event.preventDefault();
+              if (event.ctrlKey)
+                return;
+              openAddNodeMenu(event.clientX, event.clientY);
+            },
+            onClickCapture: (event) => {
+              if (!event.currentTarget.contains(event.target))
+                return;
+              if (!shouldCanvasControlClickOverride(event))
+                return;
+              event.preventDefault();
+              event.stopPropagation();
+            },
+            onPointerDownCapture: (event) => {
+              if (!event.currentTarget.contains(event.target))
+                return;
+              if (fullViewportElementHostId && detailLayout !== "full-viewport")
+                setDetailInteractionOwner("bench");
+              if (shouldCanvasControlPointerOverride(event)) {
+                blurActiveEditableInViewport(event.currentTarget);
+                clearViewportSelection();
+                startViewportPointerInteraction(event);
+                event.stopPropagation();
+                return;
+              }
+              if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
+                return;
+              blurActiveEditableInViewport(event.currentTarget);
+              clearViewportSelection();
+            },
+            onPointerDown: (event) => {
+              if (isWorkbenchNoPanTarget(event.target) || isElementInteractionTarget(event.target))
+                return;
+              startViewportPointerInteraction(event);
+            },
+            onPointerMove: (event) => {
+              if (!pointersRef.current.has(event.pointerId)) {
+                recordLastPastePoint(event.clientX, event.clientY);
+                return;
+              }
+              event.preventDefault();
+              const longPressStart = longPressStartRef.current;
+              if (longPressStart?.pointerId === event.pointerId) {
+                const distance = Math.hypot(event.clientX - longPressStart.screenX, event.clientY - longPressStart.screenY);
+                if (distance > 8)
+                  clearLongPressTimer();
+              }
+              pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
+              const activeSelectionDrag = selectionDragRef.current;
+              if (activeSelectionDrag?.pointerId === event.pointerId && pointersRef.current.size === 1) {
+                const point = getWorldPoint(event.clientX, event.clientY);
+                if (!point)
+                  return;
+                const nextDrag = {
+                  ...activeSelectionDrag,
+                  currentScreenX: point.screenX,
+                  currentScreenY: point.screenY,
+                  currentWorldX: point.worldX,
+                  currentWorldY: point.worldY
+                };
+                selectionDragRef.current = nextDrag;
+                setSelectionDrag(nextDrag);
+                const selected = new Set(getElementsInSelection(resolveElementWorldPositions(elementsLatestRef.current), getSelectionBoundsFromDrag(nextDrag)));
+                setSelectedIds(selected);
+                selectedIdsLatestRef.current = selected;
+                return;
+              }
+              const rect = pointersRef.current.size > 1 ? event.currentTarget.getBoundingClientRect() : null;
+              const pinch = rect ? getPinch(pointersRef.current, rect) : null;
+              if (pinch && pinchRef.current && rect) {
+                const previousPinch = pinchRef.current;
+                const centerX = rect.width / 2;
+                const centerY = rect.height / 2;
+                setViewport((current) => {
+                  const nextZoom = current.zoom * (pinch.distance / previousPinch.distance);
+                  const worldX = (previousPinch.midpoint.x - centerX - current.x) / current.zoom;
+                  const worldY = (previousPinch.midpoint.y - centerY - current.y) / current.zoom;
+                  return {
+                    x: pinch.midpoint.x - centerX - worldX * nextZoom,
+                    y: pinch.midpoint.y - centerY - worldY * nextZoom,
+                    zoom: nextZoom
+                  };
+                }, { deferUi: true });
+                pinchRef.current = pinch;
+                return;
+              }
+              pinchRef.current = pinch;
+              const drag = dragRef.current;
+              if (!drag || drag.pointerId !== event.pointerId || pointersRef.current.size !== 1)
+                return;
+              const dx = event.clientX - drag.x;
+              const dy = event.clientY - drag.y;
+              dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+              setViewport((current) => ({ ...current, x: current.x + dx, y: current.y + dy }), { deferUi: true });
+            },
+            onPointerUp: (event) => {
               clearLongPressTimer();
-          }
-          pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY });
-          const activeSelectionDrag = selectionDragRef.current;
-          if (activeSelectionDrag?.pointerId === event.pointerId && pointersRef.current.size === 1) {
-            const point = getWorldPoint(event.clientX, event.clientY);
-            if (!point)
-              return;
-            const nextDrag = {
-              ...activeSelectionDrag,
-              currentScreenX: point.screenX,
-              currentScreenY: point.screenY,
-              currentWorldX: point.worldX,
-              currentWorldY: point.worldY
-            };
-            selectionDragRef.current = nextDrag;
-            setSelectionDrag(nextDrag);
-            const selected = new Set(getElementsInSelection(resolveElementWorldPositions(elementsLatestRef.current), getSelectionBoundsFromDrag(nextDrag)));
-            setSelectedIds(selected);
-            selectedIdsLatestRef.current = selected;
-            return;
-          }
-          const rect = pointersRef.current.size > 1 ? event.currentTarget.getBoundingClientRect() : null;
-          const pinch = rect ? getPinch(pointersRef.current, rect) : null;
-          if (pinch && pinchRef.current && rect) {
-            const previousPinch = pinchRef.current;
-            const centerX = rect.width / 2;
-            const centerY = rect.height / 2;
-            setViewport((current) => {
-              const nextZoom = current.zoom * (pinch.distance / previousPinch.distance);
-              const worldX = (previousPinch.midpoint.x - centerX - current.x) / current.zoom;
-              const worldY = (previousPinch.midpoint.y - centerY - current.y) / current.zoom;
-              return {
-                x: pinch.midpoint.x - centerX - worldX * nextZoom,
-                y: pinch.midpoint.y - centerY - worldY * nextZoom,
-                zoom: nextZoom
-              };
-            }, { deferUi: true });
-            pinchRef.current = pinch;
-            return;
-          }
-          pinchRef.current = pinch;
-          const drag = dragRef.current;
-          if (!drag || drag.pointerId !== event.pointerId || pointersRef.current.size !== 1)
-            return;
-          const dx = event.clientX - drag.x;
-          const dy = event.clientY - drag.y;
-          dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-          setViewport((current) => ({ ...current, x: current.x + dx, y: current.y + dy }), { deferUi: true });
-        },
-        onPointerUp: (event) => {
-          clearLongPressTimer();
-          if (selectionDragRef.current?.pointerId === event.pointerId) {
-            selectionDragRef.current = null;
-            setSelectionDrag(null);
-          }
-          pointersRef.current.delete(event.pointerId);
-          pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
-          const remainingPointer = pointersRef.current.entries().next().value;
-          dragRef.current = remainingPointer ? { pointerId: remainingPointer[0], x: remainingPointer[1].x, y: remainingPointer[1].y } : null;
-          commitViewportUiState();
-          scheduleRenderPlanUpdate({ viewportOverride: viewportLatestRef.current });
-          if (event.pointerType === "touch" && pointersRef.current.size === 0 && motionMode !== "off") {
-            recalibrateMotionAnchor();
-            motionPausedByTouchRef.current = false;
-          }
-        },
-        onPointerCancel: (event) => {
-          clearLongPressTimer();
-          if (selectionDragRef.current?.pointerId === event.pointerId) {
-            selectionDragRef.current = null;
-            setSelectionDrag(null);
-          }
-          pointersRef.current.delete(event.pointerId);
-          pinchRef.current = null;
-          if (dragRef.current?.pointerId === event.pointerId)
-            dragRef.current = null;
-          commitViewportUiState();
-          scheduleRenderPlanUpdate({ viewportOverride: viewportLatestRef.current });
-          if (event.pointerType === "touch" && pointersRef.current.size === 0 && motionMode !== "off") {
-            recalibrateMotionAnchor();
-            motionPausedByTouchRef.current = false;
-          }
-        },
-        onWheel: (event) => {
-          if (!shouldHandleViewportWheel(event, isWorkbenchNoWheelTarget(event.target)))
-            return;
-          event.preventDefault();
-          setEditorAutoFocusId(null);
-          if (benchNavigationWheelLatchRef.current !== null)
-            return;
-          setAddNodeMenu(null);
-          const rect = event.currentTarget.getBoundingClientRect();
-          const pointerX = event.clientX - rect.left;
-          const pointerY = event.clientY - rect.top;
-          const centerX = rect.width / 2;
-          const centerY = rect.height / 2;
-          setViewport((current) => {
-            const nextZoom = current.zoom * getViewportWheelZoomFactor(event, rect.height);
-            const worldX = (pointerX - centerX - current.x) / current.zoom;
-            const worldY = (pointerY - centerY - current.y) / current.zoom;
-            const nextViewport = {
-              x: pointerX - centerX - worldX * nextZoom,
-              y: pointerY - centerY - worldY * nextZoom,
-              zoom: nextZoom
-            };
-            if (nextZoom > current.zoom && hasBenchNavigationZoomDelta("in", benchNavigationZoomBaselineRef.current, nextZoom)) {
-              if (onBenchElementOpen) {
-                const zoomOpenElements = getCurrentZoomOpenElements();
-                const benchToOpen = getZoomedRuntimeBenchElementToOpenFromScreenCoverage(zoomOpenElements, rect) ?? getZoomedBenchElementToOpen(zoomOpenElements, nextViewport, rect);
-                if (benchToOpen) {
+              if (selectionDragRef.current?.pointerId === event.pointerId) {
+                selectionDragRef.current = null;
+                setSelectionDrag(null);
+              }
+              pointersRef.current.delete(event.pointerId);
+              pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
+              const remainingPointer = pointersRef.current.entries().next().value;
+              dragRef.current = remainingPointer ? { pointerId: remainingPointer[0], x: remainingPointer[1].x, y: remainingPointer[1].y } : null;
+              commitViewportUiState();
+              scheduleRenderPlanUpdate({ viewportOverride: viewportLatestRef.current });
+              if (event.pointerType === "touch" && pointersRef.current.size === 0 && motionMode !== "off") {
+                recalibrateMotionAnchor();
+                motionPausedByTouchRef.current = false;
+              }
+            },
+            onPointerCancel: (event) => {
+              clearLongPressTimer();
+              if (selectionDragRef.current?.pointerId === event.pointerId) {
+                selectionDragRef.current = null;
+                setSelectionDrag(null);
+              }
+              pointersRef.current.delete(event.pointerId);
+              pinchRef.current = null;
+              if (dragRef.current?.pointerId === event.pointerId)
+                dragRef.current = null;
+              commitViewportUiState();
+              scheduleRenderPlanUpdate({ viewportOverride: viewportLatestRef.current });
+              if (event.pointerType === "touch" && pointersRef.current.size === 0 && motionMode !== "off") {
+                recalibrateMotionAnchor();
+                motionPausedByTouchRef.current = false;
+              }
+            },
+            onWheel: (event) => {
+              if (!shouldHandleViewportWheel(event, isWorkbenchNoWheelTarget(event.target)))
+                return;
+              event.preventDefault();
+              setEditorAutoFocusId(null);
+              if (benchNavigationWheelLatchRef.current !== null)
+                return;
+              setAddNodeMenu(null);
+              const rect = event.currentTarget.getBoundingClientRect();
+              const pointerX = event.clientX - rect.left;
+              const pointerY = event.clientY - rect.top;
+              const centerX = rect.width / 2;
+              const centerY = rect.height / 2;
+              setViewport((current) => {
+                const nextZoom = current.zoom * getViewportWheelZoomFactor(event, rect.height);
+                const worldX = (pointerX - centerX - current.x) / current.zoom;
+                const worldY = (pointerY - centerY - current.y) / current.zoom;
+                const nextViewport = {
+                  x: pointerX - centerX - worldX * nextZoom,
+                  y: pointerY - centerY - worldY * nextZoom,
+                  zoom: nextZoom
+                };
+                if (nextZoom > current.zoom && hasBenchNavigationZoomDelta("in", benchNavigationZoomBaselineRef.current, nextZoom)) {
+                  if (onBenchElementOpen) {
+                    const zoomOpenElements = getCurrentZoomOpenElements();
+                    const benchToOpen = getZoomedRuntimeBenchElementToOpenFromScreenCoverage(zoomOpenElements, rect) ?? getZoomedBenchElementToOpen(zoomOpenElements, nextViewport, rect);
+                    if (benchToOpen) {
+                      latchBenchNavigationWheelStream();
+                      queueMicrotask(() => onBenchElementOpen(benchToOpen, { sceneBounds, sourceElement: benchToOpen, viewport: nextViewport, viewportSize: { height: rect.height, width: rect.width } }));
+                      return current;
+                    }
+                  }
+                } else if (onParentBenchOpen && hasBenchNavigationZoomDelta("out", benchNavigationZoomBaselineRef.current, nextZoom) && shouldOpenParentBenchOnZoomOut(nextViewport, sceneBounds, rect)) {
                   latchBenchNavigationWheelStream();
-                  queueMicrotask(() => onBenchElementOpen(benchToOpen, { sceneBounds, sourceElement: benchToOpen, viewport: nextViewport, viewportSize: { height: rect.height, width: rect.width } }));
+                  queueMicrotask(() => onParentBenchOpen({ sceneBounds, viewport: current, viewportSize: { height: rect.height, width: rect.width } }));
                   return current;
                 }
-              }
-            } else if (onParentBenchOpen && hasBenchNavigationZoomDelta("out", benchNavigationZoomBaselineRef.current, nextZoom) && shouldOpenParentBenchOnZoomOut(nextViewport, sceneBounds, rect)) {
-              latchBenchNavigationWheelStream();
-              queueMicrotask(() => onParentBenchOpen({ sceneBounds, viewport: current, viewportSize: { height: rect.height, width: rect.width } }));
-              return current;
-            }
-            return nextViewport;
-          }, { commitAfterIdle: true, deferUi: true });
-        },
-        children: [
-          !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
-            "aria-label": "Bench path",
-            className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
-            "data-workbench-viewport-controls": "true",
-            children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
-              children: [
-                index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                  className: "text-slate-600",
-                  children: "/"
-                }) : null,
-                item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                  className: "truncate text-slate-300",
-                  children: item.label
-                }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                  className: "truncate text-cyan-300 hover:text-cyan-200",
-                  onClick: item.onClick,
-                  type: "button",
-                  children: item.label
-                })
-              ]
-            }, `${item.path}:${index2}`))
-          }) : null,
-          /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
-            fullViewportActive: fullViewportElementHostId !== null,
-            layerRef: transformLayerRef,
+                return nextViewport;
+              }, { commitAfterIdle: true, deferUi: true });
+            },
             children: [
-              /* @__PURE__ */ jsx_runtime20.jsx(ViewportWorldGrid, {}),
-              worldOverlayImage ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportImageWorldOverlay, {
-                frame: worldOverlayImage.frame,
-                opacity: worldOverlayImageOpacity,
-                url: worldOverlayImage.url
+              !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
+                "aria-label": "Bench path",
+                className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
+                "data-workbench-viewport-controls": "true",
+                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
+                  children: [
+                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                      className: "text-slate-600",
+                      children: "/"
+                    }) : null,
+                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                      className: "truncate text-slate-300",
+                      children: item.label
+                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                      className: "truncate text-cyan-300 hover:text-cyan-200",
+                      onClick: item.onClick,
+                      type: "button",
+                      children: item.label
+                    })
+                  ]
+                }, `${item.path}:${index2}`))
               }) : null,
-              worldOverlaySvg ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportSvgWorldOverlay, {
-                opacity: worldOverlaySvgOpacity,
-                sceneBounds,
-                svg: worldOverlaySvg
-              }) : null,
-              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                className: elementLayerHidden ? "pointer-events-none" : undefined,
-                "data-workbench-active-scene-elements": "true",
-                "data-workbench-element-layer-hidden": elementLayerHidden ? "true" : undefined,
-                style: { opacity: elementLayerHidden ? 0 : elementLayerOpacity },
+              /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
+                fullViewportActive: false,
+                layerRef: transformLayerRef,
                 children: [
-                  /* @__PURE__ */ jsx_runtime20.jsx(ViewportEdgeLayer, {
-                    edgeDrag,
-                    edges: edgeLayouts,
-                    onDeleteEdge: (edgeId) => updateEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId)),
-                    onEndpointPointerDown: startEdgeEndpointPointerDown,
-                    onSelectEdge: (edgeId) => {
-                      selectedEdgeIdLatestRef.current = edgeId;
-                      setSelectedEdgeId(edgeId);
-                      setSelectedIds(new Set);
-                    },
-                    selectedEdgeId,
-                    viewportZoom: viewport.zoom
-                  }),
-                  /* @__PURE__ */ jsx_runtime20.jsx(ViewportElementLayer, {
-                    detailLayout,
-                    edgeDrag,
-                    editorAutoFocusId,
-                    elementTypeRegistry,
-                    edges,
-                    elements,
-                    fullViewportElementHostId,
-                    highlightedGroupId,
-                    nestedElementOpacity,
-                    onElementChange: updateElement,
-                    onBenchElementLoad,
-                    onBenchElementOpen: onBenchElementOpen ? openBenchElement : undefined,
-                    onElementDelete: deleteElement,
-                    onElementHandlePointerDown: startElementHandlePointerDown,
-                    onEditorAutoFocusApplied: (elementId) => setEditorAutoFocusId((current) => current === elementId ? null : current),
-                    onElementsReplace: (nextElements) => {
-                      setElements(nextElements);
-                      publishElements(nextElements);
-                    },
-                    onElementMoveStart: startElementMove,
-                    onElementRuntimePreview: updateRuntimeCodePreview,
-                    onElementSelect: selectElement,
-                    onDetailLayoutChange: setDetailLayout,
-                    onFullViewportEnter: (elementId) => setFullViewportElementHostId(elementId),
-                    onFullViewportExit: () => setFullViewportElementHostId(null),
-                    onTextFileList,
-                    onTextFilePathChange,
-                    renderPlan: wireframe ? createWireframeRenderPlan(worldElements) : renderPlan,
-                    selectedIds,
-                    viewportZoom: viewport.zoom,
-                    wireframe,
-                    wireframeLabels
-                  }),
-                  /* @__PURE__ */ jsx_runtime20.jsx(ActorActivityHighlightLayer, {
-                    edges,
-                    elements: worldElements,
-                    focusedActionKey: focusedActorActivityKey,
-                    targets: allActorActivityTargets,
-                    viewportZoom: viewport.zoom
+                  /* @__PURE__ */ jsx_runtime20.jsx(ViewportWorldGrid, {}),
+                  worldOverlayImage ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportImageWorldOverlay, {
+                    frame: worldOverlayImage.frame,
+                    opacity: worldOverlayImageOpacity,
+                    url: worldOverlayImage.url
+                  }) : null,
+                  worldOverlaySvg ? /* @__PURE__ */ jsx_runtime20.jsx(ViewportSvgWorldOverlay, {
+                    opacity: worldOverlaySvgOpacity,
+                    sceneBounds,
+                    svg: worldOverlaySvg
+                  }) : null,
+                  /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                    className: elementLayerHidden ? "pointer-events-none" : undefined,
+                    "data-workbench-active-scene-elements": "true",
+                    "data-workbench-element-layer-hidden": elementLayerHidden ? "true" : undefined,
+                    style: { opacity: elementLayerHidden ? 0 : elementLayerOpacity },
+                    children: [
+                      /* @__PURE__ */ jsx_runtime20.jsx(ViewportEdgeLayer, {
+                        edgeDrag,
+                        edges: edgeLayouts,
+                        onDeleteEdge: (edgeId) => updateEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId)),
+                        onEndpointPointerDown: startEdgeEndpointPointerDown,
+                        onSelectEdge: (edgeId) => {
+                          selectedEdgeIdLatestRef.current = edgeId;
+                          setSelectedEdgeId(edgeId);
+                          setSelectedIds(new Set);
+                        },
+                        selectedEdgeId,
+                        viewportZoom: viewport.zoom
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx(ViewportElementLayer, {
+                        detailElement: fullViewportElementHostId ? worldElements.find((element) => element.id === fullViewportElementHostId) ?? null : null,
+                        detailPortalTarget,
+                        edgeDrag,
+                        editorAutoFocusId,
+                        elementTypeRegistry,
+                        edges,
+                        elements,
+                        fullViewportElementHostId,
+                        highlightedGroupId,
+                        nestedElementOpacity,
+                        onElementChange: updateElement,
+                        onBenchElementLoad,
+                        onBenchElementOpen: onBenchElementOpen ? openBenchElement : undefined,
+                        onElementDelete: deleteElement,
+                        onElementHandlePointerDown: startElementHandlePointerDown,
+                        onEditorAutoFocusApplied: (elementId) => setEditorAutoFocusId((current) => current === elementId ? null : current),
+                        onElementsReplace: (nextElements) => {
+                          setElements(nextElements);
+                          publishElements(nextElements);
+                        },
+                        onElementMoveStart: startElementMove,
+                        onElementRuntimePreview: updateRuntimeCodePreview,
+                        onElementSelect: selectElement,
+                        onDetailInteraction: () => setDetailInteractionOwner("detail"),
+                        onFullViewportEnter: (elementId) => {
+                          setDetailInteractionOwner("detail");
+                          setFullViewportElementHostId(elementId);
+                        },
+                        onTextFileList,
+                        onTextFilePathChange,
+                        renderPlan: wireframe ? createWireframeRenderPlan(worldElements) : renderPlan,
+                        selectedIds,
+                        viewportZoom: viewport.zoom,
+                        wireframe,
+                        wireframeLabels
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx(ActorActivityHighlightLayer, {
+                        edges,
+                        elements: worldElements,
+                        focusedActionKey: focusedActorActivityKey,
+                        targets: allActorActivityTargets,
+                        viewportZoom: viewport.zoom
+                      })
+                    ]
                   })
                 ]
-              })
-            ]
-          }),
-          viewportOverlayControls ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
-            "data-workbench-viewport-controls": "true",
-            children: viewportOverlayControls
-          }) : null,
-          openActor ? /* @__PURE__ */ jsx_runtime20.jsx(ActorInteractionPanel, {
-            actor: openActor,
-            actorPanel,
-            actors: actorOptions,
-            activityTargets: actorActivityTargets,
-            focusedActionKey: focusedActorActivityKey,
-            onActionSelect: focusActorActivity,
-            onActorSelect: (actorId) => {
-              setOpenApplicationPanelId(null);
-              setOpenActorId(actorId);
-              setLastActorId(actorId);
-              setFocusedActorActivityKey(null);
-            },
-            onClose: () => {
-              setOpenActorId(null);
-              setFocusedActorActivityKey(null);
-            },
-            viewport,
-            viewportRootRef: viewportRef
-          }) : null,
-          scene.stressTest ? /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportDebugControls, {
-            menuOpen: debugMenuRequested,
-            onMenuOpenChange: setDebugMenuRequested,
-            onPanelOpenChange: setDebugPanelRequested,
-            panelOpen: debugPanelRequested,
-            children: /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportRunChecksPanel, {
-              onToggleStress: toggleStressAnimation,
-              stressStats
-            })
-          }) : null,
-          /* @__PURE__ */ jsx_runtime20.jsx(ViewportMinimap, {
-            onFitContents: fitToContents,
-            previewImage: minimapPreview,
-            quickAccess: [
-              ...actorPanel && quickAccessActorId ? [{
-                ariaLabel: lastActorId === quickAccessActorId ? `Open last selected ${actorPanel.quickAccessLabel}` : `Open latest ${actorPanel.quickAccessLabel}`,
-                label: actorPanel.quickAccessLabel,
-                onOpen: () => {
+              }),
+              viewportOverlayControls ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                "data-workbench-viewport-controls": "true",
+                children: viewportOverlayControls
+              }) : null,
+              openActor ? /* @__PURE__ */ jsx_runtime20.jsx(ActorInteractionPanel, {
+                actor: openActor,
+                actorPanel,
+                actors: actorOptions,
+                activityTargets: actorActivityTargets,
+                focusedActionKey: focusedActorActivityKey,
+                onActionSelect: focusActorActivity,
+                onActorSelect: (actorId) => {
                   setOpenApplicationPanelId(null);
-                  setOpenActorId(quickAccessActorId);
-                  setLastActorId(quickAccessActorId);
+                  setOpenActorId(actorId);
+                  setLastActorId(actorId);
                   setFocusedActorActivityKey(null);
-                }
-              }] : [],
-              ...applicationPanels.map((panel) => ({
-                adornment: panel.quickAccessAdornment,
-                ariaLabel: `Open ${panel.quickAccessLabel}`,
-                label: panel.quickAccessLabel,
-                onOpen: () => {
+                },
+                onClose: () => {
                   setOpenActorId(null);
                   setFocusedActorActivityKey(null);
-                  setOpenApplicationPanelId(panel.id);
-                }
-              }))
-            ],
-            sceneBounds,
-            viewport,
-            viewportSize
-          }),
-          openApplicationPanel ? /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
-            "aria-label": openApplicationPanel.label,
-            className: "absolute right-4 top-4 z-[90] flex max-h-[calc(100%-2rem)] w-[min(32rem,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border border-cyan-400/30 bg-slate-950/95 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur",
-            "data-workbench-application-panel": openApplicationPanel.id,
-            "data-workbench-viewport-controls": "true",
-            onClick: (event) => event.stopPropagation(),
-            onContextMenu: (event) => event.stopPropagation(),
-            onDoubleClick: (event) => event.stopPropagation(),
-            onPointerDown: (event) => event.stopPropagation(),
-            onPointerMove: (event) => event.stopPropagation(),
-            onPointerUp: (event) => event.stopPropagation(),
-            onWheel: (event) => event.stopPropagation(),
-            role: "dialog",
-            children: [
-              /* @__PURE__ */ jsx_runtime20.jsxs("header", {
-                className: "flex items-center justify-between border-b border-slate-800 px-3 py-2",
+                },
+                viewport,
+                viewportRootRef: viewportRef
+              }) : null,
+              scene.stressTest ? /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportDebugControls, {
+                menuOpen: debugMenuRequested,
+                onMenuOpenChange: setDebugMenuRequested,
+                onPanelOpenChange: setDebugPanelRequested,
+                panelOpen: debugPanelRequested,
+                children: /* @__PURE__ */ jsx_runtime20.jsx(BenchViewportRunChecksPanel, {
+                  onToggleStress: toggleStressAnimation,
+                  stressStats
+                })
+              }) : null,
+              /* @__PURE__ */ jsx_runtime20.jsx(ViewportMinimap, {
+                onFitContents: fitToContents,
+                previewImage: minimapPreview,
+                quickAccess: [
+                  ...actorPanel && quickAccessActorId ? [{
+                    ariaLabel: lastActorId === quickAccessActorId ? `Open last selected ${actorPanel.quickAccessLabel}` : `Open latest ${actorPanel.quickAccessLabel}`,
+                    label: actorPanel.quickAccessLabel,
+                    onOpen: () => {
+                      setOpenApplicationPanelId(null);
+                      setOpenActorId(quickAccessActorId);
+                      setLastActorId(quickAccessActorId);
+                      setFocusedActorActivityKey(null);
+                    }
+                  }] : [],
+                  ...applicationPanels.map((panel) => ({
+                    adornment: panel.quickAccessAdornment,
+                    ariaLabel: `Open ${panel.quickAccessLabel}`,
+                    label: panel.quickAccessLabel,
+                    onOpen: () => {
+                      setOpenActorId(null);
+                      setFocusedActorActivityKey(null);
+                      setOpenApplicationPanelId(panel.id);
+                    }
+                  }))
+                ],
+                sceneBounds,
+                viewport,
+                viewportSize
+              }),
+              openApplicationPanel ? /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
+                "aria-label": openApplicationPanel.label,
+                className: "absolute right-4 top-4 z-[90] flex max-h-[calc(100%-2rem)] w-[min(32rem,calc(100%-2rem))] flex-col overflow-hidden rounded-lg border border-cyan-400/30 bg-slate-950/95 text-xs text-slate-200 shadow-2xl shadow-cyan-950/40 backdrop-blur",
+                "data-workbench-application-panel": openApplicationPanel.id,
+                "data-workbench-viewport-controls": "true",
+                onClick: (event) => event.stopPropagation(),
+                onContextMenu: (event) => event.stopPropagation(),
+                onDoubleClick: (event) => event.stopPropagation(),
+                onPointerDown: (event) => event.stopPropagation(),
+                onPointerMove: (event) => event.stopPropagation(),
+                onPointerUp: (event) => event.stopPropagation(),
+                onWheel: (event) => event.stopPropagation(),
+                role: "dialog",
                 children: [
-                  /* @__PURE__ */ jsx_runtime20.jsx("h2", {
-                    className: "text-sm font-bold text-slate-50",
-                    children: openApplicationPanel.label
+                  /* @__PURE__ */ jsx_runtime20.jsxs("header", {
+                    className: "flex items-center justify-between border-b border-slate-800 px-3 py-2",
+                    children: [
+                      /* @__PURE__ */ jsx_runtime20.jsx("h2", {
+                        className: "text-sm font-bold text-slate-50",
+                        children: openApplicationPanel.label
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                        "aria-label": `Close ${openApplicationPanel.label}`,
+                        className: "rounded px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white",
+                        onClick: () => setOpenApplicationPanelId(null),
+                        type: "button",
+                        children: "×"
+                      })
+                    ]
                   }),
+                  /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "min-h-0 flex-1 overflow-hidden",
+                    children: openApplicationPanel.content
+                  })
+                ]
+              }) : null,
+              addNodeMenu ? /* @__PURE__ */ jsx_runtime20.jsx(ElementAddMenu, {
+                elementTypeRegistry,
+                onSelect: addNodeFromMenu,
+                x: addNodeMenu.screenX,
+                y: addNodeMenu.screenY
+              }) : null,
+              pendingBenchAdd ? /* @__PURE__ */ jsx_runtime20.jsx(BenchAddPanel, {
+                listFiles: onBenchFileList,
+                state: pendingBenchAdd,
+                onCancel: () => setPendingBenchAdd(null),
+                onChange: setPendingBenchAdd,
+                onSubmit: submitPendingBenchAdd
+              }) : null,
+              selectionDrag ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                "aria-label": "Selection box",
+                className: "pointer-events-none absolute z-20 border border-cyan-300/80 bg-cyan-300/10",
+                style: getSelectionBoxStyle(selectionDrag)
+              }) : null,
+              pendingDeleteIds ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                className: "absolute inset-0 z-30 flex items-center justify-center bg-slate-950/40",
+                onPointerDown: (event) => event.stopPropagation(),
+                children: /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                  className: "w-64 rounded-md border border-red-400/40 bg-slate-950/95 p-3 text-sm shadow-2xl",
+                  role: "dialog",
+                  "aria-label": "Confirm delete selected nodes",
+                  children: [
+                    /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                      className: "font-semibold text-red-100",
+                      children: [
+                        "Delete ",
+                        pendingDeleteIds.length,
+                        " selected nodes?"
+                      ]
+                    }),
+                    /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                      className: "mt-3 flex justify-end gap-2",
+                      children: [
+                        /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                          className: "rounded border border-slate-700 px-2 py-1 text-slate-300 hover:border-slate-500",
+                          type: "button",
+                          onClick: () => setPendingDeleteIds(null),
+                          children: "Cancel"
+                        }),
+                        /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                          className: "rounded border border-red-400/60 bg-red-500/20 px-2 py-1 font-semibold text-red-100 hover:bg-red-500/30",
+                          type: "button",
+                          onClick: () => {
+                            deleteElementsById(new Set(pendingDeleteIds));
+                            setPendingDeleteIds(null);
+                          },
+                          children: "Delete"
+                        })
+                      ]
+                    })
+                  ]
+                })
+              }) : null
+            ]
+          }),
+          fullViewportElementHostId ? /* @__PURE__ */ jsx_runtime20.jsxs("aside", {
+            className: "overflow-hidden border-slate-700 bg-slate-950",
+            "data-workbench-detail-layout": detailLayout,
+            "data-workbench-detail-pane": "true",
+            onMouseEnter: () => setDetailInteractionOwner("detail"),
+            onPointerDown: () => setDetailInteractionOwner("detail"),
+            style: detailSplitStyles.pane,
+            children: [
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                className: "absolute inset-x-0 top-0 z-10 flex items-center border-b border-slate-700 bg-slate-950 px-4 shadow-xl",
+                "data-workbench-detail-header": "true",
+                "data-workbench-viewport-controls": "true",
+                style: { height: 48 },
+                children: [
                   /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                    "aria-label": `Close ${openApplicationPanel.label}`,
-                    className: "rounded px-2 py-1 text-slate-400 hover:bg-slate-800 hover:text-white",
-                    onClick: () => setOpenApplicationPanelId(null),
+                    "aria-label": "Back from detail mode",
+                    className: "rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
+                    onClick: () => {
+                      setFullViewportElementHostId(null);
+                      setDetailInteractionOwner("bench");
+                    },
                     type: "button",
-                    children: "×"
+                    children: "← Back"
+                  }),
+                  /* @__PURE__ */ jsx_runtime20.jsxs("select", {
+                    "aria-label": "Detail layout",
+                    className: "ml-auto rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
+                    onChange: (event) => setDetailLayout(event.currentTarget.value),
+                    value: detailLayout,
+                    children: [
+                      /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                        value: "full-viewport",
+                        children: "Full viewport"
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                        value: "dock-right",
+                        children: "Dock right"
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                        value: "dock-left",
+                        children: "Dock left"
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                        value: "dock-top",
+                        children: "Dock top"
+                      }),
+                      /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                        value: "dock-bottom",
+                        children: "Dock bottom"
+                      })
+                    ]
                   })
                 ]
               }),
               /* @__PURE__ */ jsx_runtime20.jsx("div", {
-                className: "min-h-0 flex-1 overflow-hidden",
-                children: openApplicationPanel.content
+                className: "absolute inset-x-0 bottom-0 overflow-hidden",
+                "data-workbench-detail-content": "true",
+                ref: setDetailPortalTarget,
+                style: { top: 48 }
               })
             ]
-          }) : null,
-          addNodeMenu ? /* @__PURE__ */ jsx_runtime20.jsx(ElementAddMenu, {
-            elementTypeRegistry,
-            onSelect: addNodeFromMenu,
-            x: addNodeMenu.screenX,
-            y: addNodeMenu.screenY
-          }) : null,
-          pendingBenchAdd ? /* @__PURE__ */ jsx_runtime20.jsx(BenchAddPanel, {
-            listFiles: onBenchFileList,
-            state: pendingBenchAdd,
-            onCancel: () => setPendingBenchAdd(null),
-            onChange: setPendingBenchAdd,
-            onSubmit: submitPendingBenchAdd
-          }) : null,
-          selectionDrag ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
-            "aria-label": "Selection box",
-            className: "pointer-events-none absolute z-20 border border-cyan-300/80 bg-cyan-300/10",
-            style: getSelectionBoxStyle(selectionDrag)
-          }) : null,
-          pendingDeleteIds ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
-            className: "absolute inset-0 z-30 flex items-center justify-center bg-slate-950/40",
-            onPointerDown: (event) => event.stopPropagation(),
-            children: /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-              className: "w-64 rounded-md border border-red-400/40 bg-slate-950/95 p-3 text-sm shadow-2xl",
-              role: "dialog",
-              "aria-label": "Confirm delete selected nodes",
-              children: [
-                /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                  className: "font-semibold text-red-100",
-                  children: [
-                    "Delete ",
-                    pendingDeleteIds.length,
-                    " selected nodes?"
-                  ]
-                }),
-                /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-                  className: "mt-3 flex justify-end gap-2",
-                  children: [
-                    /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "rounded border border-slate-700 px-2 py-1 text-slate-300 hover:border-slate-500",
-                      type: "button",
-                      onClick: () => setPendingDeleteIds(null),
-                      children: "Cancel"
-                    }),
-                    /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "rounded border border-red-400/60 bg-red-500/20 px-2 py-1 font-semibold text-red-100 hover:bg-red-500/30",
-                      type: "button",
-                      onClick: () => {
-                        deleteElementsById(new Set(pendingDeleteIds));
-                        setPendingDeleteIds(null);
-                      },
-                      children: "Delete"
-                    })
-                  ]
-                })
-              ]
-            })
           }) : null
         ]
       })
@@ -29059,22 +29163,30 @@ function ViewportWorldGrid() {
     }
   });
 }
-function getDetailHostStyle(layout) {
-  switch (layout) {
-    case "dock-right":
-      return { height: "100vh", left: "50vw", top: 0, width: "50vw" };
-    case "dock-left":
-      return { height: "100vh", left: 0, top: 0, width: "50vw" };
-    case "dock-top":
-      return { height: "50vh", left: 0, top: 0, width: "100vw" };
-    case "dock-bottom":
-      return { height: "50vh", left: 0, top: "50vh", width: "100vw" };
-    case "full-viewport":
-      return { height: "100vh", left: 0, top: 0, width: "100vw" };
-  }
+function getDetailSplitStyles(layout, active) {
+  if (!active)
+    return {
+      canvas: { flex: "1 1 100%", minHeight: 0, minWidth: 0 },
+      container: { flexDirection: "row" },
+      pane: {}
+    };
+  if (layout === "full-viewport")
+    return {
+      canvas: { flex: "1 1 100%", minHeight: 0, minWidth: 0 },
+      container: { flexDirection: "row" },
+      pane: { bottom: 0, left: 0, position: "absolute", right: 0, top: 0, zIndex: 100 }
+    };
+  const vertical = layout === "dock-top" || layout === "dock-bottom";
+  const detailFirst = layout === "dock-left" || layout === "dock-top";
+  return {
+    canvas: { flex: "0 0 50%", minHeight: 0, minWidth: 0, order: detailFirst ? 1 : 0 },
+    container: { flexDirection: vertical ? "column" : "row" },
+    pane: { flex: "0 0 50%", minHeight: 0, minWidth: 0, order: detailFirst ? 0 : 1, position: "relative" }
+  };
 }
 var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
-  detailLayout,
+  detailElement,
+  detailPortalTarget,
   edgeDrag,
   editorAutoFocusId,
   elementTypeRegistry,
@@ -29093,9 +29205,8 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   onElementMoveStart,
   onElementRuntimePreview,
   onElementSelect,
-  onDetailLayoutChange,
+  onDetailInteraction,
   onFullViewportEnter,
-  onFullViewportExit,
   onTextFileList,
   onTextFilePathChange,
   renderPlan,
@@ -29106,6 +29217,11 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
 }) {
   const commentParentTargetFrame = getCommentParentTargetFrame(elements, highlightedGroupId);
   const elementZIndexes = import_react9.useMemo(() => createWorkbenchElementZIndexMap(elements), [elements]);
+  const visibleRenderPlan = import_react9.useMemo(() => {
+    if (!detailElement || renderPlan.some((item) => item.kind === "element" && item.element.id === detailElement.id))
+      return renderPlan;
+    return [...renderPlan, { element: detailElement, kind: "element", lod: "full" }];
+  }, [detailElement, renderPlan]);
   return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
     children: [
       /* @__PURE__ */ jsx_runtime20.jsx("style", {
@@ -29113,21 +29229,22 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         [data-workbench-transform-layer="true"][data-workbench-full-viewport-active="true"] {
           transform: none !important;
         }
-        [data-workbench-detail-layout] > [data-workbench-element-id] {
+        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] {
           bottom: 0 !important;
-          height: calc(100% - 48px) !important;
+          height: 100% !important;
           left: 0 !important;
           right: 0 !important;
-          top: 48px !important;
+          top: 0 !important;
           transform: none !important;
           width: 100% !important;
         }
-        [data-workbench-detail-layout] > [data-workbench-element-id] > [data-workbench-node-header="true"] {
+        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] > [data-workbench-node-header="true"],
+        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] > [aria-label="Resize node"] {
           display: none !important;
         }
       `
       }),
-      renderPlan.map((item) => {
+      visibleRenderPlan.map((item) => {
         if (item.kind === "aggregate") {
           return /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "absolute overflow-hidden rounded-md border border-cyan-300/40 bg-cyan-950/60 bg-cover bg-center text-[10px] font-bold text-cyan-100 shadow-[0_0_20px_rgba(34,211,238,0.12)]",
@@ -29146,8 +29263,8 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           }, item.id);
         }
         const elementOpacity = item.element.id.includes("::") ? nestedElementOpacity : 1;
-        const isFullViewport = fullViewportElementHostId === item.element.id;
-        if (wireframe && item.element.kind !== "actor") {
+        const isDetailElement = fullViewportElementHostId === item.element.id;
+        if (wireframe && item.element.kind !== "actor" && !isDetailElement) {
           return /* @__PURE__ */ jsx_runtime20.jsx("div", {
             className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
             "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
@@ -29160,10 +29277,38 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
             })
           }, item.element.id);
         }
+        const renderElement = (detail) => /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
+          element: item.element,
+          children: /* @__PURE__ */ jsx_runtime20.jsx(ViewportElement, {
+            activeEdgeHandleSide: detail ? null : edgeDrag ? getActiveHandleSideNearWorldPoint(item.element, edgeDrag.current, 18 / viewportZoom) : null,
+            edgeHandles: detail ? [] : getVisibleHandleSlots(edges, item.element.id),
+            editorAutoFocus: detail ? false : editorAutoFocusId === item.element.id,
+            elementTypeRegistry,
+            element: item.element,
+            elements,
+            edges,
+            highlightedGroupId,
+            isSelected: selectedIds.has(item.element.id),
+            lod: detail ? "full" : item.lod,
+            lodPreviewImage: detail ? undefined : item.previewImage,
+            onElementChange,
+            onBenchElementLoad,
+            onBenchElementOpen,
+            onElementDelete,
+            onElementHandlePointerDown: detail ? undefined : onElementHandlePointerDown,
+            onEditorAutoFocusApplied: detail ? undefined : () => onEditorAutoFocusApplied(item.element.id),
+            onElementsReplace,
+            onElementMoveStart: detail ? undefined : onElementMoveStart,
+            onElementRuntimePreview,
+            onElementSelect,
+            onTextFileList,
+            onTextFilePathChange,
+            selectedCount: selectedIds.size,
+            viewportZoom: detail ? 1 : viewportZoom
+          })
+        });
         return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-          className: `absolute left-0 top-0 ${isFullViewport ? "overflow-hidden bg-slate-950" : "h-0 w-0 overflow-visible"}`,
-          "data-workbench-detail-layout": isFullViewport ? detailLayout : undefined,
-          "data-workbench-element-full-viewport": isFullViewport ? "true" : undefined,
+          className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
           "data-workbench-element-host": item.element.id,
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
           "data-workbench-stack-index": elementZIndexes.get(item.element.id),
@@ -29175,89 +29320,26 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
             event.stopPropagation();
             onFullViewportEnter(item.element.id);
           },
-          style: isFullViewport ? { ...getDetailHostStyle(detailLayout), opacity: elementOpacity, position: "fixed", zIndex: 2147483646 } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
+          style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
-            /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
-              element: item.element,
-              children: /* @__PURE__ */ jsx_runtime20.jsx(ViewportElement, {
-                activeEdgeHandleSide: edgeDrag ? getActiveHandleSideNearWorldPoint(item.element, edgeDrag.current, 18 / viewportZoom) : null,
-                edgeHandles: getVisibleHandleSlots(edges, item.element.id),
-                editorAutoFocus: editorAutoFocusId === item.element.id,
-                elementTypeRegistry,
-                element: item.element,
-                elements,
-                edges,
-                highlightedGroupId,
-                isSelected: selectedIds.has(item.element.id),
-                lod: item.lod,
-                lodPreviewImage: item.previewImage,
-                onElementChange,
-                onBenchElementLoad,
-                onBenchElementOpen,
-                onElementDelete,
-                onElementHandlePointerDown,
-                onEditorAutoFocusApplied: () => onEditorAutoFocusApplied(item.element.id),
-                onElementsReplace,
-                onElementMoveStart,
-                onElementRuntimePreview,
-                onElementSelect,
-                onTextFileList,
-                onTextFilePathChange,
-                selectedCount: selectedIds.size,
-                viewportZoom
-              })
-            }),
-            isFullViewport ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-              className: "absolute inset-x-0 top-0 z-[2147483647] flex items-center border-b border-slate-700 bg-slate-950 px-4 shadow-xl",
-              "data-workbench-detail-header": "true",
-              "data-workbench-viewport-controls": "true",
+            renderElement(false),
+            isDetailElement && detailPortalTarget ? import_react_dom2.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
+              className: "absolute inset-0 overflow-hidden",
+              "data-workbench-detail-render-root": "true",
+              onMouseEnter: (event) => {
+                event.stopPropagation();
+                onDetailInteraction();
+              },
+              onContextMenu: (event) => event.stopPropagation(),
+              onDoubleClick: (event) => event.stopPropagation(),
+              onPointerCancel: (event) => event.stopPropagation(),
               onPointerDown: (event) => event.stopPropagation(),
-              style: { height: 48 },
-              children: [
-                /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                  "aria-label": "Back from detail mode",
-                  className: "rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
-                  onClick: (event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onFullViewportExit();
-                  },
-                  onDoubleClick: (event) => event.stopPropagation(),
-                  onPointerDown: (event) => event.stopPropagation(),
-                  type: "button",
-                  children: "← Back"
-                }),
-                /* @__PURE__ */ jsx_runtime20.jsxs("select", {
-                  "aria-label": "Detail layout",
-                  className: "ml-auto rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
-                  onChange: (event) => onDetailLayoutChange(event.currentTarget.value),
-                  onPointerDown: (event) => event.stopPropagation(),
-                  value: detailLayout,
-                  children: [
-                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
-                      value: "full-viewport",
-                      children: "Full viewport"
-                    }),
-                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
-                      value: "dock-right",
-                      children: "Dock right"
-                    }),
-                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
-                      value: "dock-left",
-                      children: "Dock left"
-                    }),
-                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
-                      value: "dock-top",
-                      children: "Dock top"
-                    }),
-                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
-                      value: "dock-bottom",
-                      children: "Dock bottom"
-                    })
-                  ]
-                })
-              ]
-            }) : null
+              onPointerDownCapture: onDetailInteraction,
+              onPointerMove: (event) => event.stopPropagation(),
+              onPointerUp: (event) => event.stopPropagation(),
+              onWheel: (event) => event.stopPropagation(),
+              children: renderElement(true)
+            }), detailPortalTarget) : null
           ]
         }, item.element.id);
       }),
