@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { parseStartRealmConfig, type StartRealmArgs } from "./start-realm-core";
 import { gatewayDurableHome } from "./gateway-runtime";
 
@@ -63,6 +63,22 @@ function realmName(id: string): string {
 
 function gatewaySource(revision: string, path: string): string {
   return `git+${SDK_REPOSITORY}#${revision}::${path}`;
+}
+
+function migrateLegacyWorkbenchLiveComponents(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const candidate = value as Record<string, unknown>;
+  if (Object.keys(candidate).sort().join("\0") !== ["realmId", "registrations"].sort().join("\0")
+    || typeof candidate.realmId !== "string" || !REALM_ID.test(candidate.realmId)
+    || !Array.isArray(candidate.registrations) || candidate.registrations.length < 1 || candidate.registrations.length > 256
+    || candidate.registrations.some((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return true;
+      const registration = value as Record<string, unknown>;
+      return Object.keys(registration).sort().join("\0") !== ["entry", "typeId"].sort().join("\0")
+        || typeof registration.entry !== "string" || !isAbsolute(registration.entry)
+        || typeof registration.typeId !== "string" || !registration.typeId.startsWith(`${candidate.realmId}:`);
+    })) return value;
+  return { realmId: candidate.realmId };
 }
 
 async function ensurePrivateDirectory(
@@ -156,6 +172,8 @@ export async function reconcileRealmDirectory(
     ? gateways.workbench as Record<string, unknown> : {};
   const workbenchConfig = workbench.config && typeof workbench.config === "object" && !Array.isArray(workbench.config)
     ? { ...workbench.config as Record<string, unknown> } : {};
+  const migratedLiveComponents = migrateLegacyWorkbenchLiveComponents(workbenchConfig.liveComponents);
+  if (migratedLiveComponents !== workbenchConfig.liveComponents) workbenchConfig.liveComponents = migratedLiveComponents;
   const configuredRealmName = existing?.realm && typeof existing.realm === "object" && !Array.isArray(existing.realm)
     && typeof (existing.realm as Record<string, unknown>).name === "string"
     ? (existing.realm as Record<string, unknown>).name as string
