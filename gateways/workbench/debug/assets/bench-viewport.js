@@ -12710,7 +12710,7 @@ var import_client = __toESM(require_client(), 1);
 
 // packages/react/src/BenchViewport.tsx
 var import_react9 = __toESM(require_react(), 1);
-var import_react_dom2 = __toESM(require_react_dom(), 1);
+var import_react_dom = __toESM(require_react_dom(), 1);
 
 // packages/react/src/ElementAddMenu.tsx
 var jsx_runtime = __toESM(require_jsx_runtime(), 1);
@@ -14544,7 +14544,6 @@ var imageElementType = {
 
 // packages/react/src/elementTypes/LiveComponentElement.tsx
 var import_react6 = __toESM(require_react(), 1);
-var import_react_dom = __toESM(require_react_dom(), 1);
 var jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
 var LiveComponentRuntimeContext = import_react6.createContext(null);
 var liveComponentElementType = {
@@ -14564,11 +14563,16 @@ var liveComponentElementType = {
 };
 function LiveComponentElement(props) {
   const runtime = import_react6.useContext(LiveComponentRuntimeContext);
-  const snapshot = import_react6.useSyncExternalStore(runtime ? runtime.subscribe : emptySubscribe, () => runtime?.getSnapshot(props.element.componentTypeId) ?? missingRuntime, () => missingRuntime);
+  const source = props.element.path && props.element.vaultId ? { path: props.element.path, vaultId: props.element.vaultId } : undefined;
+  const componentTypeId = props.element.componentTypeId;
+  const snapshot = import_react6.useSyncExternalStore(runtime ? runtime.subscribe : emptySubscribe, () => source ? runtime?.getSourceSnapshot(source) ?? missingRuntime : componentTypeId ? runtime?.getSnapshot(componentTypeId) ?? missingRuntime : invalidSelector, () => missingRuntime);
   import_react6.useEffect(() => {
-    runtime?.ensure(props.element.componentTypeId);
-  }, [props.element.componentTypeId, runtime]);
-  const error = snapshot.status === "stale" ? `Showing last known good revision. ${snapshot.error ?? "The candidate revision failed."}` : null;
+    if (source)
+      runtime?.ensureSource(source);
+    else if (componentTypeId)
+      runtime?.ensure(componentTypeId);
+  }, [componentTypeId, props.element.path, props.element.vaultId, runtime]);
+  const error = props.element.error ?? (snapshot.status === "stale" ? `Showing last known good revision. ${snapshot.error ?? "The candidate revision failed."}` : null);
   return /* @__PURE__ */ jsx_runtime13.jsx(NodeWrapper, {
     activeEdgeHandleSide: props.activeEdgeHandleSide,
     bodyClassName: "h-full",
@@ -14583,7 +14587,7 @@ function LiveComponentElement(props) {
     onElementMoveStart: props.onElementMoveStart,
     onElementSelect: props.onElementSelect,
     selectedCount: props.selectedCount,
-    title: props.element.componentTypeId,
+    title: source?.path ?? componentTypeId ?? "Invalid component",
     viewportZoom: props.viewportZoom,
     children: /* @__PURE__ */ jsx_runtime13.jsx(ComponentSurface, {
       element: props.element,
@@ -14593,74 +14597,276 @@ function LiveComponentElement(props) {
   });
 }
 function ComponentSurface({ element, isSelected, snapshot }) {
-  if (!snapshot.component) {
+  if (!snapshot.artifacts) {
+    const selector = element.path ?? element.componentTypeId ?? "invalid selector";
     return /* @__PURE__ */ jsx_runtime13.jsx("div", {
       className: "flex h-full items-center justify-center bg-slate-950 px-4 text-center text-xs text-slate-400",
       "data-live-component-status": snapshot.status,
-      children: snapshot.status === "loading" ? "Loading component…" : snapshot.error ?? `Component unavailable: ${element.componentTypeId}`
+      children: snapshot.status === "loading" ? "Loading component…" : element.error ?? snapshot.error ?? `Component unavailable: ${selector}`
     });
   }
-  return /* @__PURE__ */ jsx_runtime13.jsx(ShadowComponent, {
+  return /* @__PURE__ */ jsx_runtime13.jsx(SandboxComponent, {
     element,
     isSelected,
     snapshot
-  }, snapshot.implementationRevision);
+  });
 }
-function ShadowComponent({ element, isSelected, snapshot }) {
-  const [shadowRoot, setShadowRoot] = import_react6.useState(null);
-  const component = snapshot.component;
-  if (!component)
-    return null;
-  return /* @__PURE__ */ jsx_runtime13.jsx("div", {
-    className: "h-full w-full",
-    "data-live-component-revision": snapshot.implementationRevision,
-    ref: (host) => {
-      if (!host)
-        return;
-      setShadowRoot(host.shadowRoot ?? host.attachShadow({ delegatesFocus: true, mode: "open" }));
-    },
-    children: shadowRoot ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime13.jsxs(RuntimeErrorBoundary, {
-      revision: snapshot.implementationRevision,
-      children: [
-        snapshot.cssText ? /* @__PURE__ */ jsx_runtime13.jsx("style", {
-          children: snapshot.cssText
-        }) : null,
-        component.render({ createElement: import_react6.createElement }, {
-          componentTypeId: element.componentTypeId,
+function SandboxComponent({ element, isSelected, snapshot }) {
+  const hostRef = import_react6.useRef(null);
+  const activeRef = import_react6.useRef(null);
+  const candidateRef = import_react6.useRef(null);
+  const [runtimeError, setRuntimeError] = import_react6.useState(null);
+  import_react6.useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !snapshot.artifacts || !snapshot.implementationRevision || !snapshot.typeId)
+      return;
+    setRuntimeError(null);
+    let candidate = null;
+    try {
+      candidate = createLiveComponentSandboxCandidate({
+        document: host.ownerDocument,
+        host,
+        onError(message) {
+          if (candidate && candidateRef.current === candidate)
+            candidateRef.current = null;
+          setRuntimeError(message);
+        },
+        onReady() {
+          if (!candidate || candidateRef.current !== candidate)
+            return;
+          const previous = activeRef.current;
+          activeRef.current = candidate;
+          candidateRef.current = null;
+          if (previous && previous !== candidate)
+            previous.dispose();
+        },
+        props: {
+          componentTypeId: snapshot.typeId,
           data: element.data,
           elementId: element.id,
           isSelected,
           readOnly: false
-        })
+        },
+        snapshot,
+        timeoutMs: DEFAULT_SANDBOX_TIMEOUT_MS,
+        window: host.ownerDocument.defaultView
+      });
+      candidateRef.current = candidate;
+    } catch (error) {
+      setRuntimeError(error instanceof Error ? error.message : String(error));
+    }
+    return () => {
+      if (candidate && candidateRef.current === candidate) {
+        candidateRef.current = null;
+        candidate.dispose();
+      }
+    };
+  }, [element.data, element.id, isSelected, snapshot.artifacts, snapshot.implementationRevision, snapshot.typeId]);
+  import_react6.useEffect(() => () => {
+    candidateRef.current?.dispose();
+    activeRef.current?.dispose();
+    candidateRef.current = null;
+    activeRef.current = null;
+  }, []);
+  return /* @__PURE__ */ jsx_runtime13.jsx("div", {
+    className: "relative h-full w-full bg-slate-950",
+    ref: hostRef,
+    children: runtimeError ? /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+      className: "absolute inset-x-0 bottom-0 z-10 max-h-full overflow-auto bg-red-950/95 p-2 text-xs text-red-200",
+      "data-live-component-status": "runtime-error",
+      children: [
+        "Component runtime failed: ",
+        runtimeError
       ]
-    }), shadowRoot) : null
+    }) : null
   });
 }
-
-class RuntimeErrorBoundary extends import_react6.Component {
-  state = { error: null };
-  static getDerivedStateFromError(error) {
-    return { error };
+var DEFAULT_SANDBOX_TIMEOUT_MS = 1e4;
+var MAX_SANDBOX_TIMEOUT_MS = 30000;
+var MAX_FRAME_RUNTIME_BYTES = 8 * 1024 * 1024;
+var MAX_COMPONENT_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
+var MAX_COMPONENT_CSS_BYTES = 512 * 1024;
+var MAX_PROPS_JSON_BYTES = 64 * 1024;
+var MAX_PROTOCOL_ERROR_LENGTH = 2048;
+var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var SHA256 = /^[a-f0-9]{64}$/u;
+var textEncoder = new TextEncoder;
+function createLiveComponentSandboxCandidate(options2) {
+  const iframePrototype = options2.window.HTMLIFrameElement?.prototype;
+  if (!iframePrototype || !("credentialless" in iframePrototype))
+    throw new Error("Live components require credentialless iframe support");
+  const artifacts = options2.snapshot.artifacts;
+  const typeId = options2.snapshot.typeId;
+  const revision = options2.snapshot.implementationRevision;
+  if (!artifacts || !typeId || !TYPE_ID.test(typeId) || !revision || !SHA256.test(revision))
+    throw new TypeError("Live component sandbox snapshot is invalid");
+  if (artifacts.frameRuntimeJavaScript.byteLength < 1 || artifacts.frameRuntimeJavaScript.byteLength > MAX_FRAME_RUNTIME_BYTES || artifacts.componentJavaScript.byteLength < 1 || artifacts.componentJavaScript.byteLength > MAX_COMPONENT_JAVASCRIPT_BYTES || (artifacts.componentCss?.byteLength ?? 0) > MAX_COMPONENT_CSS_BYTES)
+    throw new TypeError("Live component sandbox artifacts exceed their bounds");
+  if (!Number.isFinite(options2.timeoutMs) || options2.timeoutMs < 1 || options2.timeoutMs > MAX_SANDBOX_TIMEOUT_MS)
+    throw new TypeError("Live component sandbox timeout is invalid");
+  const props = cloneBoundedJsonObject(options2.props);
+  const nonce = createNonce(options2.window.crypto);
+  const iframe = options2.document.createElement("iframe");
+  iframe.setAttribute("sandbox", "allow-scripts");
+  iframe.setAttribute("allow", "");
+  iframe.referrerPolicy = "no-referrer";
+  iframe.credentialless = true;
+  iframe.dataset.liveComponentBootstrapNonce = nonce;
+  iframe.dataset.liveComponentRevision = revision;
+  iframe.style.border = "0";
+  iframe.style.height = "100%";
+  iframe.style.inset = "0";
+  iframe.style.position = "absolute";
+  iframe.style.visibility = "hidden";
+  iframe.style.width = "100%";
+  iframe.srcdoc = createTrustedSrcdoc(nonce);
+  options2.host.append(iframe);
+  const contentWindow = iframe.contentWindow;
+  if (!contentWindow) {
+    iframe.remove();
+    throw new Error("Live component sandbox frame window is unavailable");
   }
-  componentDidCatch(_error, _info) {}
-  componentDidUpdate(previous) {
-    if (previous.revision !== this.props.revision && this.state.error)
-      this.setState({ error: null });
+  const componentArtifacts = artifacts;
+  const frameWindow = contentWindow;
+  const channel2 = new MessageChannel;
+  let disposed = false;
+  let bootstrapped = false;
+  let portsClosed = false;
+  let timeout;
+  const removeBootstrapListener = () => options2.window.removeEventListener("message", onBootstrapMessage);
+  const clearTimer = () => {
+    if (timeout === undefined)
+      return;
+    options2.window.clearTimeout(timeout);
+    timeout = undefined;
+  };
+  const closePorts = () => {
+    if (portsClosed)
+      return;
+    portsClosed = true;
+    channel2.port1.onmessage = null;
+    channel2.port1.close();
+    channel2.port2.close();
+  };
+  const dispose = () => {
+    if (disposed)
+      return;
+    disposed = true;
+    clearTimer();
+    removeBootstrapListener();
+    closePorts();
+    iframe.remove();
+  };
+  const fail = (message) => {
+    if (disposed)
+      return;
+    dispose();
+    options2.onError(message);
+  };
+  function onBootstrapMessage(event) {
+    if (disposed || bootstrapped || event.source !== frameWindow || !isExactBootstrapReady(event.data, nonce))
+      return;
+    bootstrapped = true;
+    removeBootstrapListener();
+    const runtimeJavaScript = copyBuffer(componentArtifacts.frameRuntimeJavaScript);
+    try {
+      frameWindow.postMessage(Object.freeze({ nonce, runtimeJavaScript, type: "bootstrap", version: 1 }), "*", [channel2.port2, runtimeJavaScript]);
+      const componentCss = copyBuffer(componentArtifacts.componentCss ?? new Uint8Array);
+      const componentJavaScript = copyBuffer(componentArtifacts.componentJavaScript);
+      channel2.port1.postMessage(Object.freeze({
+        componentCss,
+        componentJavaScript,
+        implementationRevision: revision,
+        props,
+        type: "init",
+        typeId,
+        version: 1
+      }), [componentCss, componentJavaScript]);
+    } catch {
+      fail("Live component sandbox bootstrap failed");
+    }
   }
-  render() {
-    if (this.state.error)
-      return /* @__PURE__ */ jsx_runtime13.jsxs("div", {
-        "data-live-component-status": "runtime-error",
-        style: { background: "#450a0a", boxSizing: "border-box", color: "#fecaca", height: "100%", overflow: "auto", padding: 12 },
-        children: [
-          "Component runtime failed: ",
-          this.state.error.message
-        ]
-      });
-    return this.props.children;
-  }
+  channel2.port1.onmessage = (event) => {
+    if (disposed)
+      return;
+    const response = event.data;
+    if (isExactReady(response, typeId, revision)) {
+      clearTimer();
+      closePorts();
+      iframe.style.visibility = "visible";
+      options2.onReady();
+      return;
+    }
+    if (isExactRuntimeError(response)) {
+      fail(response.message);
+      return;
+    }
+    fail("Live component sandbox protocol error");
+  };
+  channel2.port1.start();
+  options2.window.addEventListener("message", onBootstrapMessage);
+  timeout = options2.window.setTimeout(() => fail("Live component sandbox timed out"), options2.timeoutMs);
+  return Object.freeze({ dispose, iframe });
+}
+function createTrustedSrcdoc(nonce) {
+  const bootstrap = `(()=>{const nonce=${JSON.stringify(nonce)};let used=false;addEventListener("message",async event=>{const value=event.data;if(used||event.source!==parent||!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join("\\0")!=="nonce\\0runtimeJavaScript\\0type\\0version"||value.type!=="bootstrap"||value.version!==1||value.nonce!==nonce||!(value.runtimeJavaScript instanceof ArrayBuffer)||event.ports.length!==1)return;used=true;const port=event.ports[0];let url;try{url=URL.createObjectURL(new Blob([value.runtimeJavaScript],{type:"text/javascript"}));const runtime=await import(url);if(typeof runtime.initializeLiveComponentFrame!=="function")throw new Error("invalid runtime");runtime.initializeLiveComponentFrame(port,document.getElementById("root"));}catch{port.postMessage({message:"Live component frame bootstrap failed",type:"runtime-error",version:1});port.close();}finally{if(url)URL.revokeObjectURL(url);}},false);parent.postMessage({nonce,type:"bootstrap-ready",version:1},"*");})();`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; img-src data: blob:; media-src data: blob:; object-src 'none'; script-src 'nonce-${nonce}' blob:; style-src 'unsafe-inline'"><style>html,body,#root{height:100%;margin:0}body{overflow:hidden}</style></head><body><div id="root"></div><script nonce="${nonce}">${bootstrap}</script></body></html>`;
+}
+function createNonce(cryptoValue) {
+  const bytes = new Uint8Array(32);
+  cryptoValue.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function copyBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+function cloneBoundedJsonObject(value) {
+  if (!isJsonValue(value, new Set, 0))
+    throw new TypeError("Live component props must be a JSON-only object");
+  const json = JSON.stringify(value);
+  if (textEncoder.encode(json).byteLength > MAX_PROPS_JSON_BYTES)
+    throw new TypeError("Live component props exceed the JSON bound");
+  return JSON.parse(json);
+}
+function isJsonValue(value, ancestors, depth) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number")
+    return Number.isFinite(value);
+  if (typeof value !== "object" || depth > 32 || ancestors.has(value))
+    return false;
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)
+    return false;
+  ancestors.add(value);
+  const valid = Array.isArray(value) ? value.every((item) => isJsonValue(item, ancestors, depth + 1)) : Object.values(value).every((item) => isJsonValue(item, ancestors, depth + 1));
+  ancestors.delete(value);
+  return valid;
+}
+function exactKeys(value, keys) {
+  return Object.keys(value).sort().join("\x00") === [...keys].sort().join("\x00");
+}
+function isExactBootstrapReady(value, nonce) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["nonce", "type", "version"]) && message.nonce === nonce && message.type === "bootstrap-ready" && message.version === 1;
+}
+function isExactReady(value, typeId, revision) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["implementationRevision", "type", "typeId", "version"]) && message.implementationRevision === revision && message.type === "ready" && message.typeId === typeId && message.version === 1;
+}
+function isExactRuntimeError(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["message", "type", "version"]) && typeof message.message === "string" && message.message.length > 0 && message.message.length <= MAX_PROTOCOL_ERROR_LENGTH && message.type === "runtime-error" && message.version === 1;
 }
 var missingRuntime = Object.freeze({ error: "Live component runtime is not configured", status: "error" });
+var invalidSelector = Object.freeze({ error: "Live component selector is invalid", status: "error" });
 function emptySubscribe() {
   return () => {
     return;
@@ -29502,7 +29708,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
             renderElement(false),
-            isDetailElement && detailPortalTarget ? import_react_dom2.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
+            isDetailElement && detailPortalTarget ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
               className: "absolute inset-0 overflow-hidden",
               "data-workbench-detail-render-root": "true",
               onMouseEnter: (event) => {

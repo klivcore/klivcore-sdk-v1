@@ -1397,10 +1397,10 @@ import { readFile as readFile3 } from "fs/promises";
 import { resolve as resolve4 } from "path";
 
 // packages/publish-sdk/src/gateway-server-core.ts
-import { createHash as createHash3 } from "crypto";
+import { createHash as createHash4 } from "crypto";
 import { constants } from "fs";
-import { chmod, lstat as lstat2, mkdir as mkdir4, open as open2, writeFile as writeFile3 } from "fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute2, join as join3, resolve as resolve3 } from "path";
+import { chmod, lstat as lstat3, mkdir as mkdir4, open as open3, writeFile as writeFile3 } from "fs/promises";
+import { dirname as dirname4, isAbsolute as isAbsolute2, join as join4, resolve as resolve3 } from "path";
 
 // packages/server/src/index.ts
 import { lstat, mkdir as mkdir2, open, readFile, readdir, rename, rm as rm2, stat, unlink, utimes, writeFile } from "fs/promises";
@@ -2656,33 +2656,186 @@ function isPathConflictError(error) {
 }
 
 // packages/bench-gateway-server/src/live-components.ts
-import { createHash as createHash2 } from "crypto";
+import { createHash as createHash3 } from "crypto";
 import { watch } from "fs";
-import { mkdir as mkdir3, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
+import { lstat as lstat2, mkdir as mkdir3, open as open2, readFile as readFile2, realpath, rename as rename2, writeFile as writeFile2 } from "fs/promises";
 import { dirname as dirname3, isAbsolute, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
-var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
-var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
-var SHA256 = /^[a-f0-9]{64}$/u;
-var MAX_COMPONENTS = 64;
+
+// packages/bench-gateway-server/src/source-build-runner.ts
+import { createHash as createHash2 } from "crypto";
+import { spawn } from "child_process";
+import { mkdtemp, rm as rm3 } from "fs/promises";
+import { tmpdir } from "os";
+import { fileURLToPath } from "url";
+import { join as join3 } from "path";
+var MAX_SOURCE_BYTES = 512 * 1024;
+var MAX_WORKER_RESPONSE_BYTES = 6 * 1024 * 1024;
+var MAX_WORKER_STDERR_BYTES = 16 * 1024;
 var MAX_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
-var MAX_CSS_BYTES = 2 * 1024 * 1024;
+var MAX_CSS_BYTES = 512 * 1024;
+var DEFAULT_TIMEOUT_MS = 5000;
+var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var SHA256 = /^[a-f0-9]{64}$/u;
+var encoder = new TextEncoder;
+async function runSourceBuildWorker(request, options = {}) {
+  const sourceBytes = encoder.encode(request.sourceText);
+  if (!TYPE_ID.test(request.typeId) || sourceBytes.byteLength > MAX_SOURCE_BYTES)
+    throw new Error("Live component source build request is invalid");
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
+    throw new Error("Live component source build timeout is invalid");
+  if (options.signal?.aborted)
+    throw new Error("Live component source build cancelled");
+  const isolatedCwd = await mkdtemp(join3(tmpdir(), "klivcore-source-build-"));
+  const workerPath = options.workerPath ?? fileURLToPath(new URL("./source-build-worker.ts", import.meta.url));
+  const child = spawn(process.execPath, [workerPath], {
+    cwd: isolatedCwd,
+    env: {},
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true
+  });
+  const stdout = [];
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let settled = false;
+  let failure;
+  const fail = (error) => {
+    failure ??= error;
+    if (!child.killed)
+      child.kill("SIGKILL");
+  };
+  child.stdout.on("data", (chunk) => {
+    stdoutBytes += chunk.byteLength;
+    if (stdoutBytes > MAX_WORKER_RESPONSE_BYTES)
+      fail(new Error("Live component source build worker response exceeded the supported bound"));
+    else
+      stdout.push(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.byteLength;
+    if (stderrBytes > MAX_WORKER_STDERR_BYTES)
+      fail(new Error("Live component source build worker diagnostics exceeded the supported bound"));
+  });
+  const timeout = setTimeout(() => fail(new Error("Live component source build worker timed out")), timeoutMs);
+  timeout.unref?.();
+  const onAbort = () => fail(new Error("Live component source build cancelled"));
+  options.signal?.addEventListener("abort", onAbort, { once: true });
+  try {
+    const exited = new Promise((resolveExit, rejectExit) => {
+      child.once("error", rejectExit);
+      child.once("exit", (code, signal) => resolveExit({ code, signal }));
+    });
+    child.stdin.end(JSON.stringify(request));
+    const exit = await exited;
+    settled = true;
+    if (failure)
+      throw failure;
+    if (exit.code !== 0 || exit.signal)
+      throw new Error("Live component source build worker exited unsuccessfully");
+    return parseWorkerResponse(Buffer.concat(stdout).toString("utf8"), request.typeId);
+  } catch (error) {
+    if (!settled && !child.killed)
+      child.kill("SIGKILL");
+    if (error instanceof Error && error.message.startsWith("Live component source build"))
+      throw error;
+    throw new Error("Live component source build worker failed");
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", onAbort);
+    child.stdin.destroy();
+    child.stdout.destroy();
+    child.stderr.destroy();
+    await rm3(isolatedCwd, { recursive: true, force: true });
+  }
+}
+function sanitizeWorkerDiagnostic(value) {
+  return value.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s:;,)]+/gu, "<redacted>").replace(/[\r\n\t]+/gu, " ").slice(0, 1024) || "compiler failed";
+}
+function parseWorkerResponse(raw, expectedTypeId) {
+  let value;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    throw new Error("Live component source build worker returned a malformed response");
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Live component source build worker returned a malformed response");
+  const candidate = value;
+  if (Object.keys(candidate).join("\x00") === "error" && typeof candidate.error === "string" && candidate.error.length > 0 && candidate.error.length <= 1024) {
+    throw new Error(`Live component source build failed: ${sanitizeWorkerDiagnostic(candidate.error)}`);
+  }
+  const required = ["artifacts", "implementationRevision", "jsArtifactSha256", "sourceRevision", "typeId"];
+  const allowed = new Set([...required, "cssArtifactSha256"]);
+  if (Object.keys(candidate).some((key) => !allowed.has(key)) || required.some((key) => !(key in candidate)) || candidate.typeId !== expectedTypeId || !SHA256.test(String(candidate.implementationRevision)) || !SHA256.test(String(candidate.jsArtifactSha256)) || !SHA256.test(String(candidate.sourceRevision)) || candidate.cssArtifactSha256 !== undefined && !SHA256.test(String(candidate.cssArtifactSha256)) || !Array.isArray(candidate.artifacts) || candidate.artifacts.length < 1 || candidate.artifacts.length > 2) {
+    throw new Error("Live component source build worker returned a malformed response");
+  }
+  const artifacts = candidate.artifacts.map((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item))
+      throw new Error("Live component source build worker returned a malformed response");
+    const artifact = item;
+    if (Object.keys(artifact).sort().join("\x00") !== ["bytesBase64", "kind", "sha256"].sort().join("\x00") || artifact.kind !== "js" && artifact.kind !== "css" || typeof artifact.bytesBase64 !== "string" || !SHA256.test(String(artifact.sha256))) {
+      throw new Error("Live component source build worker returned a malformed response");
+    }
+    const bytes = Uint8Array.from(Buffer.from(artifact.bytesBase64, "base64"));
+    const maximumBytes = artifact.kind === "js" ? MAX_JAVASCRIPT_BYTES : MAX_CSS_BYTES;
+    if (bytes.byteLength > maximumBytes || Buffer.from(bytes).toString("base64") !== artifact.bytesBase64 || createHash2("sha256").update(bytes).digest("hex") !== artifact.sha256) {
+      throw new Error("Live component source build worker returned a malformed response");
+    }
+    return Object.freeze({ bytes, kind: artifact.kind, sha256: artifact.sha256 });
+  });
+  const js = artifacts.filter((artifact) => artifact.kind === "js");
+  const css = artifacts.filter((artifact) => artifact.kind === "css");
+  if (js.length !== 1 || js[0].sha256 !== candidate.jsArtifactSha256 || css.length > 1 || (css[0]?.sha256 ?? undefined) !== candidate.cssArtifactSha256)
+    throw new Error("Live component source build worker returned a malformed response");
+  return Object.freeze({
+    artifacts: Object.freeze(artifacts),
+    ...candidate.cssArtifactSha256 ? { cssArtifactSha256: candidate.cssArtifactSha256 } : {},
+    implementationRevision: candidate.implementationRevision,
+    jsArtifactSha256: candidate.jsArtifactSha256,
+    sourceRevision: candidate.sourceRevision,
+    typeId: expectedTypeId
+  });
+}
+
+// packages/bench-gateway-server/src/live-components.ts
+var TYPE_ID2 = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
+var VAULT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
+var SHA2562 = /^[a-f0-9]{64}$/u;
+var MAX_COMPONENTS = 64;
+var MAX_SOURCE_PATH_LENGTH = 4096;
+var MAX_SOURCE_REQUEST_BYTES = 8 * 1024;
+var MAX_JAVASCRIPT_BYTES2 = 2 * 1024 * 1024;
+var MAX_CSS_BYTES2 = 512 * 1024;
 var MAX_RETAINED_ARTIFACTS = 128;
 var MAX_RETAINED_BYTES = 256 * 1024 * 1024;
-var encoder = new TextEncoder;
+var encoder2 = new TextEncoder;
 async function createLiveComponentGateway(options) {
   const apiBasePath = normalizeBasePath(options.apiBasePath ?? "/extensions/live-components");
-  if (!SHA256.test(options.authority.authorityFingerprint) || !REALM_ID.test(options.authority.benchGatewayId) || !REALM_ID.test(options.authority.realmId) || options.lineageFile !== undefined && !isAbsolute(options.lineageFile)) {
+  if (!SHA2562.test(options.authority.authorityFingerprint) || !REALM_ID.test(options.authority.benchGatewayId) || !REALM_ID.test(options.authority.realmId) || options.lineageFile !== undefined && !isAbsolute(options.lineageFile) || options.sourceBuildWorkerPath !== undefined && !isAbsolute(options.sourceBuildWorkerPath)) {
     throw new TypeError("Live component authority or lineage path is invalid");
   }
-  if (!Array.isArray(options.registrations) || options.registrations.length === 0 || options.registrations.length > MAX_COMPONENTS) {
+  if (options.registrations !== undefined && (!Array.isArray(options.registrations) || options.registrations.length > MAX_COMPONENTS)) {
     throw new TypeError("Live component registrations are outside the supported bound");
   }
   const registrations = new Map;
-  for (const candidate of options.registrations) {
-    if (!TYPE_ID.test(candidate.typeId) || registrations.has(candidate.typeId) || !isAbsolute(candidate.entry)) {
+  for (const candidate of options.registrations ?? []) {
+    if (!TYPE_ID2.test(candidate.typeId) || registrations.has(candidate.typeId) || !isAbsolute(candidate.entry)) {
       throw new TypeError("Live component registration is invalid");
     }
     registrations.set(candidate.typeId, Object.freeze({ entry: resolve2(candidate.entry), typeId: candidate.typeId }));
+  }
+  const vaults = new Map;
+  for (const candidate of options.vaults ?? []) {
+    if (!candidate || !VAULT_ID.test(candidate.id) || vaults.has(candidate.id) || !isAbsolute(candidate.root)) {
+      throw new TypeError("Live component vault authority is invalid");
+    }
+    const canonicalRoot = await realpath(candidate.root).catch(() => {
+      return;
+    });
+    if (!canonicalRoot || !(await lstat2(canonicalRoot)).isDirectory())
+      throw new TypeError("Live component vault authority is invalid");
+    vaults.set(candidate.id, canonicalRoot);
   }
   const active = new Map;
   const immutableArtifacts = new Map;
@@ -2692,6 +2845,8 @@ async function createLiveComponentGateway(options) {
   const watcherRetryTimers = new Map;
   const watcherRetryAttempts = new Map;
   const watcherFallbackDirectories = new Map;
+  const sourceEnsureOperations = new Map;
+  const sourceBuildControllers = new Set;
   let closed = false;
   const lineageFile = options.lineageFile ? resolve2(options.lineageFile) : undefined;
   const persistedLineage = lineageFile ? await readLineage(lineageFile, options.authority) : null;
@@ -2704,7 +2859,7 @@ async function createLiveComponentGateway(options) {
     const components = [...active.values()].sort((left, right) => left.typeId.localeCompare(right.typeId));
     const activeArtifactHashes = new Set(components.flatMap((component) => [component.jsArtifactSha256, component.cssArtifactSha256].filter((value) => Boolean(value))));
     const nextSequence = sequence + 1;
-    const identity = sha256(encoder.encode(JSON.stringify(components.map((component) => [
+    const identity = sha256(encoder2.encode(JSON.stringify(components.map((component) => [
       component.typeId,
       component.implementationRevision,
       component.jsArtifactSha256,
@@ -2741,7 +2896,7 @@ async function createLiveComponentGateway(options) {
     catalog = nextCatalog;
     previousCatalogRevision = nextCatalog.catalogRevision;
     if (changedTypeId) {
-      const event = encoder.encode(`event: component-revision-activated
+      const event = encoder2.encode(`event: component-revision-activated
 data: ${JSON.stringify({
         catalogRevision: catalog.catalogRevision,
         componentTypeId: changedTypeId,
@@ -2761,7 +2916,7 @@ data: ${JSON.stringify({
     }
   };
   const publishBuildFailure = (componentTypeId) => {
-    const event = encoder.encode(`event: component-build-failed
+    const event = encoder2.encode(`event: component-build-failed
 data: ${JSON.stringify({
       componentTypeId,
       message: "Candidate build failed; showing the last known good revision.",
@@ -2780,12 +2935,27 @@ data: ${JSON.stringify({
   const rebuildNow = async (typeId, tolerateCandidateFailure = false) => {
     if (closed)
       throw new Error("Live component Gateway is closed");
-    const registration = registrations.get(typeId);
+    let registration = registrations.get(typeId);
     if (!registration)
       throw new TypeError(`Unknown live component: ${typeId}`);
+    if (registration.source) {
+      registration = await authorizeSourceRegistration(registration.typeId, registration.source);
+      registrations.set(typeId, registration);
+    }
     let built;
     try {
-      built = await buildReactComponent(registration);
+      if (registration.source) {
+        const sourceText = await readAuthorizedSourceText(registration.entry, registration.source);
+        const controller = new AbortController;
+        sourceBuildControllers.add(controller);
+        try {
+          built = await runSourceBuildWorker({ sourceText, typeId: registration.typeId }, { signal: controller.signal, workerPath: options.sourceBuildWorkerPath });
+        } finally {
+          sourceBuildControllers.delete(controller);
+        }
+      } else {
+        built = await buildReactComponent(registration);
+      }
     } catch (error) {
       publishBuildFailure(typeId);
       if (tolerateCandidateFailure)
@@ -2835,6 +3005,55 @@ data: ${JSON.stringify({
     });
     return operation;
   };
+  const ensureSourceNow = async (source) => {
+    if (closed)
+      throw new Error("Live component Gateway is closed");
+    const vaultRoot = vaults.get(source.vaultId);
+    if (!vaultRoot)
+      throw new SourceEnsureError(404, "Live component vault is not authorized");
+    const resolvedSource = await resolveAuthorizedSource(source.vaultId, vaultRoot, source.path);
+    const sourceRegistration = resolvedSource.source;
+    const typeId = deriveSourceTypeId(options.authority.realmId, sourceRegistration);
+    if (!registrations.has(typeId) && registrations.size >= MAX_COMPONENTS) {
+      throw new SourceEnsureError(429, "Live component source limit reached");
+    }
+    const existing = registrations.get(typeId);
+    if (existing && (!existing.source || existing.source.vaultId !== sourceRegistration.vaultId || existing.source.path !== sourceRegistration.path)) {
+      throw new SourceEnsureError(409, "Live component source identity collision");
+    }
+    const registration = Object.freeze({ entry: resolvedSource.entry, source: sourceRegistration, typeId });
+    registrations.set(typeId, registration);
+    if (options.watch !== false)
+      installWatcher(registration);
+    try {
+      await rebuild(typeId);
+    } catch (error) {
+      if (error instanceof SourceEnsureError)
+        throw error;
+      throw new SourceBuildError(typeId, formatBuildError(error));
+    }
+    return typeId;
+  };
+  const ensureSource = async (source) => {
+    if (closed)
+      throw new Error("Live component Gateway is closed");
+    const vaultRoot = vaults.get(source.vaultId);
+    if (!vaultRoot)
+      throw new SourceEnsureError(404, "Live component vault is not authorized");
+    const resolved = await resolveAuthorizedSource(source.vaultId, vaultRoot, source.path);
+    const typeId = deriveSourceTypeId(options.authority.realmId, resolved.source);
+    const pending = sourceEnsureOperations.get(typeId);
+    if (pending)
+      return pending;
+    const operation = ensureSourceNow(Object.freeze({ path: resolved.source.path, vaultId: source.vaultId }));
+    sourceEnsureOperations.set(typeId, operation);
+    try {
+      return await operation;
+    } finally {
+      if (sourceEnsureOperations.get(typeId) === operation)
+        sourceEnsureOperations.delete(typeId);
+    }
+  };
   function scheduleCandidateRefresh(registration) {
     const timer = debounceTimers.get(registration.typeId);
     if (timer)
@@ -2868,7 +3087,9 @@ data: ${JSON.stringify({
     if (closed)
       return false;
     const targetDirectory = dirname3(registration.entry);
-    let watchedDirectory = targetDirectory;
+    const candidates = registration.source ? boundedWatchDirectories(registration.source.vaultRoot, registration.entry) : unboundedWatchDirectories(registration.entry);
+    let candidateIndex = 0;
+    let watchedDirectory = candidates[candidateIndex];
     let fallbackError;
     let retryFallback = false;
     while (true) {
@@ -2886,12 +3107,12 @@ data: ${JSON.stringify({
         const code = error.code;
         if (code === "EACCES" || code === "EPERM")
           retryFallback = true;
-        const parent = dirname3(watchedDirectory);
-        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "EACCES" && code !== "EPERM" || parent === watchedDirectory) {
+        candidateIndex += 1;
+        if (code !== "ENOENT" && code !== "ENOTDIR" && code !== "EACCES" && code !== "EPERM" || candidateIndex >= candidates.length) {
           scheduleWatcherRetry(registration, error);
           return false;
         }
-        watchedDirectory = parent;
+        watchedDirectory = candidates[candidateIndex];
         continue;
       }
       watcher.on("error", (error) => {
@@ -2928,6 +3149,9 @@ data: ${JSON.stringify({
     if (closed)
       return;
     closed = true;
+    for (const controller of sourceBuildControllers)
+      controller.abort();
+    sourceBuildControllers.clear();
     for (const timer of debounceTimers.values())
       clearTimeout(timer);
     debounceTimers.clear();
@@ -2962,16 +3186,39 @@ data: ${JSON.stringify({
   }
   return Object.freeze({
     close: shutdown,
+    ensureSource,
     async fetch(request) {
       if (closed)
         return new Response("Gateway closed", { status: 503 });
       const url = new URL(request.url);
       if (url.search || url.hash)
         return new Response(null, { status: 400 });
+      if (url.pathname === `${apiBasePath}/sources/ensure`) {
+        if (request.method !== "POST")
+          return new Response(null, { headers: { allow: "POST" }, status: 405 });
+        const origin = request.headers.get("origin");
+        const fetchSite = request.headers.get("sec-fetch-site")?.toLowerCase();
+        if (origin !== url.origin || fetchSite !== "same-origin") {
+          return sourceJsonResponse({ error: "Live component source request origin is not authorized" }, 403);
+        }
+        if (request.headers.get("content-type")?.toLowerCase() !== "application/json") {
+          return sourceJsonResponse({ error: "Live component source request must be JSON" }, 415);
+        }
+        try {
+          const source = parseSourceRequest(await readBoundedRequestJson(request));
+          return sourceJsonResponse({ typeId: await ensureSource(source) }, 200);
+        } catch (error) {
+          if (error instanceof SourceBuildError)
+            return sourceJsonResponse({ error: error.message, typeId: error.typeId }, 422);
+          if (error instanceof SourceEnsureError)
+            return sourceJsonResponse({ error: error.message }, error.status);
+          return sourceJsonResponse({ error: "Live component source ensure failed" }, 500);
+        }
+      }
       if (request.method !== "GET" && request.method !== "HEAD")
         return new Response(null, { headers: { allow: "GET, HEAD" }, status: 405 });
       if (url.pathname === `${apiBasePath}/catalog`) {
-        const bytes = encoder.encode(JSON.stringify(catalog));
+        const bytes = encoder2.encode(JSON.stringify(catalog));
         return new Response(request.method === "HEAD" ? null : bytes, { headers: {
           "cache-control": "no-store",
           "content-length": String(bytes.byteLength),
@@ -2987,7 +3234,7 @@ data: ${JSON.stringify({
           start(controller) {
             subscriber = controller;
             subscribers.add(controller);
-            controller.enqueue(encoder.encode(`: connected
+            controller.enqueue(encoder2.encode(`: connected
 
 `));
           },
@@ -3014,6 +3261,193 @@ data: ${JSON.stringify({
     },
     rebuild
   });
+}
+
+class SourceEnsureError extends Error {
+  status;
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+class SourceBuildError extends Error {
+  typeId;
+  constructor(typeId, message) {
+    super(message);
+    this.typeId = typeId;
+  }
+}
+function normalizeSourcePath(value) {
+  if (typeof value !== "string" || value.length === 0 || value.length > MAX_SOURCE_PATH_LENGTH || value.includes("\x00") || value.includes("\\") || value.startsWith("/") || !value.endsWith(".tsx")) {
+    throw new SourceEnsureError(400, "Live component path must be a bounded vault-relative .tsx path");
+  }
+  const path = value.replace(/^(?:\.\/)+/u, "");
+  if (!path || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) {
+    throw new SourceEnsureError(400, "Live component path must be a bounded vault-relative .tsx path");
+  }
+  return path;
+}
+function isWithinRoot(root, candidate) {
+  const path = relative2(root, candidate);
+  return path === "" || path !== ".." && !path.startsWith(`..${sep2}`) && !isAbsolute(path);
+}
+function boundedWatchDirectories(vaultRoot, entry) {
+  const canonicalRoot = resolve2(vaultRoot);
+  let directory = dirname3(resolve2(entry));
+  if (!isWithinRoot(canonicalRoot, directory))
+    return Object.freeze([]);
+  const directories = [];
+  while (true) {
+    directories.push(directory);
+    if (directory === canonicalRoot)
+      break;
+    const parent = dirname3(directory);
+    if (parent === directory || !isWithinRoot(canonicalRoot, parent))
+      break;
+    directory = parent;
+  }
+  return Object.freeze(directories);
+}
+function unboundedWatchDirectories(entry) {
+  const directories = [];
+  let directory = dirname3(entry);
+  while (true) {
+    directories.push(directory);
+    const parent = dirname3(directory);
+    if (parent === directory)
+      break;
+    directory = parent;
+  }
+  return directories;
+}
+async function readAuthorizedSourceText(entry, source) {
+  let handle;
+  try {
+    handle = await open2(entry, "r");
+    const canonicalOpenFile = await realpath(`/proc/self/fd/${handle.fd}`);
+    if (canonicalOpenFile !== entry || !isWithinRoot(source.vaultRoot, canonicalOpenFile)) {
+      throw new SourceEnsureError(403, "Live component source authorization changed");
+    }
+    const info = await handle.stat();
+    if (!info.isFile())
+      throw new SourceEnsureError(400, "Live component source must be a regular file");
+    if (info.size > MAX_SOURCE_BYTES)
+      throw new SourceEnsureError(413, "Live component source exceeded the supported bound");
+    const bytes = new Uint8Array(info.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesRead === 0)
+        break;
+      offset += result.bytesRead;
+    }
+    if (offset !== bytes.byteLength)
+      throw new SourceEnsureError(400, "Live component source changed while being read");
+    try {
+      return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new SourceEnsureError(413, "Live component source must be valid UTF-8");
+    }
+  } catch (error) {
+    if (error instanceof SourceEnsureError)
+      throw error;
+    throw new SourceEnsureError(400, "Live component source is unavailable");
+  } finally {
+    await handle?.close().catch(() => {
+      return;
+    });
+  }
+}
+async function resolveAuthorizedSource(vaultId, vaultRoot, requestedPath) {
+  const normalizedPath = normalizeSourcePath(requestedPath);
+  const candidate = resolve2(vaultRoot, normalizedPath);
+  if (!isWithinRoot(vaultRoot, candidate))
+    throw new SourceEnsureError(403, "Live component path escapes its authorized vault");
+  let entry;
+  try {
+    entry = await realpath(candidate);
+  } catch (error) {
+    const code = error.code;
+    throw new SourceEnsureError(code === "ENOENT" || code === "ENOTDIR" ? 404 : 400, "Live component source is unavailable");
+  }
+  if (!isWithinRoot(vaultRoot, entry))
+    throw new SourceEnsureError(403, "Live component path escapes its authorized vault");
+  const info = await lstat2(entry).catch(() => {
+    return;
+  });
+  if (!info?.isFile())
+    throw new SourceEnsureError(400, "Live component source must be a regular file");
+  const canonicalPath = relative2(vaultRoot, entry).split(sep2).join("/");
+  if (!canonicalPath.endsWith(".tsx"))
+    throw new SourceEnsureError(400, "Live component path must resolve to a .tsx source");
+  return Object.freeze({
+    entry,
+    source: Object.freeze({ path: canonicalPath, vaultId, vaultRoot })
+  });
+}
+async function authorizeSourceRegistration(typeId, source) {
+  const resolvedSource = await resolveAuthorizedSource(source.vaultId, source.vaultRoot, source.path);
+  if (resolvedSource.source.path !== source.path)
+    throw new SourceEnsureError(403, "Live component canonical source changed");
+  return Object.freeze({ entry: resolvedSource.entry, source, typeId });
+}
+function deriveSourceTypeId(realmId, source) {
+  const identity = sha256(encoder2.encode(JSON.stringify([realmId, source.vaultId, source.path])));
+  return `${realmId}:source-${identity.slice(0, 32)}`;
+}
+function parseSourceRequest(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new SourceEnsureError(400, "Live component source request is invalid");
+  const candidate = value;
+  if (Object.keys(candidate).sort().join("\x00") !== ["path", "vaultId"].join("\x00") || typeof candidate.vaultId !== "string" || !VAULT_ID.test(candidate.vaultId)) {
+    throw new SourceEnsureError(400, "Live component source request is invalid");
+  }
+  normalizeSourcePath(candidate.path);
+  return Object.freeze({ path: candidate.path, vaultId: candidate.vaultId });
+}
+async function readBoundedRequestJson(request) {
+  const declared = request.headers.get("content-length");
+  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > MAX_SOURCE_REQUEST_BYTES)) {
+    throw new SourceEnsureError(413, "Live component source request exceeded the supported bound");
+  }
+  if (!request.body)
+    throw new SourceEnsureError(400, "Live component source request body is missing");
+  const reader = request.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const result = await reader.read();
+      if (result.done)
+        break;
+      total += result.value.byteLength;
+      if (total > MAX_SOURCE_REQUEST_BYTES)
+        throw new SourceEnsureError(413, "Live component source request exceeded the supported bound");
+      chunks.push(result.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+  } catch {
+    throw new SourceEnsureError(400, "Live component source request is invalid JSON");
+  }
+}
+function formatBuildError(error) {
+  const details = error instanceof AggregateError ? error.errors.map((item) => item && typeof item === "object" && ("message" in item) ? String(item.message) : String(item)).join("; ") : error instanceof Error ? error.message : String(error);
+  const sanitized = details.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s:;,)]+/gu, "<redacted>").replace(/[\r\n\t]+/gu, " ");
+  return `Live component source build failed: ${sanitized}`.slice(0, 2048);
+}
+function sourceJsonResponse(value, status) {
+  return Response.json(value, { headers: { "cache-control": "no-store", "x-content-type-options": "nosniff" }, status });
 }
 async function readLineage(path, authority) {
   let raw;
@@ -3062,12 +3496,12 @@ async function buildReactComponent(registration) {
   const rawCss = css ? new Uint8Array(await css.arrayBuffer()) : null;
   const jsSha = sha256(rawJs);
   const cssSha = rawCss ? sha256(rawCss) : undefined;
-  const implementationRevision = sha256(encoder.encode(`${jsSha}:${cssSha ?? ""}`));
-  const revisionedJs = encoder.encode(new TextDecoder().decode(rawJs).replaceAll("__KLIVCORE_IMPLEMENTATION_REVISION__", implementationRevision));
+  const implementationRevision = sha256(encoder2.encode(`${jsSha}:${cssSha ?? ""}`));
+  const revisionedJs = encoder2.encode(new TextDecoder().decode(rawJs).replaceAll("__KLIVCORE_IMPLEMENTATION_REVISION__", implementationRevision));
   const manifest = `/*klivcore-manifest:${JSON.stringify({ components: [{ implementationRevision, renderMode: "element", typeId: registration.typeId }] })}*/
 `;
-  const jsBytes = concat(encoder.encode(manifest), revisionedJs);
-  if (jsBytes.byteLength > MAX_JAVASCRIPT_BYTES || (rawCss?.byteLength ?? 0) > MAX_CSS_BYTES) {
+  const jsBytes = concat(encoder2.encode(manifest), revisionedJs);
+  if (jsBytes.byteLength > MAX_JAVASCRIPT_BYTES2 || (rawCss?.byteLength ?? 0) > MAX_CSS_BYTES2) {
     throw new Error(`Live component build exceeded the artifact size limit: ${registration.typeId}`);
   }
   const finalJsSha = sha256(jsBytes);
@@ -3119,7 +3553,7 @@ export const jsxDEV = runtime.jsxDEV;
 `;
 }
 function sha256(bytes) {
-  return createHash2("sha256").update(bytes).digest("hex");
+  return createHash3("sha256").update(bytes).digest("hex");
 }
 function concat(left, right) {
   const output = new Uint8Array(left.byteLength + right.byteLength);
@@ -3185,10 +3619,9 @@ var grandchildBench = Object.freeze({
 });
 var modularitySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" role="img" aria-label="Native image element"><rect width="640" height="360" rx="28" fill="#0f172a"/><rect x="56" y="78" width="220" height="204" rx="20" fill="#164e63" stroke="#22d3ee" stroke-width="6"/><rect x="364" y="78" width="220" height="204" rx="20" fill="#14532d" stroke="#4ade80" stroke-width="6"/><path d="M276 180h88" stroke="#e2e8f0" stroke-width="8"/><text x="320" y="44" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#e2e8f0">Native image element</text><text x="166" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#cffafe">Workbench</text><text x="474" y="190" text-anchor="middle" font-family="sans-serif" font-size="22" fill="#dcfce7">Realm</text></svg>
 `;
-var VAULT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
+var VAULT_ID2 = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
 var BENCH_PATH = /^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u;
 var COMPONENT_REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
-var COMPONENT_TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
 function parseWorkbenchGatewayConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
@@ -3212,7 +3645,7 @@ function parseWorkbenchGatewayConfig(value) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
   const initialView = config.initialView;
-  if (Object.keys(initialView).sort().join("\x00") !== ["path", "vaultId"].sort().join("\x00") || typeof initialView.path !== "string" || !BENCH_PATH.test(initialView.path) || typeof initialView.vaultId !== "string" || !VAULT_ID.test(initialView.vaultId)) {
+  if (Object.keys(initialView).sort().join("\x00") !== ["path", "vaultId"].sort().join("\x00") || typeof initialView.path !== "string" || !BENCH_PATH.test(initialView.path) || typeof initialView.vaultId !== "string" || !VAULT_ID2.test(initialView.vaultId)) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
   const seen = new Set;
@@ -3220,7 +3653,7 @@ function parseWorkbenchGatewayConfig(value) {
     if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
       throw new TypeError("Workbench Gateway config is invalid");
     const vault = value2;
-    if (Object.keys(vault).sort().join("\x00") !== ["id", "root"].sort().join("\x00") || typeof vault.id !== "string" || !VAULT_ID.test(vault.id) || seen.has(vault.id) || typeof vault.root !== "string" || !isAbsolute2(vault.root)) {
+    if (Object.keys(vault).sort().join("\x00") !== ["id", "root"].sort().join("\x00") || typeof vault.id !== "string" || !VAULT_ID2.test(vault.id) || seen.has(vault.id) || typeof vault.root !== "string" || !isAbsolute2(vault.root)) {
       throw new TypeError("Workbench Gateway config is invalid");
     }
     seen.add(vault.id);
@@ -3242,25 +3675,15 @@ function parseLiveComponents(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
   const candidate = value;
-  if (Object.keys(candidate).sort().join("\x00") !== ["realmId", "registrations"].sort().join("\x00") || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId) || !Array.isArray(candidate.registrations) || candidate.registrations.length === 0 || candidate.registrations.length > 64) {
+  if (Object.keys(candidate).join("\x00") !== "realmId" || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId)) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
-  const seen = new Set;
-  const registrations = candidate.registrations.map((value2) => {
-    if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
-      throw new TypeError("Workbench Gateway config is invalid");
-    const registration = value2;
-    if (Object.keys(registration).sort().join("\x00") !== ["entry", "typeId"].sort().join("\x00") || typeof registration.entry !== "string" || !isAbsolute2(registration.entry) || typeof registration.typeId !== "string" || !COMPONENT_TYPE_ID.test(registration.typeId) || !registration.typeId.startsWith(`${candidate.realmId}:`) || seen.has(registration.typeId))
-      throw new TypeError("Workbench Gateway config is invalid");
-    seen.add(registration.typeId);
-    return Object.freeze({ entry: resolve3(registration.entry), typeId: registration.typeId });
-  });
-  return Object.freeze({ realmId: candidate.realmId, registrations: Object.freeze(registrations) });
+  return Object.freeze({ realmId: candidate.realmId });
 }
 function normalizeWorkbenchGatewayConfig(configured) {
   return "vaultRoot" in configured ? parseWorkbenchGatewayConfig(configured) : configured;
 }
-async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPath, publishedDebugCategoryIds = []) {
+async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPath, publishedDebugCategoryIds = [], liveComponentAssets) {
   const home = resolve3(homePath);
   const cache = resolve3(home, "cache");
   const effectiveConfig = configured ? normalizeWorkbenchGatewayConfig(configured) : undefined;
@@ -3268,7 +3691,7 @@ async function createWorkbenchGatewayHandler(homePath, configured, debugAssetsPa
   const vaults = effectiveConfig?.vaults ?? [{ id: "main", root: defaultVault }];
   if (effectiveConfig) {
     await Promise.all(vaults.map(async (vault) => {
-      const info = await lstat2(vault.root);
+      const info = await lstat3(vault.root);
       if (!info.isDirectory() || info.isSymbolicLink())
         throw new TypeError(`Workbench Gateway vault root is invalid: ${vault.id}`);
     }));
@@ -3299,7 +3722,7 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
     workspace: { id: "workbench", name: effectiveConfig.workspaceName }
   } : bootstrap;
   const server = createWorkbenchServer({ apiBasePath: "/v1", bootstrap: effectiveBootstrap, vaults: vaults.map((vault) => ({ ...vault, cacheRoot: cache })) });
-  const liveAuthorityFingerprint = effectiveConfig?.liveComponents ? createHash3("sha256").update(JSON.stringify(effectiveConfig.liveComponents)).digest("hex") : undefined;
+  const liveAuthorityFingerprint = effectiveConfig?.liveComponents ? createHash4("sha256").update(JSON.stringify({ liveComponents: effectiveConfig.liveComponents, vaults })).digest("hex") : undefined;
   const liveComponents = effectiveConfig?.liveComponents && liveAuthorityFingerprint ? await createLiveComponentGateway({
     apiBasePath: "/v1/components",
     authority: {
@@ -3307,15 +3730,20 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
       benchGatewayId: "workbench",
       realmId: effectiveConfig.liveComponents.realmId
     },
-    lineageFile: join3(home, "live-components", `${liveAuthorityFingerprint}.json`),
-    registrations: effectiveConfig.liveComponents.registrations
+    lineageFile: join4(home, "live-components", `${liveAuthorityFingerprint}.json`),
+    sourceBuildWorkerPath: liveComponentAssets?.sourceBuildWorkerPath,
+    vaults
   }) : undefined;
+  let frameRuntime;
   let debugAssets = new Map;
   try {
+    if (liveComponents && liveComponentAssets) {
+      frameRuntime = await loadPublishedFrameRuntime(liveComponentAssets.frameRuntimePath);
+    }
     if (debugAssetsPath) {
       debugAssets = await openPublishedDebugAssets(resolve3(debugAssetsPath), publishedDebugCategoryIds);
     }
-    return requestHandler(server, debugAssets, liveComponents);
+    return requestHandler(server, debugAssets, liveComponents, frameRuntime);
   } catch (error) {
     await liveComponents?.close().catch(() => {
       return;
@@ -3325,7 +3753,7 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
 }
 async function openPublishedDebugAssets(debugAssetsPath, publishedDebugCategoryIds) {
   const opened = new Map;
-  const root = await open2(debugAssetsPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(() => {
+  const root = await open3(debugAssetsPath, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(() => {
     return;
   });
   if (!root)
@@ -3342,7 +3770,7 @@ async function openPublishedDebugAssets(debugAssetsPath, publishedDebugCategoryI
       categoryIds.add(categoryId);
       for (const extension of ["js", "css"]) {
         const name = `${categoryId}.${extension}`;
-        let file = await open2(`/proc/self/fd/${root.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW);
+        let file = await open3(`/proc/self/fd/${root.fd}/${name}`, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
           const info = await file.stat();
           const maximumBytes = extension === "js" ? 16 * 1024 * 1024 : 4 * 1024 * 1024;
@@ -3385,7 +3813,31 @@ async function readPublishedDebugAsset(asset) {
   }
   return buffer;
 }
-function requestHandler(server, debugAssets, liveComponents) {
+async function loadPublishedFrameRuntime(path) {
+  if (!isAbsolute2(path))
+    throw new TypeError("Workbench live component frame runtime path is invalid");
+  const file = await open3(resolve3(path), constants.O_RDONLY | constants.O_NOFOLLOW).catch(() => {
+    return;
+  });
+  if (!file)
+    throw new TypeError("Workbench live component frame runtime is invalid");
+  try {
+    const info = await file.stat();
+    if (!info.isFile() || info.size < 1 || info.size > 4 * 1024 * 1024) {
+      throw new TypeError("Workbench live component frame runtime is invalid");
+    }
+    const bytes = new Uint8Array(await file.readFile());
+    if (bytes.byteLength !== info.size)
+      throw new TypeError("Workbench live component frame runtime is invalid");
+    const sha2562 = createHash4("sha256").update(bytes).digest("hex");
+    return Object.freeze({ bytes, etag: `"sha256-${sha2562}"`, sha256: sha2562 });
+  } finally {
+    await file.close().catch(() => {
+      return;
+    });
+  }
+}
+function requestHandler(server, debugAssets, liveComponents, frameRuntime) {
   let closed = false;
   const handler = async (request) => {
     if (closed)
@@ -3393,6 +3845,23 @@ function requestHandler(server, debugAssets, liveComponents) {
     const url = new URL(request.url);
     if (request.method === "GET" && url.pathname === "/health" && !url.search)
       return Response.json({ status: "ok", gateway: "workbench-v1" });
+    if (frameRuntime && url.pathname === "/v1/components/frame-runtime.js") {
+      if (url.search || url.hash)
+        return new Response(null, { status: 400 });
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return new Response(null, { headers: { allow: "GET, HEAD" }, status: 405 });
+      }
+      return new Response(request.method === "HEAD" ? null : frameRuntime.bytes.slice(), {
+        headers: {
+          "cache-control": "public, max-age=31536000, immutable",
+          "content-length": String(frameRuntime.bytes.byteLength),
+          "content-type": "text/javascript; charset=utf-8",
+          etag: frameRuntime.etag,
+          "x-content-sha256": frameRuntime.sha256,
+          "x-content-type-options": "nosniff"
+        }
+      });
+    }
     const serviceArtifact = /^\/v1\/components\/artifacts\/([a-f0-9]{64}\.(?:js|css))$/u.exec(url.pathname);
     if (liveComponents && serviceArtifact && !url.search) {
       const canonicalUrl = new URL(request.url);
@@ -3540,7 +4009,11 @@ var home = requiredAbsolute("KLIVCORE_GATEWAY_HOME");
 var configPath = requiredAbsolute("KLIVCORE_GATEWAY_CONFIG");
 var config = JSON.parse(await readFile3(configPath, "utf8"));
 var debugAssets = resolve4(import.meta.dir, "../debug/assets");
-var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config), debugAssets, publishedWorkbenchDebugCategoryIds);
+var liveComponentAssets = Object.freeze({
+  frameRuntimePath: resolve4(import.meta.dir, "../ui/live-component-frame-runtime.js"),
+  sourceBuildWorkerPath: resolve4(import.meta.dir, "./live-component-build-worker.js")
+});
+var handler = await createWorkbenchGatewayHandler(home, parseWorkbenchGatewayConfig(config), debugAssets, publishedWorkbenchDebugCategoryIds, liveComponentAssets);
 var server = Bun.serve({ hostname: "127.0.0.1", port: requiredPort(), fetch: handler });
 console.log(`Canonical Workbench Gateway ready on http://127.0.0.1:${server.port}`);
 var stopping = false;
