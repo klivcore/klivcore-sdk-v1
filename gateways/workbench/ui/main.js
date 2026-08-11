@@ -13351,7 +13351,33 @@ function NodeWrapper({
                 strokeWidth: "1.2"
               })
             })
-          })
+          }),
+          element.kind === "component" ? /* @__PURE__ */ jsx_runtime4.jsx("button", {
+            "aria-label": "Enter full viewport",
+            className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-cyan-500/20 hover:text-cyan-100 focus:bg-cyan-500/20 focus:text-cyan-100 focus:outline-none",
+            "data-workbench-enter-full-viewport": "true",
+            onClick: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            },
+            onDoubleClick: (event) => event.stopPropagation(),
+            onPointerDown: (event) => event.stopPropagation(),
+            title: "Enter full viewport",
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime4.jsx("svg", {
+              "aria-hidden": "true",
+              className: "h-2.5 w-2.5",
+              fill: "none",
+              viewBox: "0 0 16 16",
+              children: /* @__PURE__ */ jsx_runtime4.jsx("path", {
+                d: "M6 2H2v4M10 2h4v4M14 10v4h-4M6 14H2v-4",
+                stroke: "currentColor",
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "1.4"
+              })
+            })
+          }) : null
         ]
       }) : null,
       isConfirmingDelete && !isProjected ? /* @__PURE__ */ jsx_runtime4.jsxs("div", {
@@ -28896,6 +28922,7 @@ function BenchViewport({
                     onElementMoveStart: startElementMove,
                     onElementRuntimePreview: updateRuntimeCodePreview,
                     onElementSelect: selectElement,
+                    onFullViewportEnter: (elementId) => setFullViewportElementHostId(elementId),
                     onFullViewportExit: () => setFullViewportElementHostId(null),
                     onTextFileList,
                     onTextFilePathChange,
@@ -30282,6 +30309,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   onElementMoveStart,
   onElementRuntimePreview,
   onElementSelect,
+  onFullViewportEnter,
   onFullViewportExit,
   onTextFileList,
   onTextFilePathChange,
@@ -30347,6 +30375,14 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           "data-workbench-element-host": item.element.id,
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
           "data-workbench-stack-index": elementZIndexes.get(item.element.id),
+          onClickCapture: (event) => {
+            const requestsFullViewport = event.nativeEvent.composedPath().some((candidate) => candidate instanceof Element && candidate.getAttribute("data-workbench-enter-full-viewport") === "true");
+            if (!requestsFullViewport)
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+            onFullViewportEnter(item.element.id);
+          },
           style: isFullViewport ? { height: "100vh", left: 0, opacity: elementOpacity, position: "fixed", top: 0, width: "100vw", zIndex: 2147483646 } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
             /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
