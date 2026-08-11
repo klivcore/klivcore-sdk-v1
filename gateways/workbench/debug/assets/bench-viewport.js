@@ -13269,7 +13269,7 @@ function NodeWrapper({
       "data-workbench-parent-id": element.parentId,
       style: wrapperStyle,
       children: /* @__PURE__ */ jsx_runtime4.jsx("div", {
-        className: `h-full w-full ${contentOverflowClassName} ${bodyClassName}`,
+        className: `h-full w-full p-1 ${contentOverflowClassName} ${bodyClassName}`,
         children
       })
     });
