@@ -13320,6 +13320,7 @@ function NodeWrapper({
       }) : null,
       !isProjected ? /* @__PURE__ */ jsx_runtime4.jsxs("div", {
         className: `absolute -top-4 left-0 right-0 z-10 flex h-4 cursor-move select-none items-center border border-b-0 border-slate-800 bg-slate-900/95 px-1 text-[10px] font-medium leading-none text-slate-400 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive || isConfirmingDelete ? "opacity-100" : "opacity-0"}`,
+        "data-workbench-node-header": "true",
         onPointerDown: (event) => startNodeDrag(event, "move"),
         title: "Drag to move",
         children: [
@@ -13353,7 +13354,7 @@ function NodeWrapper({
             })
           }),
           element.kind === "component" ? /* @__PURE__ */ jsx_runtime4.jsx("button", {
-            "aria-label": "Enter full viewport",
+            "aria-label": "Enter detail mode",
             className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-cyan-500/20 hover:text-cyan-100 focus:bg-cyan-500/20 focus:text-cyan-100 focus:outline-none",
             "data-workbench-enter-full-viewport": "true",
             onClick: (event) => {
@@ -13362,7 +13363,7 @@ function NodeWrapper({
             },
             onDoubleClick: (event) => event.stopPropagation(),
             onPointerDown: (event) => event.stopPropagation(),
-            title: "Enter full viewport",
+            title: "Enter detail mode",
             type: "button",
             children: /* @__PURE__ */ jsx_runtime4.jsx("svg", {
               "aria-hidden": "true",
@@ -27351,6 +27352,7 @@ function BenchViewport({
   const [selectedIds, setSelectedIds] = import_react9.useState(() => new Set);
   const [editorAutoFocusId, setEditorAutoFocusId] = import_react9.useState(null);
   const [fullViewportElementHostId, setFullViewportElementHostId] = import_react9.useState(null);
+  const [detailLayout, setDetailLayout] = import_react9.useState(() => typeof window !== "undefined" && window.innerWidth > 1024 ? "dock-right" : "full-viewport");
   const [openActorId, setOpenActorId] = import_react9.useState(null);
   const [openApplicationPanelId, setOpenApplicationPanelId] = import_react9.useState(null);
   const [lastActorId, setLastActorId] = import_react9.useState(null);
@@ -28901,6 +28903,7 @@ function BenchViewport({
                     viewportZoom: viewport.zoom
                   }),
                   /* @__PURE__ */ jsx_runtime20.jsx(ViewportElementLayer, {
+                    detailLayout,
                     edgeDrag,
                     editorAutoFocusId,
                     elementTypeRegistry,
@@ -28922,6 +28925,7 @@ function BenchViewport({
                     onElementMoveStart: startElementMove,
                     onElementRuntimePreview: updateRuntimeCodePreview,
                     onElementSelect: selectElement,
+                    onDetailLayoutChange: setDetailLayout,
                     onFullViewportEnter: (elementId) => setFullViewportElementHostId(elementId),
                     onFullViewportExit: () => setFullViewportElementHostId(null),
                     onTextFileList,
@@ -30290,7 +30294,22 @@ function ViewportWorldGrid() {
     }
   });
 }
+function getDetailHostStyle(layout) {
+  switch (layout) {
+    case "dock-right":
+      return { height: "100vh", left: "50vw", top: 0, width: "50vw" };
+    case "dock-left":
+      return { height: "100vh", left: 0, top: 0, width: "50vw" };
+    case "dock-top":
+      return { height: "50vh", left: 0, top: 0, width: "100vw" };
+    case "dock-bottom":
+      return { height: "50vh", left: 0, top: "50vh", width: "100vw" };
+    case "full-viewport":
+      return { height: "100vh", left: 0, top: 0, width: "100vw" };
+  }
+}
 var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
+  detailLayout,
   edgeDrag,
   editorAutoFocusId,
   elementTypeRegistry,
@@ -30309,6 +30328,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   onElementMoveStart,
   onElementRuntimePreview,
   onElementSelect,
+  onDetailLayoutChange,
   onFullViewportEnter,
   onFullViewportExit,
   onTextFileList,
@@ -30328,11 +30348,17 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         [data-workbench-transform-layer="true"][data-workbench-full-viewport-active="true"] {
           transform: none !important;
         }
-        [data-workbench-element-full-viewport="true"] > [data-workbench-element-id] {
-          inset: 0 !important;
-          height: 100% !important;
+        [data-workbench-detail-layout] > [data-workbench-element-id] {
+          bottom: 0 !important;
+          height: calc(100% - 48px) !important;
+          left: 0 !important;
+          right: 0 !important;
+          top: 48px !important;
           transform: none !important;
           width: 100% !important;
+        }
+        [data-workbench-detail-layout] > [data-workbench-element-id] > [data-workbench-node-header="true"] {
+          display: none !important;
         }
       `
       }),
@@ -30371,6 +30397,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         }
         return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
           className: `absolute left-0 top-0 ${isFullViewport ? "overflow-hidden bg-slate-950" : "h-0 w-0 overflow-visible"}`,
+          "data-workbench-detail-layout": isFullViewport ? detailLayout : undefined,
           "data-workbench-element-full-viewport": isFullViewport ? "true" : undefined,
           "data-workbench-element-host": item.element.id,
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
@@ -30383,7 +30410,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
             event.stopPropagation();
             onFullViewportEnter(item.element.id);
           },
-          style: isFullViewport ? { height: "100vh", left: 0, opacity: elementOpacity, position: "fixed", top: 0, width: "100vw", zIndex: 2147483646 } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
+          style: isFullViewport ? { ...getDetailHostStyle(detailLayout), opacity: elementOpacity, position: "fixed", zIndex: 2147483646 } : { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
             /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
               element: item.element,
@@ -30415,19 +30442,56 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
                 viewportZoom
               })
             }),
-            isFullViewport ? /* @__PURE__ */ jsx_runtime20.jsx("button", {
-              "aria-label": "Back from full viewport",
-              className: "fixed left-4 top-4 z-[2147483647] rounded border border-slate-600 bg-slate-950/90 px-3 py-2 text-sm font-semibold text-slate-100 shadow-xl hover:border-cyan-400",
+            isFullViewport ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+              className: "absolute inset-x-0 top-0 z-[2147483647] flex items-center border-b border-slate-700 bg-slate-950 px-4 shadow-xl",
+              "data-workbench-detail-header": "true",
               "data-workbench-viewport-controls": "true",
-              onClick: (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onFullViewportExit();
-              },
-              onDoubleClick: (event) => event.stopPropagation(),
               onPointerDown: (event) => event.stopPropagation(),
-              type: "button",
-              children: "← Back"
+              style: { height: 48 },
+              children: [
+                /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                  "aria-label": "Back from detail mode",
+                  className: "rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
+                  onClick: (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onFullViewportExit();
+                  },
+                  onDoubleClick: (event) => event.stopPropagation(),
+                  onPointerDown: (event) => event.stopPropagation(),
+                  type: "button",
+                  children: "← Back"
+                }),
+                /* @__PURE__ */ jsx_runtime20.jsxs("select", {
+                  "aria-label": "Detail layout",
+                  className: "ml-auto rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
+                  onChange: (event) => onDetailLayoutChange(event.currentTarget.value),
+                  onPointerDown: (event) => event.stopPropagation(),
+                  value: detailLayout,
+                  children: [
+                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                      value: "full-viewport",
+                      children: "Full viewport"
+                    }),
+                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                      value: "dock-right",
+                      children: "Dock right"
+                    }),
+                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                      value: "dock-left",
+                      children: "Dock left"
+                    }),
+                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                      value: "dock-top",
+                      children: "Dock top"
+                    }),
+                    /* @__PURE__ */ jsx_runtime20.jsx("option", {
+                      value: "dock-bottom",
+                      children: "Dock bottom"
+                    })
+                  ]
+                })
+              ]
             }) : null
           ]
         }, item.element.id);
