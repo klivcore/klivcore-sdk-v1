@@ -961,7 +961,9 @@ export function createRealmGateway(config: RealmGatewayConfig): RunningRealmGate
         const sessionCapabilities = new Set(session.principal === "agent" ? session.capabilities ?? [] : publicBindingCapabilities);
         if (relay.requiredCapabilities.some((capability) => !sessionCapabilities.has(capability))) return json({ error: "forbidden" }, 403);
         const websocketUpgrade = request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket";
-        if (!websocketUpgrade && !serviceGrant(request.headers.get("x-klivcore-service-access"), relay.port, session.id)) return json({ error: "forbidden" }, 403);
+        if (!websocketUpgrade && !serviceGrant(request.headers.get("x-klivcore-service-access"), relay.port, session.id)) {
+          return jsonResponse({ error: "forbidden" }, 403, { ...responseHeaders, "x-klivcore-service-access": "refresh" });
+        }
         const mutation = request.method === "POST" || request.method === "PUT" || request.method === "PATCH" || request.method === "DELETE";
         if (mutation && request.headers.get("origin") !== config.auth?.publicOrigin) return json({ error: "forbidden" }, 403);
         if (websocketUpgrade) {

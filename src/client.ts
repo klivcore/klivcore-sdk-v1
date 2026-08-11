@@ -36,6 +36,7 @@ export type RealmClientOptions = Readonly<{ fetcher?: RealmFetcher; signal?: Abo
 export type RealmBadgeState = Readonly<{ revision: number; count: number }>;
 export type RealmBadgeOptions = Readonly<{ fetcher?: RealmFetcher; signal?: AbortSignal }>;
 export type BoundRealm = Readonly<{ descriptor: RealmDescriptor }>;
+type RealmServiceAccess = Readonly<{ id: string; endpoint: string; accessToken: string }>;
 
 export async function sha256Hex(value: string | Uint8Array): Promise<string> {
   const bytes = new Uint8Array(typeof value === "string" ? new TextEncoder().encode(value) : value);
@@ -109,24 +110,32 @@ function serviceAccessUrl(endpoint: string): string {
 
 function createPreparedService(
   endpoint: string,
-  accessToken: string,
+  accessToken: () => string,
+  refreshAccessToken: (staleToken: string) => Promise<string>,
   fetcher: RealmFetcher,
   signal?: AbortSignal,
 ): PreparedRealmService {
   const publicEndpoint = endpoint.replace(/\/$/u, "");
   return Object.freeze({
     endpoint: publicEndpoint,
-    request(path, init = {}) {
+    async request(path, init = {}) {
       const target = new URL(`${publicEndpoint}${servicePath(path)}`);
-      const headers = new Headers(init.headers);
-      headers.set("x-klivcore-service-access", accessToken);
-      return fetcher.call(globalThis, target, {
-        ...init,
-        credentials: "same-origin",
-        headers,
-        redirect: "error",
-        signal: init.signal ?? signal,
-      });
+      const send = (token: string) => {
+        const headers = new Headers(init.headers);
+        headers.set("x-klivcore-service-access", token);
+        return fetcher.call(globalThis, target, {
+          ...init,
+          credentials: "same-origin",
+          headers,
+          redirect: "error",
+          signal: init.signal ?? signal,
+        });
+      };
+      const token = accessToken();
+      const response = await send(token);
+      if (response.status !== 403 || response.headers.get("x-klivcore-service-access") !== "refresh") return response;
+      cancelBestEffort(response.body);
+      return send(await refreshAccessToken(token));
     },
     openChannel(path, handlers) {
       if (!handlers || typeof handlers !== "object" || typeof handlers.onMessage !== "function") throw new Error("Invalid Realm channel handlers");
@@ -166,7 +175,7 @@ function createPreparedService(
       });
       socket.addEventListener("open", () => {
         if (closed) return;
-        socket.send(JSON.stringify({ type: "authorize-service", accessToken }));
+        socket.send(JSON.stringify({ type: "authorize-service", accessToken: accessToken() }));
         for (const data of queued.splice(0)) socket.send(data);
         queuedBytes = 0;
         try { handlers.onOpen?.(); } catch (error) { handlers.onError?.(error); }
@@ -264,28 +273,47 @@ export async function bindAndPrepareRealm(endpoint: string, options: RealmClient
   for (const capability of route.requiredCapabilities) if (!descriptor.capabilities.includes(capability)) throw new Error("Realm route is not authorized");
   let services: Readonly<Record<string, PreparedRealmService>> = Object.freeze({});
   if (route.services.length > 0) {
-    const accessBytes = await request(fetcher, serviceAccessUrl(endpoint), {
-      method: "POST",
-      headers: { ...headers, "content-type": "application/json" },
-      body: JSON.stringify({ routeId: route.id }),
-      signal: options.signal,
-    }, MAX_SERVICE_ACCESS_BYTES, "Realm service access");
-    let accessInput: unknown;
-    try { accessInput = JSON.parse(decodeUtf8(accessBytes)); } catch { throw new Error("Realm service access is invalid JSON"); }
-    const access = accessInput && typeof accessInput === "object" && !Array.isArray(accessInput)
-      ? accessInput as Record<string, unknown> : undefined;
-    if (!access || Object.keys(access).join(",") !== "services" || !Array.isArray(access.services)
-      || access.services.length !== route.services.length) throw new Error("Realm service access is invalid");
-    const entries = access.services.map((entry, index): readonly [string, PreparedRealmService] => {
-      const service = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : undefined;
-      const expected = route.services[index];
-      if (!service || Object.keys(service).sort().join(",") !== "accessToken,endpoint,id"
-        || service.id !== expected?.id || service.endpoint !== expected.endpoint
-        || typeof service.accessToken !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(service.accessToken)) {
-        throw new Error("Realm service access is invalid");
-      }
+    let activeAccess: readonly RealmServiceAccess[] = [];
+    const loadAccess = async (): Promise<readonly RealmServiceAccess[]> => {
+      const accessBytes = await request(fetcher, serviceAccessUrl(endpoint), {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ routeId: route.id }),
+        signal: options.signal,
+      }, MAX_SERVICE_ACCESS_BYTES, "Realm service access");
+      let accessInput: unknown;
+      try { accessInput = JSON.parse(decodeUtf8(accessBytes)); } catch { throw new Error("Realm service access is invalid JSON"); }
+      const access = accessInput && typeof accessInput === "object" && !Array.isArray(accessInput)
+        ? accessInput as Record<string, unknown> : undefined;
+      if (!access || Object.keys(access).join(",") !== "services" || !Array.isArray(access.services)
+        || access.services.length !== route.services.length) throw new Error("Realm service access is invalid");
+      activeAccess = Object.freeze(access.services.map((entry, index): RealmServiceAccess => {
+        const service = entry && typeof entry === "object" && !Array.isArray(entry) ? entry as Record<string, unknown> : undefined;
+        const expected = route.services[index];
+        if (!service || Object.keys(service).sort().join(",") !== "accessToken,endpoint,id"
+          || service.id !== expected?.id || service.endpoint !== expected.endpoint
+          || typeof service.accessToken !== "string" || !/^[A-Za-z0-9_-]{32,128}$/.test(service.accessToken)) {
+          throw new Error("Realm service access is invalid");
+        }
+        return Object.freeze({ id: service.id as string, endpoint: service.endpoint as string, accessToken: service.accessToken });
+      }));
+      return activeAccess;
+    };
+    await loadAccess();
+    let refreshPromise: Promise<readonly RealmServiceAccess[]> | undefined;
+    const refreshAccess = () => {
+      if (!refreshPromise) refreshPromise = loadAccess().finally(() => { refreshPromise = undefined; });
+      return refreshPromise;
+    };
+    const entries = activeAccess.map((service, index): readonly [string, PreparedRealmService] => {
       const absoluteEndpoint = new URL(service.endpoint, new URL(endpoint).origin).toString().replace(/\/$/u, "");
-      return [service.id as string, createPreparedService(absoluteEndpoint, service.accessToken, fetcher, options.signal)] as const;
+      const accessToken = () => activeAccess[index]!.accessToken;
+      const refreshAccessToken = async (staleToken: string) => {
+        const current = activeAccess[index]!;
+        if (current.accessToken !== staleToken) return current.accessToken;
+        return (await refreshAccess())[index]!.accessToken;
+      };
+      return [service.id, createPreparedService(absoluteEndpoint, accessToken, refreshAccessToken, fetcher, options.signal)] as const;
     });
     services = Object.freeze(Object.fromEntries(entries));
   }

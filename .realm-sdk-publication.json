@@ -37,8 +37,8 @@
     },
     {
       "path": "src/client.ts",
-      "bytes": 15159,
-      "sha256": "9924e4c0f1605207a82c5f52233e363f1896efdf3fc09f2db4a481294dafaa1d"
+      "bytes": 16731,
+      "sha256": "fd2e0042c6aa4e8c8617d2d04beeafb9572d8b7bea0424a7306d22df92aa8c7e"
     },
     {
       "path": "src/connect-desktop-core.ts",
@@ -72,8 +72,8 @@
     },
     {
       "path": "src/server.ts",
-      "bytes": 59251,
-      "sha256": "d13cc35132704fbfd122d39234aa2211ed04c355551d86f8f9144bf478222d90"
+      "bytes": 59345,
+      "sha256": "f6fddd609b5c19c86868b67846882093e4961961b4eb5e4592c78da292ab5eab"
     },
     {
       "path": "src/start-realm-coordinator.ts",
