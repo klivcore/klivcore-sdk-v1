@@ -13072,6 +13072,7 @@ var WORKBENCH_ACTOR_STACK_BAND = 6;
 var WORKBENCH_EDGE_Z_INDEX = 2 * WORKBENCH_STACK_BAND_SIZE;
 var WORKBENCH_ACTIVITY_HIGHLIGHT_Z_INDEX = 5 * WORKBENCH_STACK_BAND_SIZE;
 var WORKBENCH_INTERACTION_OVERLAY_Z_INDEX = 7 * WORKBENCH_STACK_BAND_SIZE;
+var NodePresentationContext = import_react2.createContext("canvas");
 function getWorkbenchElementStackBand(element) {
   if (element.kind === "group")
     return WORKBENCH_GROUP_STACK_BAND;
@@ -13181,6 +13182,7 @@ function NodeWrapper({
   contentOverflowClassName = "overflow-hidden",
   wrapperClassName = "border-slate-700 bg-slate-950/95 text-slate-300"
 }) {
+  const presentation = import_react2.useContext(NodePresentationContext);
   const wrapperRef = import_react2.useRef(null);
   const [hoveredHandleSide, setHoveredHandleSide] = import_react2.useState(null);
   const [isActive, setIsActive] = import_react2.useState(false);
@@ -13258,6 +13260,20 @@ function NodeWrapper({
     onElementDelete(element.id);
   }
   const confirmingSelected = isSelected && selectedCount > 1;
+  if (presentation === "detail") {
+    return /* @__PURE__ */ jsx_runtime4.jsx("div", {
+      className: getNodeWrapperInteractionClassName(element),
+      "data-workbench-element-id": element.id,
+      "data-workbench-element-kind": element.kind ?? "square",
+      "data-workbench-node-presentation": "detail",
+      "data-workbench-parent-id": element.parentId,
+      style: wrapperStyle,
+      children: /* @__PURE__ */ jsx_runtime4.jsx("div", {
+        className: `h-full w-full ${contentOverflowClassName} ${bodyClassName}`,
+        children
+      })
+    });
+  }
   return /* @__PURE__ */ jsx_runtime4.jsxs("div", {
     "data-workbench-element-id": element.id,
     "data-workbench-element-kind": element.kind ?? "square",
@@ -25281,6 +25297,69 @@ function isEditableInteractionEvent(event, activeElement2) {
 // packages/react/src/BenchViewport.tsx
 var jsx_runtime20 = __toESM(require_jsx_runtime(), 1);
 var defaultElementTypeRegistry = createDefaultElementTypeRegistry();
+var DETAIL_SETTING_STORAGE_KEY = "klivcore.workbench.detail-setting.v1";
+var LEGACY_DETAIL_LAYOUT_STORAGE_KEY = "klivcore.workbench.detail-layout.v1";
+var DEFAULT_DETAIL_DOCK_SHARE = 0.5;
+var MIN_DETAIL_DOCK_SHARE = 0.2;
+var MAX_DETAIL_DOCK_SHARE = 0.8;
+function isDetailLayout(value) {
+  return value === "full-viewport" || value === "dock-right" || value === "dock-left" || value === "dock-top" || value === "dock-bottom";
+}
+function clampDetailDockShare(value) {
+  return Math.min(MAX_DETAIL_DOCK_SHARE, Math.max(MIN_DETAIL_DOCK_SHARE, value));
+}
+function getInitialDetailSetting() {
+  const fallback = {
+    dockShare: DEFAULT_DETAIL_DOCK_SHARE,
+    layout: typeof window !== "undefined" && window.innerWidth > 1024 ? "dock-right" : "full-viewport"
+  };
+  if (typeof window === "undefined")
+    return fallback;
+  try {
+    const stored = window.localStorage.getItem(DETAIL_SETTING_STORAGE_KEY);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      const layout = parsed.layout ?? null;
+      if (isDetailLayout(layout) && typeof parsed.dockShare === "number" && Number.isFinite(parsed.dockShare)) {
+        return { dockShare: clampDetailDockShare(parsed.dockShare), layout };
+      }
+    }
+    const legacyLayout = window.localStorage.getItem(LEGACY_DETAIL_LAYOUT_STORAGE_KEY);
+    return isDetailLayout(legacyLayout) ? { ...fallback, layout: legacyLayout } : fallback;
+  } catch {
+    return fallback;
+  }
+}
+function persistDetailSetting(setting) {
+  if (typeof window === "undefined")
+    return;
+  try {
+    window.localStorage.setItem(DETAIL_SETTING_STORAGE_KEY, JSON.stringify(setting));
+  } catch {}
+}
+function getDetailDockShareForPointer(layout, clientX, clientY, rect) {
+  if (layout === "dock-left")
+    return clampDetailDockShare((clientX - rect.left) / Math.max(1, rect.width));
+  if (layout === "dock-right")
+    return clampDetailDockShare((rect.right - clientX) / Math.max(1, rect.width));
+  if (layout === "dock-top")
+    return clampDetailDockShare((clientY - rect.top) / Math.max(1, rect.height));
+  if (layout === "dock-bottom")
+    return clampDetailDockShare((rect.bottom - clientY) / Math.max(1, rect.height));
+  return DEFAULT_DETAIL_DOCK_SHARE;
+}
+function getDetailDockShareForKey(layout, key, current) {
+  if (key === "Home")
+    return MIN_DETAIL_DOCK_SHARE;
+  if (key === "End")
+    return MAX_DETAIL_DOCK_SHARE;
+  const increaseKey = layout === "dock-left" ? "ArrowRight" : layout === "dock-right" ? "ArrowLeft" : layout === "dock-top" ? "ArrowDown" : "ArrowUp";
+  const decreaseKey = layout === "dock-left" ? "ArrowLeft" : layout === "dock-right" ? "ArrowRight" : layout === "dock-top" ? "ArrowUp" : "ArrowDown";
+  if (key !== increaseKey && key !== decreaseKey)
+    return null;
+  const delta = key === increaseKey ? 0.05 : -0.05;
+  return clampDetailDockShare(Math.round((current + delta) * 100) / 100);
+}
 function resolveActorQuickAccessId(actors, lastActorId, knownLastActor) {
   if (lastActorId && (actors.some((actor) => actor.id === lastActorId) || knownLastActor?.id === lastActorId))
     return lastActorId;
@@ -26126,9 +26205,12 @@ function BenchViewport({
   const [selectedIds, setSelectedIds] = import_react9.useState(() => new Set);
   const [editorAutoFocusId, setEditorAutoFocusId] = import_react9.useState(null);
   const [fullViewportElementHostId, setFullViewportElementHostId] = import_react9.useState(null);
-  const [detailLayout, setDetailLayout] = import_react9.useState(() => typeof window !== "undefined" && window.innerWidth > 1024 ? "dock-right" : "full-viewport");
+  const [detailSetting, setDetailSetting] = import_react9.useState(getInitialDetailSetting);
   const [detailPortalTarget, setDetailPortalTarget] = import_react9.useState(null);
   const [detailInteractionOwner, setDetailInteractionOwner] = import_react9.useState("bench");
+  const detailDockShareRef = import_react9.useRef(detailSetting.dockShare);
+  const detailSplitRef = import_react9.useRef(null);
+  const detailResizeCleanupRef = import_react9.useRef(null);
   const benchInteractionEnabledRef = import_react9.useRef(true);
   const [openActorId, setOpenActorId] = import_react9.useState(null);
   const [openApplicationPanelId, setOpenApplicationPanelId] = import_react9.useState(null);
@@ -27315,9 +27397,76 @@ function BenchViewport({
     }
     pinchRef.current = getPinch(pointersRef.current, event.currentTarget.getBoundingClientRect());
   }
-  const detailSplitStyles = getDetailSplitStyles(detailLayout, fullViewportElementHostId !== null);
+  const detailLayout = detailSetting.layout;
+  detailDockShareRef.current = detailSetting.dockShare;
+  const detailSplitStyles = getDetailSplitStyles(detailLayout, detailSetting.dockShare, fullViewportElementHostId !== null);
   const benchInteractionEnabled = fullViewportElementHostId === null || detailLayout !== "full-viewport" && detailInteractionOwner === "bench";
   benchInteractionEnabledRef.current = benchInteractionEnabled;
+  import_react9.useEffect(() => {
+    detailResizeCleanupRef.current?.();
+    return () => detailResizeCleanupRef.current?.();
+  }, [detailLayout]);
+  const startDetailResize = (event) => {
+    const split = detailSplitRef.current;
+    if (!split || detailLayout === "full-viewport")
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    detailResizeCleanupRef.current?.();
+    const dragTarget = event.currentTarget;
+    const pointerId = event.pointerId;
+    const rect = split.getBoundingClientRect();
+    let hasPointerCapture = false;
+    try {
+      dragTarget.setPointerCapture(pointerId);
+      hasPointerCapture = true;
+    } catch {}
+    const handlePointerMove = (moveEvent) => {
+      if (moveEvent.pointerId !== pointerId)
+        return;
+      moveEvent.preventDefault();
+      const dockShare = getDetailDockShareForPointer(detailLayout, moveEvent.clientX, moveEvent.clientY, rect);
+      detailDockShareRef.current = dockShare;
+      setDetailSetting((current) => ({ ...current, dockShare }));
+    };
+    const cleanupResize = () => {
+      window.removeEventListener("pointermove", handlePointerMove, true);
+      window.removeEventListener("pointerup", handleResizeEnd, true);
+      window.removeEventListener("pointercancel", handleResizeEnd, true);
+      dragTarget.removeEventListener("lostpointercapture", handleResizeEnd);
+      if (hasPointerCapture) {
+        try {
+          dragTarget.releasePointerCapture(pointerId);
+        } catch {}
+      }
+      if (detailResizeCleanupRef.current === cleanupResize)
+        detailResizeCleanupRef.current = null;
+    };
+    const handleResizeEnd = (endEvent) => {
+      if (endEvent.pointerId !== pointerId)
+        return;
+      cleanupResize();
+      persistDetailSetting({ dockShare: detailDockShareRef.current, layout: detailLayout });
+    };
+    detailResizeCleanupRef.current = cleanupResize;
+    window.addEventListener("pointermove", handlePointerMove, true);
+    window.addEventListener("pointerup", handleResizeEnd, true);
+    window.addEventListener("pointercancel", handleResizeEnd, true);
+    dragTarget.addEventListener("lostpointercapture", handleResizeEnd);
+  };
+  const handleDetailResizeKeyDown = (event) => {
+    if (detailLayout === "full-viewport")
+      return;
+    const dockShare = getDetailDockShareForKey(detailLayout, event.key, detailDockShareRef.current);
+    if (dockShare === null)
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    detailDockShareRef.current = dockShare;
+    const setting = { dockShare, layout: detailLayout };
+    setDetailSetting(setting);
+    persistDetailSetting(setting);
+  };
   return /* @__PURE__ */ jsx_runtime20.jsxs("main", {
     className: "flex h-screen flex-col bg-slate-950 text-slate-100",
     children: [
@@ -27451,6 +27600,7 @@ function BenchViewport({
       /* @__PURE__ */ jsx_runtime20.jsxs("div", {
         className: "relative flex min-h-0 flex-1",
         "data-workbench-detail-split": "true",
+        ref: detailSplitRef,
         style: detailSplitStyles.container,
         children: [
           /* @__PURE__ */ jsx_runtime20.jsxs("section", {
@@ -27926,6 +28076,23 @@ function BenchViewport({
             onPointerDown: () => setDetailInteractionOwner("detail"),
             style: detailSplitStyles.pane,
             children: [
+              detailLayout !== "full-viewport" ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                "aria-label": "Resize Detail pane",
+                "aria-orientation": detailLayout === "dock-left" || detailLayout === "dock-right" ? "vertical" : "horizontal",
+                "aria-valuemax": Math.round(MAX_DETAIL_DOCK_SHARE * 100),
+                "aria-valuemin": Math.round(MIN_DETAIL_DOCK_SHARE * 100),
+                "aria-valuenow": Math.round(detailSetting.dockShare * 100),
+                className: "absolute z-20 touch-none",
+                "data-workbench-detail-resizer": "true",
+                onKeyDown: handleDetailResizeKeyDown,
+                onPointerDown: startDetailResize,
+                role: "separator",
+                style: getDetailResizeHandleStyle(detailLayout),
+                tabIndex: 0,
+                children: /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                  className: "absolute inset-0 bg-slate-600/40 transition-colors hover:bg-cyan-300/70"
+                })
+              }) : null,
               /* @__PURE__ */ jsx_runtime20.jsxs("div", {
                 className: "absolute inset-x-0 top-0 z-10 flex items-center border-b border-slate-700 bg-slate-950 px-4 shadow-xl",
                 "data-workbench-detail-header": "true",
@@ -27945,7 +28112,12 @@ function BenchViewport({
                   /* @__PURE__ */ jsx_runtime20.jsxs("select", {
                     "aria-label": "Detail layout",
                     className: "ml-auto rounded border border-slate-600 bg-slate-900 px-3 py-1.5 text-sm font-semibold text-slate-100 shadow hover:border-cyan-400",
-                    onChange: (event) => setDetailLayout(event.currentTarget.value),
+                    onChange: (event) => {
+                      const layout = event.currentTarget.value;
+                      const setting = { ...detailSetting, layout };
+                      setDetailSetting(setting);
+                      persistDetailSetting(setting);
+                    },
                     value: detailLayout,
                     children: [
                       /* @__PURE__ */ jsx_runtime20.jsx("option", {
@@ -29163,7 +29335,7 @@ function ViewportWorldGrid() {
     }
   });
 }
-function getDetailSplitStyles(layout, active) {
+function getDetailSplitStyles(layout, dockShare, active) {
   if (!active)
     return {
       canvas: { flex: "1 1 100%", minHeight: 0, minWidth: 0 },
@@ -29178,11 +29350,22 @@ function getDetailSplitStyles(layout, active) {
     };
   const vertical = layout === "dock-top" || layout === "dock-bottom";
   const detailFirst = layout === "dock-left" || layout === "dock-top";
+  const detailPercent = `${Math.round(clampDetailDockShare(dockShare) * 1000) / 10}%`;
+  const canvasPercent = `${100 - Number.parseFloat(detailPercent)}%`;
   return {
-    canvas: { flex: "0 0 50%", minHeight: 0, minWidth: 0, order: detailFirst ? 1 : 0 },
+    canvas: { flex: `0 0 ${canvasPercent}`, minHeight: 0, minWidth: 0, order: detailFirst ? 1 : 0 },
     container: { flexDirection: vertical ? "column" : "row" },
-    pane: { flex: "0 0 50%", minHeight: 0, minWidth: 0, order: detailFirst ? 0 : 1, position: "relative" }
+    pane: { flex: `0 0 ${detailPercent}`, minHeight: 0, minWidth: 0, order: detailFirst ? 0 : 1, position: "relative" }
   };
+}
+function getDetailResizeHandleStyle(layout) {
+  if (layout === "dock-left")
+    return { bottom: 0, cursor: "col-resize", right: -4, top: 0, width: 8 };
+  if (layout === "dock-right")
+    return { bottom: 0, cursor: "col-resize", left: -4, top: 0, width: 8 };
+  if (layout === "dock-top")
+    return { bottom: -4, cursor: "row-resize", height: 8, left: 0, right: 0 };
+  return { cursor: "row-resize", height: 8, left: 0, right: 0, top: -4 };
 }
 var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
   detailElement,
@@ -29237,10 +29420,6 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           top: 0 !important;
           transform: none !important;
           width: 100% !important;
-        }
-        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] > [data-workbench-node-header="true"],
-        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] > [aria-label="Resize node"] {
-          display: none !important;
         }
       `
       }),
@@ -29338,7 +29517,10 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
               onPointerMove: (event) => event.stopPropagation(),
               onPointerUp: (event) => event.stopPropagation(),
               onWheel: (event) => event.stopPropagation(),
-              children: renderElement(true)
+              children: /* @__PURE__ */ jsx_runtime20.jsx(NodePresentationContext.Provider, {
+                value: "detail",
+                children: renderElement(true)
+              })
             }), detailPortalTarget) : null
           ]
         }, item.element.id);
