@@ -13,8 +13,8 @@
     },
     {
       "path": "bin/live-component-build-worker.js",
-      "bytes": 8054,
-      "sha256": "46fe0ff22100d7b8761ac3b47cb4fd5a17c861efb1ddec9fd5d4169bd24212b0",
+      "bytes": 4220089,
+      "sha256": "8b7a86e687ae015bc15b29fb4d9f9289747876c17cf98814ad8472a640611667",
       "mode": 420
     },
     {
