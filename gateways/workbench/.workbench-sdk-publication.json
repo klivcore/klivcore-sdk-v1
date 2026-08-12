@@ -12,27 +12,33 @@
       "mode": 420
     },
     {
+      "path": "bin/live-component-build-worker.js",
+      "bytes": 4220089,
+      "sha256": "8b7a86e687ae015bc15b29fb4d9f9289747876c17cf98814ad8472a640611667",
+      "mode": 420
+    },
+    {
       "path": "bin/server.js",
-      "bytes": 141277,
-      "sha256": "a8fc261bfbc63a5f4288ec01c7c64632805fde93fcff196eec0702a87a086ce3",
+      "bytes": 164112,
+      "sha256": "720c42887c4ab528efdbb7b032b950106eb1f24a0ad565548b1f66cae8b65386",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.css",
-      "bytes": 39069,
-      "sha256": "22ca5f1bc64ae6c19cb1267ac50a0fe132dcc757f2a59a86960174104a3c835a",
+      "bytes": 39149,
+      "sha256": "d97e09af5e927b4df7347724fcd2eede6ace4ee3d0499d877a4795330401f90b",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1626215,
-      "sha256": "25a5732a93f9def379e501f1419887c69cff538ff5c6b102d9cad8c59b2e3399",
+      "bytes": 1636571,
+      "sha256": "0529dbe50251f8989770df9f880cc08fe268c0662aea5416384aa65ebed6eba4",
       "mode": 420
     },
     {
       "path": "klivcore.gateway.json",
-      "bytes": 8545,
-      "sha256": "6cf03410d1c7c7d83ba099cfeaee392c6923e4ebbed30bbbbf7ceadd81869a2a",
+      "bytes": 9088,
+      "sha256": "9ec91ef53ffd79aad7dfc819564c6e23547b4ce56d653476df3d1af5b2f01089",
       "mode": 420
     },
     {
@@ -43,8 +49,8 @@
     },
     {
       "path": "ui/debug-index.css",
-      "bytes": 39069,
-      "sha256": "22ca5f1bc64ae6c19cb1267ac50a0fe132dcc757f2a59a86960174104a3c835a",
+      "bytes": 39149,
+      "sha256": "d97e09af5e927b4df7347724fcd2eede6ace4ee3d0499d877a4795330401f90b",
       "mode": 420
     },
     {
@@ -66,15 +72,21 @@
       "mode": 420
     },
     {
+      "path": "ui/live-component-frame-runtime.js",
+      "bytes": 530478,
+      "sha256": "0ad2b9ed3fcbd41cf99207c68590abec58a1d9f49830c0d09a4385ebf81315c6",
+      "mode": 420
+    },
+    {
       "path": "ui/main.css",
-      "bytes": 34406,
-      "sha256": "ee3bec788442d84e7dbb4c7aa1462a94264e37685bcc26ca0b65f85e5fc0bee2",
+      "bytes": 34568,
+      "sha256": "60a50f8c3382b74ba6a0fb1a87daec9c6074274a9bdf18b9dfd4c21e73d383a1",
       "mode": 420
     },
     {
       "path": "ui/main.js",
-      "bytes": 2016898,
-      "sha256": "f43b117d819a6ca5230681cda67a4bcaf4e37c9330162b4890de86ffed3f3ce4",
+      "bytes": 2031077,
+      "sha256": "1b4d4ca21e3ed537a51021562153c19f55b2c6cc4875c10c30ab7de5ada0e57a",
       "mode": 420
     }
   ]

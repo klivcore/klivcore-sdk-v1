@@ -316,7 +316,31 @@
       },
       {
         "method": "GET",
-        "pathPrefix": "/v1/components"
+        "path": "/v1/components/catalog"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/components/events"
+      },
+      {
+        "method": "POST",
+        "path": "/v1/components/sources/ensure"
+      },
+      {
+        "method": "GET",
+        "path": "/v1/components/frame-runtime.js"
+      },
+      {
+        "method": "HEAD",
+        "path": "/v1/components/frame-runtime.js"
+      },
+      {
+        "method": "GET",
+        "pathPrefix": "/v1/components/artifacts"
+      },
+      {
+        "method": "HEAD",
+        "pathPrefix": "/v1/components/artifacts"
       }
     ],
     "healthPath": "/health",

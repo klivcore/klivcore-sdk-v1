@@ -12705,37 +12705,17 @@ var require_hjson = __commonJS((exports, module) => {
   });
 });
 
-// ../../node_modules/.bun/react@19.2.7/node_modules/react/cjs/react-jsx-dev-runtime.production.js
-var exports_react_jsx_dev_runtime_production = {};
-__export(exports_react_jsx_dev_runtime_production, {
-  jsxDEV: () => $jsxDEV,
-  Fragment: () => $Fragment3
-});
-var REACT_FRAGMENT_TYPE4, $Fragment3, $jsxDEV = undefined;
-var init_react_jsx_dev_runtime_production = __esm(() => {
-  REACT_FRAGMENT_TYPE4 = Symbol.for("react.fragment");
-  $Fragment3 = REACT_FRAGMENT_TYPE4;
-});
-
-// ../../node_modules/.bun/react@19.2.7/node_modules/react/jsx-dev-runtime.js
-var require_jsx_dev_runtime = __commonJS((exports, module) => {
-  init_react_jsx_dev_runtime_production();
-  if (true) {
-    module.exports = exports_react_jsx_dev_runtime_production;
-  }
-});
-
 // packages/publish-sdk/src/gateway-ui.ts
 var import_react15 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
 
 // packages/react/src/Workbench.debug.tsx
 var import_react13 = __toESM(require_react(), 1);
-var import_react_dom3 = __toESM(require_react_dom(), 1);
+var import_react_dom2 = __toESM(require_react_dom(), 1);
 
 // packages/react/src/BenchViewport.tsx
 var import_react9 = __toESM(require_react(), 1);
-var import_react_dom2 = __toESM(require_react_dom(), 1);
+var import_react_dom = __toESM(require_react_dom(), 1);
 
 // packages/react/src/ElementAddMenu.tsx
 var jsx_runtime = __toESM(require_jsx_runtime(), 1);
@@ -14590,7 +14570,6 @@ var imageElementType = {
 
 // packages/react/src/elementTypes/LiveComponentElement.tsx
 var import_react6 = __toESM(require_react(), 1);
-var import_react_dom = __toESM(require_react_dom(), 1);
 var jsx_runtime13 = __toESM(require_jsx_runtime(), 1);
 var LiveComponentRuntimeContext = import_react6.createContext(null);
 var liveComponentElementType = {
@@ -14610,11 +14589,16 @@ var liveComponentElementType = {
 };
 function LiveComponentElement(props) {
   const runtime = import_react6.useContext(LiveComponentRuntimeContext);
-  const snapshot = import_react6.useSyncExternalStore(runtime ? runtime.subscribe : emptySubscribe, () => runtime?.getSnapshot(props.element.componentTypeId) ?? missingRuntime, () => missingRuntime);
+  const source = props.element.path && props.element.vaultId ? { path: props.element.path, vaultId: props.element.vaultId } : undefined;
+  const componentTypeId = props.element.componentTypeId;
+  const snapshot = import_react6.useSyncExternalStore(runtime ? runtime.subscribe : emptySubscribe, () => source ? runtime?.getSourceSnapshot(source) ?? missingRuntime : componentTypeId ? runtime?.getSnapshot(componentTypeId) ?? missingRuntime : invalidSelector, () => missingRuntime);
   import_react6.useEffect(() => {
-    runtime?.ensure(props.element.componentTypeId);
-  }, [props.element.componentTypeId, runtime]);
-  const error = snapshot.status === "stale" ? `Showing last known good revision. ${snapshot.error ?? "The candidate revision failed."}` : null;
+    if (source)
+      runtime?.ensureSource(source);
+    else if (componentTypeId)
+      runtime?.ensure(componentTypeId);
+  }, [componentTypeId, props.element.path, props.element.vaultId, runtime]);
+  const error = props.element.error ?? (snapshot.status === "stale" ? `Showing last known good revision. ${snapshot.error ?? "The candidate revision failed."}` : null);
   return /* @__PURE__ */ jsx_runtime13.jsx(NodeWrapper, {
     activeEdgeHandleSide: props.activeEdgeHandleSide,
     bodyClassName: "h-full",
@@ -14629,7 +14613,7 @@ function LiveComponentElement(props) {
     onElementMoveStart: props.onElementMoveStart,
     onElementSelect: props.onElementSelect,
     selectedCount: props.selectedCount,
-    title: props.element.componentTypeId,
+    title: source?.path ?? componentTypeId ?? "Invalid component",
     viewportZoom: props.viewportZoom,
     children: /* @__PURE__ */ jsx_runtime13.jsx(ComponentSurface, {
       element: props.element,
@@ -14639,74 +14623,276 @@ function LiveComponentElement(props) {
   });
 }
 function ComponentSurface({ element, isSelected, snapshot }) {
-  if (!snapshot.component) {
+  if (!snapshot.artifacts) {
+    const selector = element.path ?? element.componentTypeId ?? "invalid selector";
     return /* @__PURE__ */ jsx_runtime13.jsx("div", {
       className: "flex h-full items-center justify-center bg-slate-950 px-4 text-center text-xs text-slate-400",
       "data-live-component-status": snapshot.status,
-      children: snapshot.status === "loading" ? "Loading component…" : snapshot.error ?? `Component unavailable: ${element.componentTypeId}`
+      children: snapshot.status === "loading" ? "Loading component…" : element.error ?? snapshot.error ?? `Component unavailable: ${selector}`
     });
   }
-  return /* @__PURE__ */ jsx_runtime13.jsx(ShadowComponent, {
+  return /* @__PURE__ */ jsx_runtime13.jsx(SandboxComponent, {
     element,
     isSelected,
     snapshot
-  }, snapshot.implementationRevision);
+  });
 }
-function ShadowComponent({ element, isSelected, snapshot }) {
-  const [shadowRoot, setShadowRoot] = import_react6.useState(null);
-  const component = snapshot.component;
-  if (!component)
-    return null;
-  return /* @__PURE__ */ jsx_runtime13.jsx("div", {
-    className: "h-full w-full",
-    "data-live-component-revision": snapshot.implementationRevision,
-    ref: (host) => {
-      if (!host)
-        return;
-      setShadowRoot(host.shadowRoot ?? host.attachShadow({ delegatesFocus: true, mode: "open" }));
-    },
-    children: shadowRoot ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime13.jsxs(RuntimeErrorBoundary, {
-      revision: snapshot.implementationRevision,
-      children: [
-        snapshot.cssText ? /* @__PURE__ */ jsx_runtime13.jsx("style", {
-          children: snapshot.cssText
-        }) : null,
-        component.render({ createElement: import_react6.createElement }, {
-          componentTypeId: element.componentTypeId,
-          data: element.data,
+function SandboxComponent({ element, isSelected, snapshot }) {
+  const hostRef = import_react6.useRef(null);
+  const activeRef = import_react6.useRef(null);
+  const candidateRef = import_react6.useRef(null);
+  const [runtimeError, setRuntimeError] = import_react6.useState(null);
+  import_react6.useEffect(() => {
+    const host = hostRef.current;
+    if (!host || !snapshot.artifacts || !snapshot.implementationRevision || !snapshot.typeId)
+      return;
+    setRuntimeError(null);
+    let candidate = null;
+    try {
+      candidate = createLiveComponentSandboxCandidate({
+        document: host.ownerDocument,
+        host,
+        onError(message) {
+          if (candidate && candidateRef.current === candidate)
+            candidateRef.current = null;
+          setRuntimeError(message);
+        },
+        onReady() {
+          if (!candidate || candidateRef.current !== candidate)
+            return;
+          const previous = activeRef.current;
+          activeRef.current = candidate;
+          candidateRef.current = null;
+          if (previous && previous !== candidate)
+            previous.dispose();
+        },
+        props: {
+          componentTypeId: snapshot.typeId,
+          ...element.data === undefined ? {} : { data: element.data },
           elementId: element.id,
           isSelected,
           readOnly: false
-        })
+        },
+        snapshot,
+        timeoutMs: DEFAULT_SANDBOX_TIMEOUT_MS,
+        window: host.ownerDocument.defaultView
+      });
+      candidateRef.current = candidate;
+    } catch (error) {
+      setRuntimeError(error instanceof Error ? error.message : String(error));
+    }
+    return () => {
+      if (candidate && candidateRef.current === candidate) {
+        candidateRef.current = null;
+        candidate.dispose();
+      }
+    };
+  }, [element.data, element.id, isSelected, snapshot.artifacts, snapshot.implementationRevision, snapshot.typeId]);
+  import_react6.useEffect(() => () => {
+    candidateRef.current?.dispose();
+    activeRef.current?.dispose();
+    candidateRef.current = null;
+    activeRef.current = null;
+  }, []);
+  return /* @__PURE__ */ jsx_runtime13.jsx("div", {
+    className: "relative h-full w-full bg-slate-950",
+    ref: hostRef,
+    children: runtimeError ? /* @__PURE__ */ jsx_runtime13.jsxs("div", {
+      className: "absolute inset-x-0 bottom-0 z-10 max-h-full overflow-auto bg-red-950/95 p-2 text-xs text-red-200",
+      "data-live-component-status": "runtime-error",
+      children: [
+        "Component runtime failed: ",
+        runtimeError
       ]
-    }), shadowRoot) : null
+    }) : null
   });
 }
-
-class RuntimeErrorBoundary extends import_react6.Component {
-  state = { error: null };
-  static getDerivedStateFromError(error) {
-    return { error };
+var DEFAULT_SANDBOX_TIMEOUT_MS = 1e4;
+var MAX_SANDBOX_TIMEOUT_MS = 30000;
+var MAX_FRAME_RUNTIME_BYTES = 8 * 1024 * 1024;
+var MAX_COMPONENT_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
+var MAX_COMPONENT_CSS_BYTES = 512 * 1024;
+var MAX_PROPS_JSON_BYTES = 64 * 1024;
+var MAX_PROTOCOL_ERROR_LENGTH = 2048;
+var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
+var SHA256 = /^[a-f0-9]{64}$/u;
+var textEncoder = new TextEncoder;
+function createLiveComponentSandboxCandidate(options2) {
+  const iframePrototype = options2.window.HTMLIFrameElement?.prototype;
+  if (!iframePrototype || !("credentialless" in iframePrototype))
+    throw new Error("Live components require credentialless iframe support");
+  const artifacts = options2.snapshot.artifacts;
+  const typeId = options2.snapshot.typeId;
+  const revision = options2.snapshot.implementationRevision;
+  if (!artifacts || !typeId || !TYPE_ID.test(typeId) || !revision || !SHA256.test(revision))
+    throw new TypeError("Live component sandbox snapshot is invalid");
+  if (artifacts.frameRuntimeJavaScript.byteLength < 1 || artifacts.frameRuntimeJavaScript.byteLength > MAX_FRAME_RUNTIME_BYTES || artifacts.componentJavaScript.byteLength < 1 || artifacts.componentJavaScript.byteLength > MAX_COMPONENT_JAVASCRIPT_BYTES || (artifacts.componentCss?.byteLength ?? 0) > MAX_COMPONENT_CSS_BYTES)
+    throw new TypeError("Live component sandbox artifacts exceed their bounds");
+  if (!Number.isFinite(options2.timeoutMs) || options2.timeoutMs < 1 || options2.timeoutMs > MAX_SANDBOX_TIMEOUT_MS)
+    throw new TypeError("Live component sandbox timeout is invalid");
+  const props = cloneBoundedJsonObject(options2.props);
+  const nonce = createNonce(options2.window.crypto);
+  const iframe = options2.document.createElement("iframe");
+  iframe.setAttribute("sandbox", "allow-scripts");
+  iframe.setAttribute("allow", "");
+  iframe.referrerPolicy = "no-referrer";
+  iframe.credentialless = true;
+  iframe.dataset.liveComponentBootstrapNonce = nonce;
+  iframe.dataset.liveComponentRevision = revision;
+  iframe.style.border = "0";
+  iframe.style.height = "100%";
+  iframe.style.inset = "0";
+  iframe.style.position = "absolute";
+  iframe.style.visibility = "hidden";
+  iframe.style.width = "100%";
+  iframe.srcdoc = createTrustedSrcdoc(nonce);
+  options2.host.append(iframe);
+  const contentWindow = iframe.contentWindow;
+  if (!contentWindow) {
+    iframe.remove();
+    throw new Error("Live component sandbox frame window is unavailable");
   }
-  componentDidCatch(_error, _info) {}
-  componentDidUpdate(previous) {
-    if (previous.revision !== this.props.revision && this.state.error)
-      this.setState({ error: null });
+  const componentArtifacts = artifacts;
+  const frameWindow = contentWindow;
+  const channel2 = new MessageChannel;
+  let disposed = false;
+  let bootstrapped = false;
+  let portsClosed = false;
+  let timeout;
+  const removeBootstrapListener = () => options2.window.removeEventListener("message", onBootstrapMessage);
+  const clearTimer = () => {
+    if (timeout === undefined)
+      return;
+    options2.window.clearTimeout(timeout);
+    timeout = undefined;
+  };
+  const closePorts = () => {
+    if (portsClosed)
+      return;
+    portsClosed = true;
+    channel2.port1.onmessage = null;
+    channel2.port1.close();
+    channel2.port2.close();
+  };
+  const dispose = () => {
+    if (disposed)
+      return;
+    disposed = true;
+    clearTimer();
+    removeBootstrapListener();
+    closePorts();
+    iframe.remove();
+  };
+  const fail = (message) => {
+    if (disposed)
+      return;
+    dispose();
+    options2.onError(message);
+  };
+  function onBootstrapMessage(event) {
+    if (disposed || bootstrapped || event.source !== frameWindow || !isExactBootstrapReady(event.data, nonce))
+      return;
+    bootstrapped = true;
+    removeBootstrapListener();
+    const runtimeJavaScript = copyBuffer(componentArtifacts.frameRuntimeJavaScript);
+    try {
+      frameWindow.postMessage(Object.freeze({ nonce, runtimeJavaScript, type: "bootstrap", version: 1 }), "*", [channel2.port2, runtimeJavaScript]);
+      const componentCss = copyBuffer(componentArtifacts.componentCss ?? new Uint8Array);
+      const componentJavaScript = copyBuffer(componentArtifacts.componentJavaScript);
+      channel2.port1.postMessage(Object.freeze({
+        componentCss,
+        componentJavaScript,
+        implementationRevision: revision,
+        props,
+        type: "init",
+        typeId,
+        version: 1
+      }), [componentCss, componentJavaScript]);
+    } catch {
+      fail("Live component sandbox bootstrap failed");
+    }
   }
-  render() {
-    if (this.state.error)
-      return /* @__PURE__ */ jsx_runtime13.jsxs("div", {
-        "data-live-component-status": "runtime-error",
-        style: { background: "#450a0a", boxSizing: "border-box", color: "#fecaca", height: "100%", overflow: "auto", padding: 12 },
-        children: [
-          "Component runtime failed: ",
-          this.state.error.message
-        ]
-      });
-    return this.props.children;
-  }
+  channel2.port1.onmessage = (event) => {
+    if (disposed)
+      return;
+    const response = event.data;
+    if (isExactReady(response, typeId, revision)) {
+      clearTimer();
+      closePorts();
+      iframe.style.visibility = "visible";
+      options2.onReady();
+      return;
+    }
+    if (isExactRuntimeError(response)) {
+      fail(response.message);
+      return;
+    }
+    fail("Live component sandbox protocol error");
+  };
+  channel2.port1.start();
+  options2.window.addEventListener("message", onBootstrapMessage);
+  timeout = options2.window.setTimeout(() => fail("Live component sandbox timed out"), options2.timeoutMs);
+  return Object.freeze({ dispose, iframe });
+}
+function createTrustedSrcdoc(nonce) {
+  const bootstrap = `(()=>{const nonce=${JSON.stringify(nonce)};let used=false;addEventListener("message",async event=>{const value=event.data;if(used||event.source!==parent||!value||typeof value!=="object"||Array.isArray(value)||Object.keys(value).sort().join("\\0")!=="nonce\\0runtimeJavaScript\\0type\\0version"||value.type!=="bootstrap"||value.version!==1||value.nonce!==nonce||!(value.runtimeJavaScript instanceof ArrayBuffer)||event.ports.length!==1)return;used=true;const port=event.ports[0];let url;try{url=URL.createObjectURL(new Blob([value.runtimeJavaScript],{type:"text/javascript"}));const runtime=await import(url);if(typeof runtime.initializeLiveComponentFrame!=="function")throw new Error("invalid runtime");runtime.initializeLiveComponentFrame(port,document.getElementById("root"));}catch{port.postMessage({message:"Live component frame bootstrap failed",type:"runtime-error",version:1});port.close();}finally{if(url)URL.revokeObjectURL(url);}},false);parent.postMessage({nonce,type:"bootstrap-ready",version:1},"*");})();`;
+  return `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; base-uri 'none'; connect-src 'none'; form-action 'none'; img-src data: blob:; media-src data: blob:; object-src 'none'; script-src 'nonce-${nonce}' blob:; style-src 'unsafe-inline'"><style>html,body,#root{height:100%;margin:0}body{overflow:hidden}</style></head><body><div id="root"></div><script nonce="${nonce}">${bootstrap}</script></body></html>`;
+}
+function createNonce(cryptoValue) {
+  const bytes = new Uint8Array(32);
+  cryptoValue.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+function copyBuffer(bytes) {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy.buffer;
+}
+function cloneBoundedJsonObject(value) {
+  if (!isJsonValue(value, new Set, 0))
+    throw new TypeError("Live component props must be a JSON-only object");
+  const json = JSON.stringify(value);
+  if (textEncoder.encode(json).byteLength > MAX_PROPS_JSON_BYTES)
+    throw new TypeError("Live component props exceed the JSON bound");
+  return JSON.parse(json);
+}
+function isJsonValue(value, ancestors, depth) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number")
+    return Number.isFinite(value);
+  if (typeof value !== "object" || depth > 32 || ancestors.has(value))
+    return false;
+  if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)
+    return false;
+  ancestors.add(value);
+  const valid = Array.isArray(value) ? value.every((item) => isJsonValue(item, ancestors, depth + 1)) : Object.values(value).every((item) => isJsonValue(item, ancestors, depth + 1));
+  ancestors.delete(value);
+  return valid;
+}
+function exactKeys(value, keys) {
+  return Object.keys(value).sort().join("\x00") === [...keys].sort().join("\x00");
+}
+function isExactBootstrapReady(value, nonce) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["nonce", "type", "version"]) && message.nonce === nonce && message.type === "bootstrap-ready" && message.version === 1;
+}
+function isExactReady(value, typeId, revision) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["implementationRevision", "type", "typeId", "version"]) && message.implementationRevision === revision && message.type === "ready" && message.typeId === typeId && message.version === 1;
+}
+function isExactRuntimeError(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return false;
+  const message = value;
+  return exactKeys(message, ["message", "type", "version"]) && typeof message.message === "string" && message.message.length > 0 && message.message.length <= MAX_PROTOCOL_ERROR_LENGTH && message.type === "runtime-error" && message.version === 1;
 }
 var missingRuntime = Object.freeze({ error: "Live component runtime is not configured", status: "error" });
+var invalidSelector = Object.freeze({ error: "Live component selector is invalid", status: "error" });
 function emptySubscribe() {
   return () => {
     return;
@@ -30737,7 +30923,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
             renderElement(false),
-            isDetailElement && detailPortalTarget ? import_react_dom2.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
+            isDetailElement && detailPortalTarget ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
               className: "absolute inset-0 overflow-hidden",
               "data-workbench-detail-render-root": "true",
               onMouseEnter: (event) => {
@@ -32405,7 +32591,7 @@ var NAMESPACED_ID = /^[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)+$/;
 var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/;
 var CAPABILITY_ID = /^[a-z][a-z0-9-]*(?::[a-z0-9][a-z0-9-]*)+$/;
 var REVISION = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-var SHA256 = /^[a-f0-9]{64}$/;
+var SHA2562 = /^[a-f0-9]{64}$/;
 var API_RANGE = /^(?:[~^]|>=?|<=?)?\d+\.\d+\.\d+(?:\s+(?:[<>]=?)\d+\.\d+\.\d+)?$/;
 function parseWorkbenchExtensionCatalog(value) {
   const input = exactRecord(value, "catalog", ["apiVersion", "aliases", "artifacts", "authority", "catalogRevision", "components", "debug", "parentCatalogRevision", "routes", "sequence"], ["aliases"]);
@@ -32475,7 +32661,7 @@ function parseWorkbenchExtensionCatalog(value) {
   }
   const authorityInput = exactRecord(input.authority, "catalog.authority", ["authorityFingerprint", "benchGatewayId", "realmId"]);
   const authority = Object.freeze({
-    authorityFingerprint: matchedString(authorityInput.authorityFingerprint, "catalog.authority.authorityFingerprint", SHA256),
+    authorityFingerprint: matchedString(authorityInput.authorityFingerprint, "catalog.authority.authorityFingerprint", SHA2562),
     benchGatewayId: matchedString(authorityInput.benchGatewayId, "catalog.authority.benchGatewayId", REALM_ID),
     realmId: matchedString(authorityInput.realmId, "catalog.authority.realmId", REALM_ID)
   });
@@ -32498,7 +32684,7 @@ function parseArtifact(value, index2) {
   const input = exactRecord(value, label, ["bytes", "contentType", "kind", "path", "sha256"]);
   if (input.kind !== "js" && input.kind !== "css")
     throw new Error(`${label}.kind must be js or css`);
-  const sha256 = matchedString(input.sha256, `${label}.sha256`, SHA256);
+  const sha256 = matchedString(input.sha256, `${label}.sha256`, SHA2562);
   const contentType = input.kind === "js" ? "text/javascript" : "text/css";
   if (input.contentType !== contentType) {
     throw new Error(`${label}.contentType does not match artifact kind`);
@@ -32512,12 +32698,12 @@ function parseArtifact(value, index2) {
 function parseComponent(value, index2) {
   const label = `catalog.components[${index2}]`;
   const input = exactRecord(value, label, ["cssArtifactSha256", "hostApiRange", "implementationRevision", "jsArtifactSha256", "schemaVersion", "sourceRevision", "typeId"], ["cssArtifactSha256"]);
-  const cssArtifactSha256 = input.cssArtifactSha256 === undefined ? undefined : matchedString(input.cssArtifactSha256, `${label}.cssArtifactSha256`, SHA256);
+  const cssArtifactSha256 = input.cssArtifactSha256 === undefined ? undefined : matchedString(input.cssArtifactSha256, `${label}.cssArtifactSha256`, SHA2562);
   return Object.freeze({
     ...cssArtifactSha256 ? { cssArtifactSha256 } : {},
     hostApiRange: matchedString(input.hostApiRange, `${label}.hostApiRange`, API_RANGE),
     implementationRevision: matchedString(input.implementationRevision, `${label}.implementationRevision`, REVISION),
-    jsArtifactSha256: matchedString(input.jsArtifactSha256, `${label}.jsArtifactSha256`, SHA256),
+    jsArtifactSha256: matchedString(input.jsArtifactSha256, `${label}.jsArtifactSha256`, SHA2562),
     schemaVersion: safeInteger(input.schemaVersion, `${label}.schemaVersion`, 1),
     sourceRevision: matchedString(input.sourceRevision, `${label}.sourceRevision`, REVISION),
     typeId: namespacedId(input.typeId, `${label}.typeId`)
@@ -35106,7 +35292,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     const handleBeforeUnload = (event) => {
       const hasFocusedTextarea = document.activeElement?.tagName === "TEXTAREA";
       if (hasFocusedTextarea)
-        import_react_dom3.flushSync(() => blurActiveBufferedTextarea());
+        import_react_dom2.flushSync(() => blurActiveBufferedTextarea());
       if (!hasFocusedTextarea && !pendingBenchSaveRef.current && !saveInFlightRef.current)
         return;
       event.preventDefault();
@@ -35249,7 +35435,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   async function handleBenchBreadcrumbClick(stackIndex, path) {
     if (shouldSkipBenchBreadcrumbClick(activeBenchPath, activeBenchStack, stackIndex))
       return;
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     setStatus(`Opening ${path}…`);
@@ -35258,14 +35444,12 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setFocusElementId(targetParent?.benchElementId);
     setFocusViewportSource(undefined);
     setOpenViewportSource(undefined);
-    setScenario(null);
-    scenarioRef.current = null;
     setActiveBenchPath(path);
   }
   async function handleBenchElementOpen(element, context) {
     if (element.error || !element.path)
       return;
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     setStatus(`Opening ${element.path}…`);
@@ -35273,15 +35457,13 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setFocusElementId(undefined);
     setFocusViewportSource(undefined);
     setOpenViewportSource(context);
-    setScenario(null);
-    scenarioRef.current = null;
     setActiveBenchPath(element.path);
   }
   async function handleParentBenchOpen(context) {
     const nextState = createParentBenchReturnState(activeBenchStack);
     if (!nextState)
       return;
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     setStatus(`Opening ${nextState.activeBenchPath}…`);
@@ -35292,7 +35474,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setActiveBenchPath(nextState.activeBenchPath);
   }
   async function handleBackNavigate(href) {
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     window.location.assign(href);
@@ -35361,7 +35543,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       }
     };
     const loadBenchForStress = async (path, stack, focusId, focusSource) => {
-      await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+      await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
       if (!await flushPendingBenchPlacementSave())
         throw new Error("Could not save the active bench before browser stress navigation.");
       const baseLoaded = await loadMainBenchScenario(path, scenarioId, createActiveBenchAncestorPaths(path, stack), "svg", vaultFiles);
@@ -35911,7 +36093,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
   }
   async function handleBenchElementLoad(elementId) {
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     const latestScenario = scenarioRef.current ?? scenario;
@@ -35948,7 +36130,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
   }
   async function handleNestedDepthLoad() {
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     const latestScenario = scenarioRef.current ?? scenario;
@@ -35986,7 +36168,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
   }
   async function handleNestedUnloadAll() {
-    await flushBufferedTextareaCommit(() => import_react_dom3.flushSync(() => blurActiveBufferedTextarea()));
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
     if (!await flushPendingBenchPlacementSave())
       return;
     const latestScenario = scenarioRef.current ?? scenario;
@@ -36933,8 +37115,11 @@ async function loadMainBenchRuntime(benchPath = "main.bench.hjson", scenarioId =
 async function loadBenchElement(element, index2, preferredPreviewFormat = "svg", vaultFiles = mainVaultFileClient) {
   const persistedElement = element;
   if (element.type === "component") {
+    const componentTypeId = getBenchElementString(persistedElement, "componentTypeId")?.trim();
+    const path = getBenchElementString(persistedElement, "path")?.trim();
+    const selector = componentTypeId && path ? { error: "Component cannot select both componentTypeId and path." } : path ? { path, vaultId: vaultFiles.vaultId } : componentTypeId ? { componentTypeId } : { error: "Component requires exactly one of componentTypeId or path." };
     return {
-      componentTypeId: getBenchElementString(persistedElement, "componentTypeId") ?? "unknown",
+      ...selector,
       ...Object.prototype.hasOwnProperty.call(persistedElement, "data") ? { data: persistedElement.data } : {},
       height: element.h ?? 360,
       id: element.id ?? `component:${index2}`,
@@ -38101,6 +38286,15 @@ function findExistingBenchElement(bench, type, id, fallback) {
   const generatedIndex = assignGeneratedBenchElementIds(elements).findIndex((benchElement) => benchElement.type === type && benchElement.id === id);
   return generatedIndex >= 0 ? elements[generatedIndex] : undefined;
 }
+function omitComponentSelectors(element) {
+  if (!element)
+    return;
+  const copy = { ...element };
+  delete copy.componentTypeId;
+  delete copy.path;
+  delete copy.vaultId;
+  return copy;
+}
 function updateBenchElementPlacements(bench, viewportElements, viewportEdges = bench.edges ?? []) {
   const runtimeElementIds = new Set(viewportElements.filter(isDirectoryRuntimeElement).map((element) => element.id));
   const persistedParentId = (parentId) => parentId && !runtimeElementIds.has(parentId) ? parentId : undefined;
@@ -38113,9 +38307,10 @@ function updateBenchElementPlacements(bench, viewportElements, viewportEdges = b
         return [];
       if (viewportElement.kind === "component") {
         const existing = findExistingBenchElement(bench, "component", viewportElement.id);
+        const selector = viewportElement.path ? { path: viewportElement.path } : viewportElement.componentTypeId ? { componentTypeId: viewportElement.componentTypeId } : {};
         return [{
-          ...existing,
-          componentTypeId: viewportElement.componentTypeId,
+          ...omitComponentSelectors(existing),
+          ...selector,
           ...viewportElement.data === undefined ? {} : { data: viewportElement.data },
           h: Math.round(viewportElement.height),
           id: viewportElement.id,
@@ -38379,18 +38574,13 @@ function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
 
 // packages/react/src/Workbench.tsx
 var import_react14 = __toESM(require_react(), 1);
-
-// packages/react/src/liveComponentRuntime.ts
-var React3 = __toESM(require_react(), 1);
-var jsxRuntime = __toESM(require_jsx_runtime(), 1);
-var jsxDevRuntime = __toESM(require_jsx_dev_runtime(), 1);
 // packages/bench-gateway-client/src/index.ts
-var SHA2562 = /^[a-f0-9]{64}$/;
+var SHA2563 = /^[a-f0-9]{64}$/;
 var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 var ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024;
 async function loadBenchGatewayArtifact(options2) {
   const { artifact } = options2;
-  if (!SHA2562.test(artifact.sha256))
+  if (!SHA2563.test(artifact.sha256))
     throw new TypeError("Bench Gateway artifact SHA-256 must be lowercase hexadecimal");
   const extension = artifact.kind === "js" ? "js" : "css";
   const expectedContentType = artifact.kind === "js" ? "text/javascript" : "text/css";
@@ -38519,13 +38709,18 @@ function rejectBeforeStreaming(response, message) {
 // packages/react/src/liveComponentRuntime.ts
 var unavailableSnapshot = Object.freeze({ status: "unavailable" });
 var MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+var MAX_FRAME_RUNTIME_BYTES2 = 8 * 1024 * 1024;
+var MAX_SOURCE_RESPONSE_BYTES = 8 * 1024;
 var MAX_EVENT_BUFFER_BYTES = 64 * 1024;
 var DEFAULT_CATALOG_REQUEST_TIMEOUT_MS = 1e4;
 function createLiveComponentRuntime(options2) {
   const listeners = new Set;
   const requested = new Set;
+  const requestedSources = new Set;
   const snapshots = new Map;
-  const evaluate = options2.evaluate ?? evaluateComponentModule;
+  const sourceDiagnostics = new Map;
+  const sourceSnapshots = new Map;
+  const sourceTypeIds = new Map;
   const baseUrl = options2.baseUrl ?? globalThis.location?.href ?? "http://localhost/";
   const apiBase = new URL(options2.apiBasePath.replace(/\/$/, "") + "/", baseUrl);
   const catalogRequestTimeoutMs = options2.catalogRequestTimeoutMs ?? DEFAULT_CATALOG_REQUEST_TIMEOUT_MS;
@@ -38546,6 +38741,7 @@ function createLiveComponentRuntime(options2) {
   let refreshInFlight = null;
   let queuedRefresh = null;
   let startupFailurePublished = false;
+  let frameRuntimePromise = null;
   const notify = () => {
     for (const listener of listeners)
       listener();
@@ -38570,25 +38766,34 @@ function createLiveComponentRuntime(options2) {
       fetcher: options2.fetcher,
       signal: lifecycleAbort.signal
     });
-    installReactBridge();
-    const module = await evaluate(jsBytes);
-    if (!Array.isArray(module.components) || module.components.length !== 1)
-      throw new Error("Component module must export exactly one component");
-    const component = parseLiveElementComponent(module.components[0], descriptor);
-    let cssText;
+    frameRuntimePromise ??= loadFrameRuntime(options2.fetcher, apiBase, lifecycleAbort.signal);
+    const frameRuntimeBytes = await frameRuntimePromise.catch((error) => {
+      frameRuntimePromise = null;
+      throw error;
+    });
+    let cssBytes;
     if (descriptor.cssArtifactSha256) {
       const cssArtifact = nextCatalog.artifacts.find((artifact) => artifact.sha256 === descriptor.cssArtifactSha256);
       if (!cssArtifact)
         throw new Error(`Component CSS artifact is missing: ${descriptor.typeId}`);
-      cssText = new TextDecoder("utf-8", { fatal: true }).decode(await loadBenchGatewayArtifact({
+      cssBytes = await loadBenchGatewayArtifact({
         artifact: cssArtifact,
         baseUrl,
         endpoint: apiBase.origin,
         fetcher: options2.fetcher,
         signal: lifecycleAbort.signal
-      }));
+      });
     }
-    return Object.freeze({ component, cssText, implementationRevision: descriptor.implementationRevision, status: "ready" });
+    return Object.freeze({
+      artifacts: Object.freeze({
+        ...cssBytes ? { componentCss: cssBytes.slice() } : {},
+        componentJavaScript: jsBytes.slice(),
+        frameRuntimeJavaScript: frameRuntimeBytes.slice()
+      }),
+      implementationRevision: descriptor.implementationRevision,
+      status: "ready",
+      typeId: descriptor.typeId
+    });
   };
   const loadCatalog = async () => {
     const controller = new AbortController;
@@ -38649,25 +38854,27 @@ function createLiveComponentRuntime(options2) {
       const descriptor = nextCatalog.components.find((component) => component.typeId === typeId);
       const previous = snapshots.get(typeId);
       if (!descriptor) {
-        if (!setSnapshot(typeId, previous?.component ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: `Component type is not published: ${typeId}`, status: "error" }))
+        const sourceDiagnostic = sourceDiagnostics.get(typeId);
+        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: sourceDiagnostic ?? `Component type is not published: ${typeId}`, status: "error" }))
           return;
         continue;
       }
-      if (previous?.component && previous.implementationRevision === descriptor.implementationRevision)
+      if (previous?.artifacts && previous.implementationRevision === descriptor.implementationRevision)
         continue;
-      if (!previous?.component && !setSnapshot(typeId, { status: "loading" }))
+      if (!previous?.artifacts && !setSnapshot(typeId, { status: "loading" }))
         return;
       try {
         const candidate = await loadCandidate(descriptor, nextCatalog);
         if (closed || catalog !== nextCatalog)
           return;
+        sourceDiagnostics.delete(typeId);
         if (!setSnapshot(typeId, candidate))
           return;
       } catch (error) {
         if (closed || catalog !== nextCatalog)
           return;
         const message = error instanceof Error ? error.message : String(error);
-        if (!setSnapshot(typeId, previous?.component ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" }))
+        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" }))
           return;
       }
     }
@@ -38730,7 +38937,7 @@ function createLiveComponentRuntime(options2) {
         return;
       const previous = snapshots.get(data.componentTypeId);
       const error = typeof data.message === "string" ? data.message : "Candidate build failed.";
-      setSnapshot(data.componentTypeId, previous?.component ? { ...previous, error, status: "stale" } : { error, status: "error" });
+      setSnapshot(data.componentTypeId, previous?.artifacts ? { ...previous, error, status: "stale" } : { error, status: "error" });
     } catch {}
   };
   const waitForEventRetry = () => new Promise((resolve2) => {
@@ -38862,6 +39069,71 @@ function createLiveComponentRuntime(options2) {
       }, reconcileIntervalMs);
     });
   };
+  const ensureType = (typeId) => {
+    if (closed || requested.has(typeId))
+      return;
+    requested.add(typeId);
+    setSnapshot(typeId, { status: "loading" });
+    if (!started) {
+      started = true;
+      startTransport();
+    } else if (catalog) {
+      refresh().catch((error) => {
+        if (!closed)
+          setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" });
+      });
+    }
+  };
+  const ensureSource = (source) => {
+    const key = sourceKey(source);
+    if (closed || requestedSources.has(key))
+      return;
+    requestedSources.add(key);
+    sourceSnapshots.set(key, Object.freeze({ status: "loading" }));
+    notify();
+    (async () => {
+      let response;
+      try {
+        response = await options2.fetcher.call(globalThis, new URL("sources/ensure", apiBase), {
+          body: JSON.stringify(source),
+          cache: "no-store",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          method: "POST",
+          redirect: "error",
+          signal: lifecycleAbort.signal
+        });
+        const payload = await readBoundedSourceResponse(response);
+        if (closed)
+          return;
+        const typeId = typeof payload.typeId === "string" && /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u.test(payload.typeId) ? payload.typeId : undefined;
+        if (response.status === 200 && typeId) {
+          sourceTypeIds.set(key, typeId);
+          sourceSnapshots.delete(key);
+          sourceDiagnostics.delete(typeId);
+          ensureType(typeId);
+          return;
+        }
+        const message = typeof payload.error === "string" && payload.error.length <= 2048 ? payload.error : `Live component source ensure failed with status ${response.status}`;
+        if (response.status === 422 && typeId) {
+          sourceTypeIds.set(key, typeId);
+          sourceSnapshots.delete(key);
+          sourceDiagnostics.set(typeId, message);
+          ensureType(typeId);
+          setSnapshot(typeId, { error: message, status: "error" });
+          return;
+        }
+        sourceSnapshots.set(key, Object.freeze({ error: message, status: "error" }));
+        requestedSources.delete(key);
+        notify();
+      } catch (error) {
+        if (closed)
+          return;
+        sourceSnapshots.set(key, Object.freeze({ error: error instanceof Error ? error.message : String(error), status: "error" }));
+        requestedSources.delete(key);
+        notify();
+      }
+    })();
+  };
   return Object.freeze({
     close() {
       closed = true;
@@ -38878,23 +39150,15 @@ function createLiveComponentRuntime(options2) {
       startupRetryTimer = null;
       listeners.clear();
     },
-    ensure(typeId) {
-      if (closed || requested.has(typeId))
-        return;
-      requested.add(typeId);
-      setSnapshot(typeId, { status: "loading" });
-      if (!started) {
-        started = true;
-        startTransport();
-      } else if (catalog) {
-        refresh().catch((error) => {
-          if (!closed)
-            setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" });
-        });
-      }
-    },
+    ensure: ensureType,
+    ensureSource,
     getSnapshot(typeId) {
       return snapshots.get(typeId) ?? unavailableSnapshot;
+    },
+    getSourceSnapshot(source) {
+      const key = sourceKey(source);
+      const typeId = sourceTypeIds.get(key);
+      return typeId ? snapshots.get(typeId) ?? sourceSnapshots.get(key) ?? unavailableSnapshot : sourceSnapshots.get(key) ?? unavailableSnapshot;
     },
     refresh,
     subscribe(listener) {
@@ -38975,33 +39239,79 @@ function settleOnAbort2(promise, signal) {
     });
   });
 }
-function parseLiveElementComponent(input, descriptor) {
-  if (!input || typeof input !== "object")
-    throw new Error("Component export must be an object");
-  const candidate = input;
-  if (candidate.typeId !== descriptor.typeId || candidate.implementationRevision !== descriptor.implementationRevision || candidate.renderMode !== "element" || typeof candidate.render !== "function") {
-    throw new Error("Component export does not match its authorized catalog descriptor");
+function sourceKey(source) {
+  return JSON.stringify([source.vaultId, source.path]);
+}
+async function readBoundedSourceResponse(response) {
+  const payload = await readBoundedJson(response, MAX_SOURCE_RESPONSE_BYTES);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    throw new Error("Live component source response is invalid");
+  return payload;
+}
+async function loadFrameRuntime(fetcher, apiBase, signal) {
+  const response = await fetcher.call(globalThis, new URL("frame-runtime.js", apiBase), {
+    cache: "no-store",
+    headers: { accept: "text/javascript" },
+    redirect: "error",
+    signal
+  });
+  try {
+    if (response.status !== 200 || response.redirected)
+      throw new Error(`Live component frame runtime requires status 200, received ${response.status}`);
+    if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/javascript"))
+      throw new Error("Live component frame runtime has an invalid content type");
+    if (response.headers.get("cache-control")?.toLowerCase() !== "private, no-store, no-transform")
+      throw new Error("Live component frame runtime cache policy is invalid");
+    const expectedSha256 = response.headers.get("x-content-sha256");
+    if (!expectedSha256 || !/^[a-f0-9]{64}$/u.test(expectedSha256))
+      throw new Error("Live component frame runtime hash is invalid");
+    const bytes = await readBoundedBytes(response, MAX_FRAME_RUNTIME_BYTES2, signal, "Live component frame runtime");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice().buffer));
+    const actualSha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualSha256 !== expectedSha256)
+      throw new Error("Live component frame runtime hash mismatch");
+    return bytes;
+  } catch (error) {
+    cancelResponseBody(response, error);
+    throw error;
   }
-  return Object.freeze({ implementationRevision: candidate.implementationRevision, render: candidate.render, typeId: candidate.typeId });
 }
-function createJsxRuntimeBridge(runtime, developmentRuntime) {
-  const jsxDEV = typeof developmentRuntime.jsxDEV === "function" ? developmentRuntime.jsxDEV : (type, props, key) => runtime.jsx(type, props, key);
-  return Object.freeze({ Fragment: runtime.Fragment, jsx: runtime.jsx, jsxDEV, jsxs: runtime.jsxs });
-}
-function installReactBridge() {
-  const root2 = globalThis;
-  const key = Symbol.for("klivcore.workbench.react");
-  const current = root2[key];
-  if (current?.React && current.React !== React3)
-    throw new Error("Workbench React singleton bridge already belongs to another runtime");
-  root2[key] = Object.freeze({ React: React3, jsxRuntime: createJsxRuntimeBridge(jsxRuntime, jsxDevRuntime) });
-}
-async function evaluateComponentModule(bytes) {
-  let binary = "";
-  for (let index2 = 0;index2 < bytes.byteLength; index2 += 1)
-    binary += String.fromCharCode(bytes[index2]);
-  const encoded = btoa(binary);
-  return import(`data:text/javascript;base64,${encoded}`);
+async function readBoundedBytes(response, maximumBytes, signal, label) {
+  const declared = response.headers.get("content-length");
+  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
+    throw new Error(`${label} exceeded the supported bound`);
+  if (!response.body)
+    throw new Error(`${label} response body is missing`);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const result = await settleOnAbort2(reader.read(), signal);
+      if (result.done)
+        break;
+      total += result.value.byteLength;
+      if (total > maximumBytes)
+        throw new Error(`${label} exceeded the supported bound`);
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    reader.cancel(error).catch(() => {
+      return;
+    });
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
 }
 
 // packages/react/src/Workbench.tsx
