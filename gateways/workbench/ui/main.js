@@ -14668,7 +14668,7 @@ function SandboxComponent({ element, isSelected, snapshot }) {
         },
         props: {
           componentTypeId: snapshot.typeId,
-          data: element.data,
+          ...element.data === undefined ? {} : { data: element.data },
           elementId: element.id,
           isSelected,
           readOnly: false
