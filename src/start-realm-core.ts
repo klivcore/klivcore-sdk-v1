@@ -54,13 +54,14 @@ export type ManagedTunnelRecord = Readonly<{
   sessionName: string;
 }>;
 export type ActiveSshRelayRecord = Readonly<{
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   pid: number;
   realmId: string;
   localOrigin: string;
   sessionName: string;
   configRevision?: string;
   realmPublicOrigin?: string;
+  runtimeRevision?: string;
 }>;
 
 const START_REALM_FAILURE_LIMIT = 16 * 1024;
@@ -463,31 +464,37 @@ export function parseActiveSshRelayRecord(
   sessionName: string,
   expectedConfigRevision?: string,
   expectedRealmPublicOrigin?: string,
+  expectedRuntimeRevision?: string,
 ): ActiveSshRelayRecord {
   const invalid = (): never => { throw new TypeError("active SSH relay record is invalid"); };
   if (!value || typeof value !== "object" || Array.isArray(value)) invalid();
   const input = value as Record<string, unknown>;
-  const expectedKeys = input.schemaVersion === 2
+  const expectedKeys = input.schemaVersion === 3
+    ? ["configRevision", "localOrigin", "pid", "realmId", "realmPublicOrigin", "runtimeRevision", "schemaVersion", "sessionName"]
+    : input.schemaVersion === 2
     ? ["configRevision", "localOrigin", "pid", "realmId", "realmPublicOrigin", "schemaVersion", "sessionName"]
     : ["localOrigin", "pid", "realmId", "schemaVersion", "sessionName"];
   if (!exactKeys(input, expectedKeys)
-    || (input.schemaVersion !== 1 && input.schemaVersion !== 2) || input.realmId !== realmId || input.sessionName !== sessionName
+    || (input.schemaVersion !== 1 && input.schemaVersion !== 2 && input.schemaVersion !== 3) || input.realmId !== realmId || input.sessionName !== sessionName
     || !Number.isSafeInteger(input.pid) || (input.pid as number) < 1
     || input.localOrigin !== `http://127.0.0.1:${port}`
-    || (input.schemaVersion === 2 && (typeof input.configRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.configRevision)
-      || typeof input.realmPublicOrigin !== "string"))) invalid();
+    || (input.schemaVersion !== 1 && (typeof input.configRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.configRevision)
+      || typeof input.realmPublicOrigin !== "string"))
+    || (input.schemaVersion === 3 && (typeof input.runtimeRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.runtimeRevision)))) invalid();
   if (expectedConfigRevision !== undefined && input.configRevision !== expectedConfigRevision) invalid();
   if (expectedRealmPublicOrigin !== undefined && input.realmPublicOrigin !== expectedRealmPublicOrigin) invalid();
+  if (expectedRuntimeRevision !== undefined && input.runtimeRevision !== expectedRuntimeRevision) invalid();
   return Object.freeze({
-    schemaVersion: input.schemaVersion as 1 | 2,
+    schemaVersion: input.schemaVersion as 1 | 2 | 3,
     pid: input.pid as number,
     realmId,
     localOrigin: input.localOrigin as string,
     sessionName,
-    ...(input.schemaVersion === 2 ? {
+    ...(input.schemaVersion !== 1 ? {
       configRevision: input.configRevision as string,
       realmPublicOrigin: input.realmPublicOrigin as string,
     } : {}),
+    ...(input.schemaVersion === 3 ? { runtimeRevision: input.runtimeRevision as string } : {}),
   });
 }
 

@@ -298,7 +298,8 @@ async function runSshRelay(): Promise<never> {
   const publicOrigin = forcedPublicOrigin;
   const sessionName = process.env.KLIVCORE_START_REALM_SSH_RELAY_SESSION;
   const configRevision = process.env.KLIVCORE_START_REALM_SSH_CONFIG_REVISION;
-  if (!publicOrigin || !sessionName || !configRevision || !/^[a-f0-9]{64}$/.test(configRevision)) {
+  if (!publicOrigin || !sessionName || !configRevision || !/^[a-f0-9]{64}$/.test(configRevision)
+    || !runtimeRevision || !/^[a-f0-9]{64}$/.test(runtimeRevision)) {
     throw new Error("managed SSH relay identity is missing");
   }
   const branding = Object.freeze({ canvasColor: config.realm.canvasColor });
@@ -343,13 +344,14 @@ async function runSshRelay(): Promise<never> {
   const stage = `${activeSshRelayPath}.stage-${crypto.randomUUID()}`;
   try {
     await writeFile(stage, `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
       pid: process.pid,
       realmId: config.realm.id,
       localOrigin: gateway.endpoint,
       sessionName,
       configRevision,
       realmPublicOrigin: publicOrigin,
+      runtimeRevision,
     })}\n`, { flag: "wx", mode: 0o600 });
     await rename(stage, activeSshRelayPath);
     await chmod(activeSshRelayPath, 0o600);

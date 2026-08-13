@@ -1197,6 +1197,7 @@ async function readActiveSshRelay(
     sessions.sshRelay,
     expectedConfigRevision,
     expectedRealmPublicOrigin,
+    runtimeRevision,
   );
   if (!processIsAlive(record.pid)) throw new Error("SSH Core relay worker is not running");
   return record;
@@ -1272,7 +1273,7 @@ async function ensureSshRelay(realmPublicOrigin: string): Promise<ReturnType<typ
       return record;
     } catch {
       sshConfigurationChanged = true;
-      console.log(`Replacing SSH Core relay session after SSH configuration changed: ${sessions.sshRelay}`);
+      console.log(`Replacing SSH Core relay session after SSH configuration or runtime identity changed: ${sessions.sshRelay}`);
       const owned = await readAnyActiveSshRelay();
       await stopOwnedTmuxSession(sessions.sshRelay, realmWorkerExpectation("ssh-relay", owned.pid), "SSH Core relay");
     }
@@ -1285,6 +1286,7 @@ async function ensureSshRelay(realmPublicOrigin: string): Promise<ReturnType<typ
     KLIVCORE_START_REALM_PUBLIC_ORIGIN: realmPublicOrigin,
     KLIVCORE_START_REALM_SSH_RELAY_SESSION: sessions.sshRelay,
     KLIVCORE_START_REALM_SSH_CONFIG_REVISION: configRevision,
+    KLIVCORE_START_REALM_RUNTIME_REVISION: runtimeRevision,
   });
   return waitForSshRelay(configRevision, realmPublicOrigin);
 }
