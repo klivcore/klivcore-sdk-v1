@@ -13,14 +13,14 @@
     },
     {
       "path": "bin/live-component-build-worker.js",
-      "bytes": 4220089,
-      "sha256": "8b7a86e687ae015bc15b29fb4d9f9289747876c17cf98814ad8472a640611667",
+      "bytes": 4223176,
+      "sha256": "93be0e6ce90f195079b1924a6741347f8687fb432bea7f2f120846823c59c321",
       "mode": 420
     },
     {
       "path": "bin/server.js",
-      "bytes": 164112,
-      "sha256": "720c42887c4ab528efdbb7b032b950106eb1f24a0ad565548b1f66cae8b65386",
+      "bytes": 169477,
+      "sha256": "b5cc632c4171483d9f083789daf81f82278a758feb76558659cda7a0e704fbfa",
       "mode": 420
     },
     {

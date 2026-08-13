@@ -2659,7 +2659,7 @@ function isPathConflictError(error) {
 import { createHash as createHash3 } from "crypto";
 import { watch } from "fs";
 import { lstat as lstat2, mkdir as mkdir3, open as open2, readFile as readFile2, realpath, rename as rename2, writeFile as writeFile2 } from "fs/promises";
-import { dirname as dirname3, isAbsolute, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
+import { dirname as dirname3, extname as extname2, isAbsolute, relative as relative2, resolve as resolve2, sep as sep2 } from "path";
 
 // packages/bench-gateway-server/src/source-build-runner.ts
 import { createHash as createHash2 } from "crypto";
@@ -2669,6 +2669,8 @@ import { tmpdir } from "os";
 import { fileURLToPath } from "url";
 import { join as join3 } from "path";
 var MAX_SOURCE_BYTES = 512 * 1024;
+var MAX_SOURCE_GRAPH_BYTES = 2 * 1024 * 1024;
+var MAX_SOURCE_MODULES = 128;
 var MAX_WORKER_RESPONSE_BYTES = 6 * 1024 * 1024;
 var MAX_WORKER_STDERR_BYTES = 16 * 1024;
 var MAX_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
@@ -2678,9 +2680,10 @@ var TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
 var SHA256 = /^[a-f0-9]{64}$/u;
 var encoder = new TextEncoder;
 async function runSourceBuildWorker(request, options = {}) {
-  const sourceBytes = encoder.encode(request.sourceText);
-  if (!TYPE_ID.test(request.typeId) || sourceBytes.byteLength > MAX_SOURCE_BYTES)
+  const graphBytes = request.modules?.reduce((total, module) => total + encoder.encode(module.sourceText).byteLength, 0) ?? encoder.encode(request.sourceText ?? "").byteLength;
+  if (!TYPE_ID.test(request.typeId) || graphBytes > MAX_SOURCE_GRAPH_BYTES || (request.modules ? !request.entryPath || request.modules.length < 1 || request.modules.length > MAX_SOURCE_MODULES : typeof request.sourceText !== "string" || graphBytes > MAX_SOURCE_BYTES)) {
     throw new Error("Live component source build request is invalid");
+  }
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
     throw new Error("Live component source build timeout is invalid");
@@ -2803,6 +2806,7 @@ var REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
 var VAULT_ID = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
 var SHA2562 = /^[a-f0-9]{64}$/u;
 var MAX_COMPONENTS = 64;
+var MAX_SOURCE_IMPORTS = 512;
 var MAX_SOURCE_PATH_LENGTH = 4096;
 var MAX_SOURCE_REQUEST_BYTES = 8 * 1024;
 var MAX_JAVASCRIPT_BYTES2 = 2 * 1024 * 1024;
@@ -2945,11 +2949,11 @@ data: ${JSON.stringify({
     let built;
     try {
       if (registration.source) {
-        const sourceText = await readAuthorizedSourceText(registration.entry, registration.source);
+        const modules = await readAuthorizedSourceGraph(registration.entry, registration.source);
         const controller = new AbortController;
         sourceBuildControllers.add(controller);
         try {
-          built = await runSourceBuildWorker({ sourceText, typeId: registration.typeId }, { signal: controller.signal, workerPath: options.sourceBuildWorkerPath });
+          built = await runSourceBuildWorker({ entryPath: registration.source.path, modules, typeId: registration.typeId }, { signal: controller.signal, workerPath: options.sourceBuildWorkerPath });
         } finally {
           sourceBuildControllers.delete(controller);
         }
@@ -3359,6 +3363,72 @@ async function readAuthorizedSourceText(entry, source) {
     });
   }
 }
+async function readAuthorizedSourceGraph(entry, source) {
+  const modules = new Map;
+  const pending = [entry];
+  const scheduled = new Set([entry]);
+  let totalBytes = 0;
+  let importCount = 0;
+  while (pending.length > 0) {
+    const moduleEntry = pending.pop();
+    const canonicalEntry = await realpath(moduleEntry).catch(() => {
+      return;
+    });
+    if (!canonicalEntry || !isWithinRoot(source.vaultRoot, canonicalEntry))
+      throw new SourceEnsureError(403, "Live component import escapes its authorized vault");
+    const modulePath = relative2(source.vaultRoot, canonicalEntry).split(sep2).join("/");
+    if (modules.has(modulePath))
+      continue;
+    if (!/\.(?:css|js|jsx|ts|tsx)$/u.test(modulePath))
+      throw new SourceEnsureError(400, "Live component import type is unsupported");
+    const sourceText = await readAuthorizedSourceText(canonicalEntry, source);
+    totalBytes += encoder2.encode(sourceText).byteLength;
+    if (modules.size >= MAX_SOURCE_MODULES || totalBytes > MAX_SOURCE_GRAPH_BYTES)
+      throw new SourceEnsureError(413, "Live component import graph exceeded the supported bound");
+    modules.set(modulePath, sourceText);
+    if (modulePath.endsWith(".css")) {
+      if (/@import\b|url\s*\(/iu.test(sourceText))
+        throw new SourceEnsureError(400, "Live component CSS network references are not allowed");
+      continue;
+    }
+    if (/\bimport\s*\(/u.test(sourceText))
+      throw new SourceEnsureError(400, "Live component dynamic imports are not allowed");
+    const loader = extname2(modulePath) === ".tsx" || extname2(modulePath) === ".jsx" ? "tsx" : "ts";
+    const bunRuntime = globalThis.Bun;
+    if (!bunRuntime)
+      throw new SourceEnsureError(500, "Live component imports require the Bun runtime");
+    for (const imported of new bunRuntime.Transpiler({ loader }).scanImports(sourceText)) {
+      importCount += 1;
+      if (importCount > MAX_SOURCE_IMPORTS)
+        throw new SourceEnsureError(413, "Live component import graph exceeded the supported bound");
+      if (imported.path === "react" || imported.path === "react/jsx-runtime" || imported.path === "react/jsx-dev-runtime")
+        continue;
+      if (!imported.path.startsWith("."))
+        throw new SourceEnsureError(400, `Live component import is not allowed: ${imported.path.slice(0, 160)}`);
+      const base = resolve2(dirname3(canonicalEntry), imported.path);
+      const candidates = extname2(base) ? [base] : [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, `${base}.jsx`, `${base}.css`, resolve2(base, "index.ts"), resolve2(base, "index.tsx"), resolve2(base, "index.js"), resolve2(base, "index.jsx")];
+      let dependency;
+      for (const candidate of candidates) {
+        dependency = await realpath(candidate).catch(() => {
+          return;
+        });
+        if (dependency)
+          break;
+      }
+      if (!dependency)
+        throw new SourceEnsureError(400, `Live component import is unavailable: ${imported.path.slice(0, 160)}`);
+      if (!isWithinRoot(source.vaultRoot, dependency))
+        throw new SourceEnsureError(403, "Live component import escapes its authorized vault");
+      if (!scheduled.has(dependency)) {
+        scheduled.add(dependency);
+        if (scheduled.size > MAX_SOURCE_MODULES)
+          throw new SourceEnsureError(413, "Live component import graph exceeded the supported bound");
+        pending.push(dependency);
+      }
+    }
+  }
+  return Object.freeze([...modules].sort(([left], [right]) => left.localeCompare(right)).map(([path, sourceText]) => Object.freeze({ path, sourceText })));
+}
 async function resolveAuthorizedSource(vaultId, vaultRoot, requestedPath) {
   const normalizedPath = normalizeSourcePath(requestedPath);
   const candidate = resolve2(vaultRoot, normalizedPath);
@@ -3622,6 +3692,7 @@ var modularitySvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 36
 var VAULT_ID2 = /^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$/u;
 var BENCH_PATH = /^[^/\\](?!.*(?:^|[/\\])\.\.(?:[/\\]|$)).*\.bench\.(?:h?json)$/u;
 var COMPONENT_REALM_ID = /^[a-z][a-z0-9-]{0,127}$/u;
+var COMPONENT_TYPE_ID = /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u;
 function parseWorkbenchGatewayConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
@@ -3675,10 +3746,24 @@ function parseLiveComponents(value) {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new TypeError("Workbench Gateway config is invalid");
   const candidate = value;
-  if (Object.keys(candidate).join("\x00") !== "realmId" || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId)) {
+  const keys = Object.keys(candidate).sort().join("\x00");
+  if (keys !== "realmId" && keys !== ["realmId", "registrations"].sort().join("\x00") || typeof candidate.realmId !== "string" || !COMPONENT_REALM_ID.test(candidate.realmId) || candidate.registrations !== undefined && (!Array.isArray(candidate.registrations) || candidate.registrations.length > 64)) {
     throw new TypeError("Workbench Gateway config is invalid");
   }
-  return Object.freeze({ realmId: candidate.realmId });
+  if (candidate.registrations === undefined)
+    return Object.freeze({ realmId: candidate.realmId });
+  const seen = new Set;
+  const registrations = candidate.registrations.map((value2) => {
+    if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
+      throw new TypeError("Workbench Gateway config is invalid");
+    const registration = value2;
+    if (Object.keys(registration).sort().join("\x00") !== ["entry", "typeId"].sort().join("\x00") || typeof registration.entry !== "string" || !isAbsolute2(registration.entry) || typeof registration.typeId !== "string" || !COMPONENT_TYPE_ID.test(registration.typeId) || !registration.typeId.startsWith(`${candidate.realmId}:`) || seen.has(registration.typeId)) {
+      throw new TypeError("Workbench Gateway config is invalid");
+    }
+    seen.add(registration.typeId);
+    return Object.freeze({ entry: resolve3(registration.entry), typeId: registration.typeId });
+  });
+  return Object.freeze({ realmId: candidate.realmId, registrations: Object.freeze(registrations) });
 }
 function normalizeWorkbenchGatewayConfig(configured) {
   return "vaultRoot" in configured ? parseWorkbenchGatewayConfig(configured) : configured;
@@ -3731,6 +3816,7 @@ This native text-file element is backed by the isolated Workbench Gateway vault.
       realmId: effectiveConfig.liveComponents.realmId
     },
     lineageFile: join4(home, "live-components", `${liveAuthorityFingerprint}.json`),
+    registrations: effectiveConfig.liveComponents.registrations,
     sourceBuildWorkerPath: liveComponentAssets?.sourceBuildWorkerPath,
     vaults
   }) : undefined;
