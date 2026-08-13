@@ -11091,18 +11091,26 @@ function installInMemoryLocalStorage(target) {
       values.clear();
     },
     getItem(key) {
+      if (arguments.length < 1)
+        throw new TypeError("Storage.getItem requires 1 argument");
       return values.get(String(key)) ?? null;
     },
     key(index2) {
-      return [...values.keys()][Number(index2)] ?? null;
+      if (arguments.length < 1)
+        throw new TypeError("Storage.key requires 1 argument");
+      return [...values.keys()][Number(index2) >>> 0] ?? null;
     },
     get length() {
       return values.size;
     },
     removeItem(key) {
+      if (arguments.length < 1)
+        throw new TypeError("Storage.removeItem requires 1 argument");
       values.delete(String(key));
     },
     setItem(key, value) {
+      if (arguments.length < 2)
+        throw new TypeError("Storage.setItem requires 2 arguments");
       values.set(String(key), String(value));
     }
   });

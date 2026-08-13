@@ -73,8 +73,8 @@
     },
     {
       "path": "ui/live-component-frame-runtime.js",
-      "bytes": 531346,
-      "sha256": "c5f5fda3f6f1ff84414cc68dd1ba919830f6fd20760e428cf99daf0595a10d0d",
+      "bytes": 531752,
+      "sha256": "6cf531f772859d3afeb7148161a8e646345d78b8ce36752779f66583ca692073",
       "mode": 420
     },
     {
