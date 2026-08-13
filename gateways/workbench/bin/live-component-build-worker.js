@@ -89914,6 +89914,8 @@ var require_plugin = __commonJS((exports, module) => {
 
 // packages/bench-gateway-server/src/source-build-worker.ts
 import { createHash } from "crypto";
+import { mkdir, writeFile } from "fs/promises";
+import { dirname, join, posix } from "path";
 
 // ../../node_modules/.bun/postcss@8.5.6/node_modules/postcss/lib/postcss.mjs
 var import_postcss = __toESM(require_postcss(), 1);
@@ -89948,6 +89950,8 @@ var import_tailwindcss = __toESM(require_plugin(), 1);
 
 // packages/bench-gateway-server/src/source-build-runner.ts
 var MAX_SOURCE_BYTES = 512 * 1024;
+var MAX_SOURCE_GRAPH_BYTES = 2 * 1024 * 1024;
+var MAX_SOURCE_MODULES = 128;
 var MAX_WORKER_RESPONSE_BYTES = 6 * 1024 * 1024;
 var MAX_WORKER_STDERR_BYTES = 16 * 1024;
 var MAX_JAVASCRIPT_BYTES = 2 * 1024 * 1024;
@@ -89977,7 +89981,7 @@ async function readBoundedStdin() {
     if (result.done)
       break;
     total += result.value.byteLength;
-    if (total > MAX_SOURCE_BYTES + 1024)
+    if (total > MAX_SOURCE_GRAPH_BYTES + 64 * 1024)
       throw new Error("request exceeded the supported bound");
     chunks.push(result.value);
   }
@@ -89999,18 +90003,46 @@ function parseRequest(raw) {
   if (!value2 || typeof value2 !== "object" || Array.isArray(value2))
     throw new Error("request is malformed");
   const candidate = value2;
-  if (Object.keys(candidate).sort().join("\x00") !== ["sourceText", "typeId"].sort().join("\x00") || typeof candidate.sourceText !== "string" || encoder2.encode(candidate.sourceText).byteLength > MAX_SOURCE_BYTES || typeof candidate.typeId !== "string" || !TYPE_ID.test(candidate.typeId))
+  if (typeof candidate.typeId !== "string" || !TYPE_ID.test(candidate.typeId))
     throw new Error("request is malformed");
-  return Object.freeze({ sourceText: candidate.sourceText, typeId: candidate.typeId });
+  if (Object.keys(candidate).sort().join("\x00") === ["sourceText", "typeId"].sort().join("\x00") && typeof candidate.sourceText === "string" && encoder2.encode(candidate.sourceText).byteLength <= MAX_SOURCE_BYTES) {
+    return Object.freeze({ sourceText: candidate.sourceText, typeId: candidate.typeId });
+  }
+  if (Object.keys(candidate).sort().join("\x00") !== ["entryPath", "modules", "typeId"].sort().join("\x00") || typeof candidate.entryPath !== "string" || !Array.isArray(candidate.modules) || candidate.modules.length < 1 || candidate.modules.length > MAX_SOURCE_MODULES)
+    throw new Error("request is malformed");
+  let total = 0;
+  const seen = new Set;
+  const modules = candidate.modules.map((value3) => {
+    if (!value3 || typeof value3 !== "object" || Array.isArray(value3))
+      throw new Error("request is malformed");
+    const module = value3;
+    if (Object.keys(module).sort().join("\x00") !== ["path", "sourceText"].join("\x00") || typeof module.path !== "string" || !isModulePath(module.path) || seen.has(module.path) || typeof module.sourceText !== "string")
+      throw new Error("request is malformed");
+    seen.add(module.path);
+    total += encoder2.encode(module.sourceText).byteLength;
+    return Object.freeze({ path: module.path, sourceText: module.sourceText });
+  });
+  if (!isModulePath(candidate.entryPath) || !seen.has(candidate.entryPath) || total > MAX_SOURCE_GRAPH_BYTES)
+    throw new Error("request is malformed");
+  return Object.freeze({ entryPath: candidate.entryPath, modules: Object.freeze(modules), typeId: candidate.typeId });
 }
 async function build(request) {
-  const approvedImports = new Set(["react", "react/jsx-runtime", "react/jsx-dev-runtime"]);
-  const imports = new Bun.Transpiler({ loader: "tsx" }).scanImports(request.sourceText);
-  const rejectedImport = imports.find((candidate) => !approvedImports.has(candidate.path));
-  if (rejectedImport)
-    throw new Error(`Import is not allowed: ${rejectedImport.path.slice(0, 160)}`);
+  const modules = request.modules ?? Object.freeze([{ path: "source.tsx", sourceText: request.sourceText }]);
+  let entrypoints = ["klivcore:component-entry"];
+  if (request.modules && request.entryPath) {
+    for (const module of request.modules) {
+      const target = join(process.cwd(), ...module.path.split("/"));
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, module.sourceText, { flag: "wx" });
+    }
+    const wrapper = join(process.cwd(), ".klivcore-component-entry.js");
+    await writeFile(wrapper, `import Component from ${JSON.stringify(`./${request.entryPath}`)};
+export const components = Object.freeze([Object.freeze({ implementationRevision: "__KLIVCORE_IMPLEMENTATION_REVISION__", renderMode: "element", typeId: ${JSON.stringify(request.typeId)}, render(host, resolved) { return host.createElement(Component, resolved); } })]);
+`, { flag: "wx" });
+    entrypoints = [wrapper];
+  }
   const result = await Bun.build({
-    entrypoints: ["klivcore:component-entry"],
+    entrypoints,
     format: "esm",
     minify: false,
     plugins: [componentPlugin(request)],
@@ -90025,8 +90057,12 @@ async function build(request) {
   if (!javascript)
     throw new Error("compiler produced no JavaScript");
   const rawJs = new Uint8Array(await javascript.arrayBuffer());
-  const tailwindCss = await compileTailwindUtilities(request.sourceText);
-  const rawCss = tailwindCss ? encoder2.encode(tailwindCss) : undefined;
+  const bundledCss = result.outputs.find((output) => output.path.endsWith(".css"));
+  const importedCss = bundledCss ? new TextDecoder().decode(await bundledCss.arrayBuffer()) : "";
+  const tailwindCss = await compileTailwindUtilities(modules);
+  const combinedCss = `${importedCss}${importedCss && tailwindCss ? `
+` : ""}${tailwindCss ?? ""}`;
+  const rawCss = combinedCss ? encoder2.encode(combinedCss) : undefined;
   if (rawJs.byteLength > MAX_JAVASCRIPT_BYTES2 || (rawCss?.byteLength ?? 0) > MAX_CSS_BYTES2)
     throw new Error("artifact exceeded the supported bound");
   const jsSha = sha256(rawJs);
@@ -90051,9 +90087,9 @@ async function build(request) {
     typeId: request.typeId
   });
 }
-async function compileTailwindUtilities(sourceText) {
+async function compileTailwindUtilities(modules) {
   const result = await postcss_default([import_tailwindcss.default({
-    content: [{ extension: "tsx", raw: sourceText }],
+    content: modules.filter((module) => /\.[jt]sx?$/u.test(module.path)).map((module) => ({ extension: posix.extname(module.path).slice(1), raw: module.sourceText })),
     corePlugins: { preflight: false }
   })]).process("@tailwind utilities;", { from: undefined });
   const css = result.css.trim();
@@ -90061,29 +90097,36 @@ async function compileTailwindUtilities(sourceText) {
 ` : undefined;
 }
 function componentPlugin(request) {
+  const modules = new Map((request.modules ?? [{ path: "source.tsx", sourceText: request.sourceText }]).map((module) => [module.path, module.sourceText]));
+  const entryPath = request.entryPath ?? "source.tsx";
   return {
     name: "klivcore-source-component",
     setup(builder) {
-      builder.onResolve({ filter: /^klivcore:component-entry$/ }, () => ({ namespace: "klivcore-entry", path: "entry" }));
-      builder.onLoad({ filter: /^entry$/, namespace: "klivcore-entry" }, () => ({
-        contents: `import Component from "klivcore:component-source";
+      if (!request.modules) {
+        builder.onResolve({ filter: /^klivcore:component-entry$/ }, () => ({ namespace: "klivcore-entry", path: "entry" }));
+        builder.onLoad({ filter: /^entry$/, namespace: "klivcore-entry" }, () => ({
+          contents: `import Component from "klivcore:component-source";
 export const components = Object.freeze([Object.freeze({ implementationRevision: "__KLIVCORE_IMPLEMENTATION_REVISION__", renderMode: "element", typeId: ${JSON.stringify(request.typeId)}, render(host, resolved) { return host.createElement(Component, resolved); } })]);
 `,
-        loader: "js"
-      }));
-      builder.onResolve({ filter: /^klivcore:component-source$/ }, () => ({ namespace: "klivcore-source", path: "source.tsx" }));
-      builder.onLoad({ filter: /^source\.tsx$/, namespace: "klivcore-source" }, () => ({ contents: request.sourceText, loader: "tsx" }));
+          loader: "js"
+        }));
+        builder.onResolve({ filter: /^klivcore:component-source$/ }, () => ({ namespace: "klivcore-source", path: "source.tsx" }));
+        builder.onLoad({ filter: /^source\.tsx$/, namespace: "klivcore-source" }, () => ({ contents: request.sourceText, loader: "tsx" }));
+      }
       for (const specifier of ["react", "react/jsx-runtime", "react/jsx-dev-runtime"]) {
         builder.onResolve({ filter: new RegExp(`^${specifier.replace("/", "\\/")}$`, "u") }, () => ({ namespace: "klivcore-react", path: specifier }));
       }
       builder.onLoad({ filter: /^react$/, namespace: "klivcore-react" }, () => ({ contents: reactBridgeSource(), loader: "js" }));
       builder.onLoad({ filter: /^react\/jsx-(?:dev-)?runtime$/, namespace: "klivcore-react" }, () => ({ contents: jsxBridgeSource(), loader: "js" }));
-      builder.onResolve({ filter: /.*/ }, (args) => ({ errors: [{ text: `Import is not allowed: ${args.path.slice(0, 160)}` }] }));
+      builder.onResolve({ filter: /^[^./]|^\.\.(?:\/|$)|^\// }, (args) => ({ errors: [{ text: `Import is not allowed: ${args.path.slice(0, 160)}` }] }));
     }
   };
 }
+function isModulePath(path) {
+  return path.length > 0 && path.length <= 4096 && !path.includes("\\") && !path.startsWith("/") && path.split("/").every((segment) => segment && segment !== "." && segment !== "..") && /\.(?:css|js|jsx|ts|tsx)$/u.test(path);
+}
 function sanitizeDiagnostic(error) {
-  const raw = error instanceof Error ? error.message : "compiler failed";
+  const raw = error instanceof AggregateError ? error.errors.map((item) => item && typeof item === "object" && ("message" in item) ? String(item.message) : String(item)).join("; ") : error instanceof Error ? error.message : "compiler failed";
   return raw.replace(/(?:[A-Za-z]:[\\/]|\/)[^\s:;,)]+/gu, "<redacted>").replace(/[\r\n\t]+/gu, " ").slice(0, 1024) || "compiler failed";
 }
 function reactBridgeSource() {
