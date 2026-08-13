@@ -12766,7 +12766,7 @@ async function listMainVaultFiles(path) {
     throw new Error("Failed to list vault files.");
   return body;
 }
-function VaultFilePathInput({ disabled = false, extensions = [], inputRef, label, listFiles = listMainVaultFiles, onBlur, onChange, onFileSelect, onKeyDown, placeholder, size = "default", title, value }) {
+function VaultFilePathInput({ disabled = false, extensions = [], hideLabel = false, inputRef, label, listFiles = listMainVaultFiles, onBlur, onChange, onFileSelect, onKeyDown, placeholder, size = "default", title, value }) {
   const [pickerOpen, setPickerOpen] = import_react.useState(false);
   const [directory, setDirectory] = import_react.useState(".");
   const [files, setFiles] = import_react.useState([]);
@@ -12825,9 +12825,9 @@ function VaultFilePathInput({ disabled = false, extensions = [], inputRef, label
     onWheel: (event) => event.stopPropagation(),
     children: [
       /* @__PURE__ */ jsx_runtime2.jsxs("label", {
-        className: `flex flex-col ${compact ? "gap-1" : "gap-2"}`,
+        className: `flex flex-col ${hideLabel ? "" : compact ? "gap-1" : "gap-2"}`,
         children: [
-          label,
+          hideLabel ? null : label,
           /* @__PURE__ */ jsx_runtime2.jsxs("div", {
             className: "flex gap-2",
             children: [
@@ -13157,6 +13157,9 @@ function getNodeWrapperZIndex(element) {
 function getNodeWrapperInteractionClassName(element) {
   return `group absolute text-xs${element.kind === "component" ? " nopan nowheel" : ""}`;
 }
+function getNodeWrapperFrame(element, options2) {
+  return element.benchTransform || element.preserveGeometry === true ? { height: element.height, width: element.width, x: element.x, y: element.y } : snapNodeFrame(element, options2);
+}
 function isCanvasPointerPassThroughTarget(target) {
   const closest = target?.closest;
   return typeof closest === "function" && Boolean(closest.call(target, "[data-workbench-canvas-backdrop='true']"));
@@ -13177,12 +13180,9 @@ function NodeWrapper({
   minHeight = 80,
   minWidth = 120,
   onElementChange,
-  onElementDelete,
   onElementHandlePointerDown,
   onElementMoveStart,
   onElementSelect,
-  selectedCount = 0,
-  title,
   viewportZoom,
   contentOverflowClassName = "overflow-hidden",
   wrapperClassName = "border-slate-700 bg-slate-950/95 text-slate-300"
@@ -13191,9 +13191,7 @@ function NodeWrapper({
   const wrapperRef = import_react2.useRef(null);
   const [hoveredHandleSide, setHoveredHandleSide] = import_react2.useState(null);
   const [isActive, setIsActive] = import_react2.useState(false);
-  const [isConfirmingDelete, setIsConfirmingDelete] = import_react2.useState(false);
-  const preserveGeometry = "preserveGeometry" in element && element.preserveGeometry === true;
-  const snappedFrame = element.benchTransform || preserveGeometry ? { height: element.height, width: element.width, x: element.x, y: element.y } : snapNodeFrame(element, { minHeight, minWidth });
+  const snappedFrame = getNodeWrapperFrame(element, { minHeight, minWidth });
   const projectionScale = element.benchTransform?.scale ?? 1;
   const isProjected = Boolean(element.benchTransform);
   const wrapperStyle = {
@@ -13209,7 +13207,6 @@ function NodeWrapper({
     const handleDocumentPointerDown = (event) => {
       if (wrapperRef.current && !isNodeWrapperPointerInside(event, wrapperRef.current)) {
         setIsActive(false);
-        setIsConfirmingDelete(false);
       }
     };
     document.addEventListener("pointerdown", handleDocumentPointerDown, true);
@@ -13261,10 +13258,6 @@ function NodeWrapper({
     window.addEventListener("pointercancel", endDrag, true);
     dragTarget.addEventListener("lostpointercapture", endDrag, { once: true });
   };
-  function requestDelete() {
-    onElementDelete(element.id);
-  }
-  const confirmingSelected = isSelected && selectedCount > 1;
   if (presentation === "detail") {
     return /* @__PURE__ */ jsx_runtime4.jsx("div", {
       className: getNodeWrapperInteractionClassName(element),
@@ -13311,116 +13304,9 @@ function NodeWrapper({
     },
     children: [
       error && !isProjected ? /* @__PURE__ */ jsx_runtime4.jsx("div", {
-        className: `absolute bottom-full left-0 right-0 z-20 mb-4 border border-red-400/50 bg-red-950/90 px-1.5 py-1 text-[10px] font-medium leading-tight text-red-100 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive || isConfirmingDelete ? "opacity-100" : "opacity-10"}`,
+        className: `absolute bottom-full left-0 right-0 z-20 mb-4 border border-red-400/50 bg-red-950/90 px-1.5 py-1 text-[10px] font-medium leading-tight text-red-100 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive ? "opacity-100" : "opacity-10"}`,
         role: "status",
         children: error
-      }) : null,
-      !isProjected ? /* @__PURE__ */ jsx_runtime4.jsxs("div", {
-        className: `absolute -top-4 left-0 right-0 z-10 flex h-4 cursor-move select-none items-center border border-b-0 border-slate-800 bg-slate-900/95 px-1 text-[10px] font-medium leading-none text-slate-400 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isActive || isConfirmingDelete ? "opacity-100" : "opacity-0"}`,
-        "data-workbench-node-header": "true",
-        onPointerDown: (event) => startNodeDrag(event, "move"),
-        title: "Drag to move",
-        children: [
-          /* @__PURE__ */ jsx_runtime4.jsx("span", {
-            className: "min-w-0 flex-1 truncate",
-            children: title ?? getNodeTypeLabel(element.kind)
-          }),
-          /* @__PURE__ */ jsx_runtime4.jsx("button", {
-            "aria-label": "Delete node",
-            className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-red-500/20 hover:text-red-200 focus:bg-red-500/20 focus:text-red-200 focus:outline-none",
-            type: "button",
-            onClick: (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setIsConfirmingDelete(true);
-            },
-            onPointerDown: (event) => event.stopPropagation(),
-            title: "Delete node",
-            children: /* @__PURE__ */ jsx_runtime4.jsx("svg", {
-              "aria-hidden": "true",
-              className: "h-2.5 w-2.5",
-              viewBox: "0 0 16 16",
-              fill: "none",
-              children: /* @__PURE__ */ jsx_runtime4.jsx("path", {
-                d: "M5.5 2.5h5M6.5 2.5l.4-1h2.2l.4 1M3.5 4h9M5 5.5v7m3-7v7m3-7v7M4.5 4l.5 10h6l.5-10",
-                stroke: "currentColor",
-                strokeLinecap: "round",
-                strokeLinejoin: "round",
-                strokeWidth: "1.2"
-              })
-            })
-          }),
-          element.kind === "component" ? /* @__PURE__ */ jsx_runtime4.jsx("button", {
-            "aria-label": "Enter detail mode",
-            className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-cyan-500/20 hover:text-cyan-100 focus:bg-cyan-500/20 focus:text-cyan-100 focus:outline-none",
-            "data-workbench-enter-full-viewport": "true",
-            onClick: (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            },
-            onDoubleClick: (event) => event.stopPropagation(),
-            onPointerDown: (event) => event.stopPropagation(),
-            title: "Enter detail mode",
-            type: "button",
-            children: /* @__PURE__ */ jsx_runtime4.jsx("svg", {
-              "aria-hidden": "true",
-              className: "h-2.5 w-2.5",
-              fill: "none",
-              viewBox: "0 0 16 16",
-              children: /* @__PURE__ */ jsx_runtime4.jsx("path", {
-                d: "M6 2H2v4M10 2h4v4M14 10v4h-4M6 14H2v-4",
-                stroke: "currentColor",
-                strokeLinecap: "round",
-                strokeLinejoin: "round",
-                strokeWidth: "1.4"
-              })
-            })
-          }) : null
-        ]
-      }) : null,
-      isConfirmingDelete && !isProjected ? /* @__PURE__ */ jsx_runtime4.jsxs("div", {
-        className: "absolute right-0 top-1 z-20 w-44 rounded-md border border-red-400/30 bg-slate-950/95 p-2 text-[11px] text-slate-200 shadow-2xl shadow-red-950/40",
-        role: "dialog",
-        "aria-label": "Confirm delete node",
-        onPointerDown: (event) => event.stopPropagation(),
-        onPointerMove: (event) => event.stopPropagation(),
-        onPointerUp: (event) => event.stopPropagation(),
-        children: [
-          /* @__PURE__ */ jsx_runtime4.jsx("div", {
-            className: "font-semibold text-red-100",
-            children: confirmingSelected ? `Delete ${selectedCount} selected nodes?` : "Delete this node?"
-          }),
-          /* @__PURE__ */ jsx_runtime4.jsx("div", {
-            className: "mt-0.5 truncate text-slate-400",
-            title: formatNodeTitle(title ?? getNodeTypeLabel(element.kind)),
-            children: formatNodeTitle(title ?? getNodeTypeLabel(element.kind))
-          }),
-          /* @__PURE__ */ jsx_runtime4.jsxs("div", {
-            className: "mt-2 flex justify-end gap-1.5",
-            children: [
-              /* @__PURE__ */ jsx_runtime4.jsx("button", {
-                className: "rounded border border-slate-700 px-2 py-0.5 text-slate-300 hover:border-slate-500 hover:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-400",
-                type: "button",
-                onClick: (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setIsConfirmingDelete(false);
-                },
-                children: "Cancel"
-              }),
-              /* @__PURE__ */ jsx_runtime4.jsx("button", {
-                className: "rounded border border-red-400/60 bg-red-500/20 px-2 py-0.5 font-semibold text-red-100 hover:bg-red-500/30 focus:outline-none focus:ring-1 focus:ring-red-300",
-                type: "button",
-                onClick: (event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  requestDelete();
-                },
-                children: "Delete"
-              })
-            ]
-          })
-        ]
       }) : null,
       /* @__PURE__ */ jsx_runtime4.jsx("div", {
         className: `relative flex h-full w-full flex-col ${contentOverflowClassName} border shadow-xl ${isSelected ? "ring-2 ring-cyan-300 ring-offset-1 ring-offset-slate-950" : ""} ${wrapperClassName}`,
@@ -13539,20 +13425,6 @@ function compareHandlesByAlignmentAndIndex(a, b) {
   if (alignmentDelta !== 0)
     return alignmentDelta;
   return (slotA?.index ?? 0) - (slotB?.index ?? 0);
-}
-function formatNodeTitle(title) {
-  return typeof title === "string" || typeof title === "number" ? title.toString() : "node";
-}
-function getNodeTypeLabel(kind) {
-  if (kind === "group")
-    return "Group";
-  if (kind === "comment")
-    return "Comment";
-  if (kind === "text-file")
-    return "Text file";
-  if (kind === "textarea")
-    return "Text";
-  return "Image";
 }
 
 // packages/react/src/WorkbenchAssetImage.tsx
@@ -24315,6 +24187,7 @@ function TextFileNode({ activeEdgeHandleSide, edgeHandles, element, isSelected, 
           ]
         }) : /* @__PURE__ */ jsx_runtime17.jsx(VaultFilePathInput, {
           extensions: [".md", ".txt"],
+          hideLabel: true,
           inputRef,
           label: "Text file path",
           listFiles: onTextFileList,
@@ -27735,7 +27608,7 @@ function BenchViewport({
   import_react9.useLayoutEffect(() => {
     lodRasterPyramid.updateScene(worldElements, scene.previewGroups ?? []);
   }, [lodRasterPyramid, scene.previewGroups, worldElements]);
-  const spatialIndex = import_react9.useMemo(() => buildSpatialIndex(worldElements, spatialCellSize), [worldElements]);
+  const spatialIndex = import_react9.useMemo(() => buildSpatialIndex(worldElements, spatialCellSize, elementTypeRegistry), [elementTypeRegistry, worldElements]);
   const sceneForBounds = import_react9.useMemo(() => ({ ...scene, elements: worldElements }), [worldElements, scene]);
   const sceneBounds = import_react9.useMemo(() => getSceneBounds(sceneForBounds, elementTypeRegistry), [elementTypeRegistry, sceneForBounds]);
   const minimapPreview = import_react9.useMemo(() => createMinimapPreview(worldElements, sceneBounds, elementTypeRegistry), [elementTypeRegistry, worldElements, sceneBounds]);
@@ -27907,17 +27780,17 @@ function BenchViewport({
       navigableElementsLatestRef.current = worldSceneElements;
       const focusElement = findFocusableElement(worldSceneElements, focusElementId);
       if (!focusElement && !isNewScene) {
-        setCurrentRenderPlan(computeRenderPlan(worldSceneElements, buildSpatialIndex(worldSceneElements, spatialCellSize), viewportLatestRef.current, rect, scene.previewGroups, lodRasterPyramid));
+        setCurrentRenderPlan(computeRenderPlan(worldSceneElements, buildSpatialIndex(worldSceneElements, spatialCellSize, elementTypeRegistry), viewportLatestRef.current, rect, scene.previewGroups, lodRasterPyramid));
         return;
       }
       lastViewportInitSceneIdRef.current = resetKey;
       const persistedViewport = !focusElement && !openViewportSource && persistenceStorageKey && viewportPersistenceStorageRef.current ? readPersistedViewport(viewportPersistenceStorageRef.current, persistenceStorageKey) : null;
-      const nextViewport = focusElement ? focusViewportSource ? getViewportForElementScreenRect(focusElement, focusViewportSource.sceneBounds, focusViewportSource.viewport, rect) : getViewportForBenchElementFocus(focusElement, rect) : openViewportSource ? openViewportSource.fitAfterLoad ? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect) : getViewportForBoundsInElementScreenRect(sceneBounds, openViewportSource.sourceElement, openViewportSource.viewport, rect) : persistedViewport ?? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect);
+      const nextViewport = focusElement ? focusViewportSource ? getViewportForElementScreenRect(focusElement, focusViewportSource.sceneBounds, focusViewportSource.viewport, rect) : getViewportForBenchElementFocus(focusElement, rect) : openViewportSource ? openViewportSource.fitAfterLoad ? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect) : getViewportForBoundsInElementScreenRect(openViewportSource.portalBounds ?? sceneBounds, openViewportSource.sourceElement, openViewportSource.viewport, rect) : persistedViewport ?? getViewportForBounds(getSceneBounds({ ...scene, elements: worldSceneElements }, elementTypeRegistry), rect);
       setViewport(nextViewport);
       setViewportState(nextViewport);
       benchNavigationZoomBaselineRef.current = nextViewport.zoom;
       lastRenderViewportRef.current = nextViewport;
-      setCurrentRenderPlan(computeRenderPlan(worldSceneElements, buildSpatialIndex(worldSceneElements, spatialCellSize), nextViewport, rect, scene.previewGroups, lodRasterPyramid));
+      setCurrentRenderPlan(computeRenderPlan(worldSceneElements, buildSpatialIndex(worldSceneElements, spatialCellSize, elementTypeRegistry), nextViewport, rect, scene.previewGroups, lodRasterPyramid));
       if (focusElement)
         queueMicrotask(() => onFocusElementApplied?.());
       if (!focusElement && openViewportSource)
@@ -28404,7 +28277,7 @@ function BenchViewport({
       const worldNextElements = resolveElementWorldPositions(applyRuntimeCodePreviews(nextElements, runtimeCodePreviews));
       lodRasterPyramid.updateScene(worldNextElements, scene.previewGroups ?? []);
       navigableElementsLatestRef.current = worldNextElements;
-      const nextSpatialIndex = buildSpatialIndex(worldNextElements, spatialCellSize);
+      const nextSpatialIndex = buildSpatialIndex(worldNextElements, spatialCellSize, elementTypeRegistry);
       lastRenderViewportRef.current = viewportLatestRef.current;
       setCurrentRenderPlan(computeRenderPlan(worldNextElements, nextSpatialIndex, viewportLatestRef.current, rect, scene.previewGroups, lodRasterPyramid));
     }
@@ -29029,19 +28902,20 @@ function BenchViewport({
             onDoubleClickCapture: (event) => {
               if (!event.currentTarget.contains(event.target))
                 return;
-              const target = event.target instanceof Element ? event.target : null;
-              const elementNode = target?.closest("[data-workbench-element-id]");
-              if (!elementNode)
+              const path = event.nativeEvent.composedPath();
+              if (path.some(isWorkbenchDoubleClickInteractiveTarget))
                 return;
-              const elementId = elementNode.getAttribute("data-workbench-element-id");
-              const host = elementNode.parentElement?.closest("[data-workbench-element-host]");
-              if (!elementId || !host || host.getAttribute("data-workbench-element-host") !== elementId || !event.currentTarget.contains(host))
+              const currentElements = getCurrentZoomOpenElements();
+              const host = path.find((candidate) => candidate instanceof HTMLElement && candidate.hasAttribute("data-workbench-element-host") && currentElements.some((element2) => element2.id === candidate.getAttribute("data-workbench-element-host")));
+              const elementId = host?.getAttribute("data-workbench-element-host");
+              if (!elementId || !host || !event.currentTarget.contains(host))
                 return;
-              const element = getCurrentZoomOpenElements().find((candidate) => candidate.id === elementId);
+              const element = currentElements.find((candidate) => candidate.id === elementId);
               event.preventDefault();
               event.stopPropagation();
               setAddNodeMenu(null);
-              if (element?.kind === "bench" && onBenchElementOpen) {
+              const requestsDetail = path.some((candidate) => candidate instanceof Element && candidate.getAttribute("data-workbench-element-header") === "true");
+              if (!requestsDetail && element?.kind === "bench" && onBenchElementOpen) {
                 openBenchElement(elementId);
                 return;
               }
@@ -30833,7 +30707,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         [data-workbench-transform-layer="true"][data-workbench-full-viewport-active="true"] {
           transform: none !important;
         }
-        [data-workbench-detail-render-root="true"] > [data-workbench-element-id] {
+        [data-workbench-detail-render-fill="true"] > * {
           bottom: 0 !important;
           height: 100% !important;
           left: 0 !important;
@@ -30864,17 +30738,31 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
         }
         const elementOpacity = item.element.id.includes("::") ? nestedElementOpacity : 1;
         const isDetailElement = fullViewportElementHostId === item.element.id;
+        const isProjectedElement = "benchTransform" in item.element && Boolean(item.element.benchTransform);
         if (wireframe && item.element.kind !== "actor" && !isDetailElement) {
-          return /* @__PURE__ */ jsx_runtime20.jsx("div", {
-            className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
+          return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+            className: "group absolute left-0 top-0 h-0 w-0 overflow-visible",
+            "data-workbench-element-host": item.element.id,
             "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
             "data-workbench-stack-index": elementZIndexes.get(item.element.id),
             style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
-            children: /* @__PURE__ */ jsx_runtime20.jsx(WireframeElement, {
-              element: item.element,
-              label: wireframeLabels?.get(item.element.id) ?? getWireframeAssetLabel(item.element),
-              viewportZoom
-            })
+            children: [
+              !isProjectedElement ? /* @__PURE__ */ jsx_runtime20.jsx(ElementHeader, {
+                element: item.element,
+                elementTypeRegistry,
+                isSelected: selectedIds.has(item.element.id),
+                label: elementTypeRegistry.getForElement(item.element).label,
+                onDelete: onElementDelete,
+                onEnterDetail: onFullViewportEnter,
+                onMoveStart: onElementMoveStart,
+                selectedCount: selectedIds.size
+              }) : null,
+              /* @__PURE__ */ jsx_runtime20.jsx(WireframeElement, {
+                element: item.element,
+                label: wireframeLabels?.get(item.element.id) ?? getWireframeAssetLabel(item.element),
+                viewportZoom
+              })
+            ]
           }, item.element.id);
         }
         const renderElement = (detail) => /* @__PURE__ */ jsx_runtime20.jsx(ElementRenderBoundary, {
@@ -30908,7 +30796,7 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           })
         });
         return /* @__PURE__ */ jsx_runtime20.jsxs("div", {
-          className: "absolute left-0 top-0 h-0 w-0 overflow-visible",
+          className: "group absolute left-0 top-0 h-0 w-0 overflow-visible",
           "data-workbench-element-host": item.element.id,
           "data-workbench-nested-element-opacity": item.element.id.includes("::") ? "true" : undefined,
           "data-workbench-stack-index": elementZIndexes.get(item.element.id),
@@ -30922,6 +30810,16 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
           },
           style: { opacity: elementOpacity, zIndex: elementZIndexes.get(item.element.id) },
           children: [
+            !isProjectedElement ? /* @__PURE__ */ jsx_runtime20.jsx(ElementHeader, {
+              element: item.element,
+              elementTypeRegistry,
+              isSelected: selectedIds.has(item.element.id),
+              label: elementTypeRegistry.getForElement(item.element).label,
+              onDelete: onElementDelete,
+              onEnterDetail: onFullViewportEnter,
+              onMoveStart: onElementMoveStart,
+              selectedCount: selectedIds.size
+            }) : null,
             renderElement(false),
             isDetailElement && detailPortalTarget ? import_react_dom.createPortal(/* @__PURE__ */ jsx_runtime20.jsx("div", {
               className: "absolute inset-0 overflow-hidden",
@@ -30940,7 +30838,11 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
               onWheel: (event) => event.stopPropagation(),
               children: /* @__PURE__ */ jsx_runtime20.jsx(NodePresentationContext.Provider, {
                 value: "detail",
-                children: renderElement(true)
+                children: /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                  "data-workbench-detail-render-fill": "true",
+                  style: { height: "100%", inset: 0, position: "absolute", width: "100%" },
+                  children: renderElement(true)
+                })
               })
             }), detailPortalTarget) : null
           ]
@@ -30963,6 +30865,169 @@ var ViewportElementLayer = import_react9.memo(function ViewportElementLayer2({
     ]
   });
 });
+function ElementHeader({
+  element,
+  elementTypeRegistry,
+  isSelected,
+  label,
+  onDelete,
+  onEnterDetail,
+  onMoveStart,
+  selectedCount
+}) {
+  const [isConfirmingDelete, setIsConfirmingDelete] = import_react9.useState(false);
+  const headerRef = import_react9.useRef(null);
+  const frame = getElementHeaderFrame(element, elementTypeRegistry);
+  const { width, x, y } = frame;
+  const title = getElementHeaderTitle(element, label);
+  import_react9.useEffect(() => {
+    if (!isConfirmingDelete)
+      return;
+    const dismissOutside = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (headerRef.current && target && !headerRef.current.contains(target) && !target.closest('[data-workbench-delete-confirmation="true"]'))
+        setIsConfirmingDelete(false);
+    };
+    document.addEventListener("pointerdown", dismissOutside, true);
+    return () => document.removeEventListener("pointerdown", dismissOutside, true);
+  }, [isConfirmingDelete]);
+  return /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
+    children: [
+      /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        className: `absolute z-20 flex h-4 cursor-move select-none items-center border border-b-0 border-slate-800 bg-slate-900/95 px-1 text-[10px] font-medium leading-none text-slate-400 shadow-xl transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 ${isSelected || isConfirmingDelete ? "opacity-100" : "opacity-0"}`,
+        "data-workbench-element-header": "true",
+        "data-workbench-node-header": "true",
+        ref: headerRef,
+        onDoubleClick: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onEnterDetail(element.id);
+        },
+        onPointerDown: (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onMoveStart?.(element.id, event.nativeEvent, {
+            minHeight: element.kind === "textarea" || element.kind === "comment" ? textareaNodeMinHeight : defaultNodeMinHeight,
+            minWidth: defaultNodeMinWidth
+          });
+        },
+        style: { height: 16, left: x, top: y - 16, width },
+        title: "Drag to move; double-click for Detail",
+        children: [
+          /* @__PURE__ */ jsx_runtime20.jsx("span", {
+            className: "min-w-0 flex-1 truncate",
+            children: title
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-label": "Enter detail mode",
+            className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-cyan-500/20 hover:text-cyan-100 focus:bg-cyan-500/20 focus:text-cyan-100 focus:outline-none",
+            "data-workbench-enter-full-viewport": "true",
+            onClick: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            },
+            onDoubleClick: (event) => event.stopPropagation(),
+            onPointerDown: (event) => event.stopPropagation(),
+            title: "Enter detail mode",
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsx("svg", {
+              "aria-hidden": "true",
+              className: "h-2.5 w-2.5",
+              fill: "none",
+              viewBox: "0 0 16 16",
+              children: /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                d: "M6 2H2v4M10 2h4v4M14 10v4h-4M6 14H2v-4",
+                stroke: "currentColor",
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "1.4"
+              })
+            })
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-label": "Delete node",
+            className: "ml-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center text-slate-500 hover:bg-red-500/20 hover:text-red-200 focus:bg-red-500/20 focus:text-red-200 focus:outline-none",
+            onClick: (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              setIsConfirmingDelete(true);
+            },
+            onDoubleClick: (event) => event.stopPropagation(),
+            onPointerDown: (event) => event.stopPropagation(),
+            title: "Delete node",
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsx("svg", {
+              "aria-hidden": "true",
+              className: "h-2.5 w-2.5",
+              fill: "none",
+              viewBox: "0 0 16 16",
+              children: /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                d: "M5.5 2.5h5M6.5 2.5l.4-1h2.2l.4 1M3.5 4h9M5 5.5v7m3-7v7m3-7v7M4.5 4l.5 10h6l.5-10",
+                stroke: "currentColor",
+                strokeLinecap: "round",
+                strokeLinejoin: "round",
+                strokeWidth: "1.2"
+              })
+            })
+          })
+        ]
+      }),
+      isConfirmingDelete ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        "aria-label": "Confirm delete node",
+        className: "absolute z-30 w-44 rounded-md border border-red-400/30 bg-slate-950/95 p-2 text-[11px] text-slate-200 shadow-2xl shadow-red-950/40",
+        "data-workbench-delete-confirmation": "true",
+        onDoubleClick: (event) => event.stopPropagation(),
+        onPointerDown: (event) => event.stopPropagation(),
+        onPointerMove: (event) => event.stopPropagation(),
+        onPointerUp: (event) => event.stopPropagation(),
+        role: "dialog",
+        style: { left: x + Math.max(0, width - 176), top: y + 4 },
+        children: [
+          /* @__PURE__ */ jsx_runtime20.jsx("div", {
+            className: "font-semibold text-red-100",
+            children: isSelected && selectedCount > 1 ? `Delete ${selectedCount} selected nodes?` : "Delete this node?"
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsx("div", {
+            className: "mt-0.5 truncate text-slate-400",
+            title,
+            children: title
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+            className: "mt-2 flex justify-end gap-1.5",
+            children: [
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                className: "rounded border border-slate-700 px-2 py-0.5 text-slate-300 hover:border-slate-500 hover:bg-slate-800",
+                onClick: () => setIsConfirmingDelete(false),
+                type: "button",
+                children: "Cancel"
+              }),
+              /* @__PURE__ */ jsx_runtime20.jsx("button", {
+                className: "rounded border border-red-400/60 bg-red-500/20 px-2 py-0.5 font-semibold text-red-100 hover:bg-red-500/30",
+                onClick: () => onDelete(element.id),
+                type: "button",
+                children: "Delete"
+              })
+            ]
+          })
+        ]
+      }) : null
+    ]
+  });
+}
+function getElementHeaderFrame(element, elementTypeRegistry) {
+  if (!("height" in element) || !("width" in element)) {
+    return { height: getElementHeight(element, elementTypeRegistry), width: getElementWidth(element, elementTypeRegistry), x: element.x, y: element.y };
+  }
+  const minimums = element.kind === "textarea" || element.kind === "comment" ? { minHeight: 24, minWidth: 1 } : element.kind === "bench" ? { minHeight: 120, minWidth: 160 } : element.kind === "directory" ? { minHeight: 160, minWidth: 240 } : element.kind === "physics-layout" ? { minHeight: 140, minWidth: 260 } : { minHeight: defaultNodeMinHeight, minWidth: defaultNodeMinWidth };
+  return getNodeWrapperFrame(element, minimums);
+}
+function getElementHeaderTitle(element, fallback) {
+  if (element.kind === "component")
+    return element.path ?? element.componentTypeId ?? fallback;
+  if ("label" in element && typeof element.label === "string" && element.label)
+    return element.label;
+  return fallback;
+}
 
 class ElementRenderBoundary extends import_react9.Component {
   state = { hasError: false };
@@ -31063,16 +31128,16 @@ function computeRenderPlan(elements, spatialIndex, viewport, rect, previewGroups
   if (tileSize !== null) {
     return preserveSemanticActorsInPreviewPlan(computePreviewTilePlan(spatialIndex, bounds, tileSize), elements);
   }
-  const visibleElements = collectVisibleElements(cells, bounds);
+  const visibleElements = collectVisibleElements(cells, bounds, spatialIndex.elementTypeRegistry);
   warmPreviewTileCache(spatialIndex, bounds, spatialCellSize, maxWarmPreviewTiles);
   const plan = [];
   let fullCount = 0;
   for (const element of visibleElements) {
     const lod = getElementLod({
       fullCount,
-      height: getElementHeight(element),
+      height: getElementHeight(element, spatialIndex.elementTypeRegistry),
       maxFullElements,
-      width: getElementWidth(element),
+      width: getElementWidth(element, spatialIndex.elementTypeRegistry),
       zoom: viewport.zoom
     });
     if (lod === "full")
@@ -31123,7 +31188,7 @@ function computeVirtualGroupPreviewPlan(elements, spatialIndex, groups, zoom, vi
     spatialIndex.previewTileCache.set(id, item);
     plan.push(item);
   }
-  const visibleElements = collectVisibleElements(querySpatialCells(spatialIndex, visibleBounds), visibleBounds);
+  const visibleElements = collectVisibleElements(querySpatialCells(spatialIndex, visibleBounds), visibleBounds, spatialIndex.elementTypeRegistry);
   plan.push(...createUncoveredVirtualPreviewItems(visibleElements, coveredElementIds, zoom, rasterSource));
   return plan;
 }
@@ -31186,7 +31251,7 @@ function countCellElements(cells) {
     count += cell.elements.length;
   return count;
 }
-function collectVisibleElements(cells, bounds) {
+function collectVisibleElements(cells, bounds, elementTypeRegistry = defaultElementTypeRegistry) {
   const elements = [];
   const seen = new Set;
   for (const cell of cells) {
@@ -31194,7 +31259,7 @@ function collectVisibleElements(cells, bounds) {
       if (seen.has(element.id))
         continue;
       seen.add(element.id);
-      if (elementIntersects(element, bounds))
+      if (elementIntersects(element, bounds, elementTypeRegistry))
         elements.push(element);
     }
   }
@@ -31241,7 +31306,7 @@ function getOrCreatePreviewTile(spatialIndex, tileBounds, tileSize, tileX, tileY
   const cached = spatialIndex.previewTileCache.get(id);
   if (cached)
     return cached;
-  const elements = collectVisibleElements(querySpatialCells(spatialIndex, tileBounds), tileBounds);
+  const elements = collectVisibleElements(querySpatialCells(spatialIndex, tileBounds), tileBounds, spatialIndex.elementTypeRegistry);
   if (!elements.length)
     return null;
   const item = {
@@ -31252,7 +31317,7 @@ function getOrCreatePreviewTile(spatialIndex, tileBounds, tileSize, tileX, tileY
     width: tileSize,
     height: tileSize,
     count: elements.length,
-    previewImage: createAggregatePreview(elements.filter((element) => element.kind !== "actor"), tileBounds)
+    previewImage: createAggregatePreview(elements.filter((element) => element.kind !== "actor"), tileBounds, spatialIndex.elementTypeRegistry)
   };
   spatialIndex.previewTileCache.set(id, item);
   return item;
@@ -31326,6 +31391,11 @@ function isWorkbenchInteractionElement(target) {
     return false;
   return Boolean(target.closest(WORKBENCH_INTERACTION_SELECTOR));
 }
+function isWorkbenchDoubleClickInteractiveTarget(target) {
+  if (!(target instanceof Element))
+    return false;
+  return target.matches("input, textarea, select, button, a[href], iframe, embed, object, [contenteditable]:not([contenteditable='false']), [data-workbench-no-detail], [data-workbench-delete-confirmation='true'], [data-edge-handle], [aria-label='Resize node']");
+}
 function isElementInteractionTarget(target) {
   const closest = target?.closest;
   if (typeof closest !== "function" || closest.call(target, "[data-workbench-canvas-backdrop='true']"))
@@ -31375,8 +31445,8 @@ function createAggregatePreview(elements, bounds, elementTypeRegistry = defaultE
   const dots = sampleEvenly2(elements, aggregatePreviewSamples).map((element) => {
     if (element.kind === "text-file")
       return createTextFileAggregateFootprint(element, bounds, width, height);
-    const cx = ((element.x + getElementWidth(element) / 2 - bounds.minX) / width * 100).toFixed(1);
-    const cy = ((element.y + getElementHeight(element) / 2 - bounds.minY) / height * 100).toFixed(1);
+    const cx = ((element.x + getElementWidth(element, elementTypeRegistry) / 2 - bounds.minX) / width * 100).toFixed(1);
+    const cy = ((element.y + getElementHeight(element, elementTypeRegistry) / 2 - bounds.minY) / height * 100).toFixed(1);
     const { color, radius } = getElementPreviewStyle(element, "aggregate", elementTypeRegistry);
     return `<circle cx="${cx}" cy="${cy}" r="${radius.toFixed(1)}" fill="${color}" fill-opacity="0.82"/>`;
   }).join("");
@@ -31414,8 +31484,8 @@ function createMinimapPreview(elements, bounds, elementTypeRegistry = defaultEle
   const footprints = sampleEvenly2(elements, minimapPreviewSamples).map((element) => {
     const x = ((element.x - bounds.minX) / width * 100).toFixed(2);
     const y = ((element.y - bounds.minY) / height * 100).toFixed(2);
-    const w = Math.max(0.45, getElementWidth(element) / width * 100).toFixed(2);
-    const h = Math.max(0.45, getElementHeight(element) / height * 100).toFixed(2);
+    const w = Math.max(0.45, getElementWidth(element, elementTypeRegistry) / width * 100).toFixed(2);
+    const h = Math.max(0.45, getElementHeight(element, elementTypeRegistry) / height * 100).toFixed(2);
     const { color } = getElementPreviewStyle(element, "minimap", elementTypeRegistry);
     return `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="0.55" fill="${color}" fill-opacity="0.34" stroke="#67e8f9" stroke-opacity="0.50" stroke-width="0.32"/>`;
   }).join("");
@@ -31427,13 +31497,13 @@ function getElementPreviewStyle(element, purpose, elementTypeRegistry) {
     return elementTypeRegistry.getPreviewStyle(element, purpose);
   return elementTypeRegistry.get(`component:${element.componentTypeId}`)?.getPreviewStyle(element, purpose) ?? { color: "#22d3ee", radius: 2 };
 }
-function buildSpatialIndex(elements, cellSize) {
+function buildSpatialIndex(elements, cellSize, elementTypeRegistry = defaultElementTypeRegistry) {
   const cells = new Map;
   for (const element of elements) {
     const minCellX = Math.floor(element.x / cellSize);
     const minCellY = Math.floor(element.y / cellSize);
-    const maxCellX = Math.floor((element.x + getElementWidth(element)) / cellSize);
-    const maxCellY = Math.floor((element.y + getElementHeight(element)) / cellSize);
+    const maxCellX = Math.floor((element.x + getElementWidth(element, elementTypeRegistry)) / cellSize);
+    const maxCellY = Math.floor((element.y + getElementHeight(element, elementTypeRegistry)) / cellSize);
     for (let cellX = minCellX;cellX <= maxCellX; cellX += 1) {
       for (let cellY = minCellY;cellY <= maxCellY; cellY += 1) {
         const key = `${cellX}:${cellY}`;
@@ -31453,7 +31523,7 @@ function buildSpatialIndex(elements, cellSize) {
       }
     }
   }
-  return { cellSize, cells, previewTileCache: new Map };
+  return { cellSize, cells, elementTypeRegistry, previewTileCache: new Map };
 }
 function querySpatialCells(index2, bounds) {
   const cells = [];
@@ -31575,12 +31645,12 @@ function getElementHeight(element, elementTypeRegistry = defaultElementTypeRegis
 function shouldResetViewportInteraction(previousResetKey, nextResetKey) {
   return previousResetKey !== nextResetKey;
 }
-function elementIntersects(element, bounds) {
+function elementIntersects(element, bounds, elementTypeRegistry = defaultElementTypeRegistry) {
   return intersects({
     minX: element.x,
     minY: element.y,
-    maxX: element.x + getElementWidth(element),
-    maxY: element.y + getElementHeight(element)
+    maxX: element.x + getElementWidth(element, elementTypeRegistry),
+    maxY: element.y + getElementHeight(element, elementTypeRegistry)
   }, bounds);
 }
 function intersects(a, b) {
@@ -33980,6 +34050,74 @@ function getBenchElementNumber(element, key) {
   const value = element[key];
   return typeof value === "number" ? value : undefined;
 }
+var NESTED_NAVIGATION_SCENARIOS = [
+  { id: "nested-nav-forced-zoom-in", navigationType: "forced-zoom-in", goal: "Forced zoom-in installs the child without a component jump", expectedMinimumTransitions: 3, expectedMinimumChecks: 5 },
+  { id: "nested-nav-double-click", navigationType: "double-click", goal: "Direct double-click retains the parent then fits the child", expectedMinimumTransitions: 3, expectedMinimumChecks: 5 },
+  { id: "nested-nav-load-enter-continuity", navigationType: "projected-enter", goal: "Loaded projected child maps continuously into its active native identity", expectedMinimumTransitions: 5, expectedMinimumChecks: 7 },
+  { id: "nested-nav-in-child-zoom-continuity", navigationType: "in-child-zoom", goal: "Ordinary zoom inside an entered loaded child remains continuous", expectedMinimumTransitions: 3, expectedMinimumChecks: 6 },
+  { id: "nested-nav-forced-zoom-out", navigationType: "forced-zoom-out", goal: "Forced parent return preserves child-to-preview continuity", expectedMinimumTransitions: 6, expectedMinimumChecks: 7 },
+  { id: "nested-nav-breadcrumb-return", navigationType: "breadcrumb", goal: "Breadcrumb return selects the exact ancestor traversal", expectedMinimumTransitions: 6, expectedMinimumChecks: 7 },
+  { id: "nested-nav-same-path-recursion", navigationType: "same-path-recursion", goal: "Same-path recursive entries retain distinct traversal instances", expectedMinimumTransitions: 6, expectedMinimumChecks: 7 },
+  { id: "nested-nav-sibling-aliases", navigationType: "sibling-alias", goal: "Sibling aliases share a resource but not traversal identity", expectedMinimumTransitions: 9, expectedMinimumChecks: 9 },
+  { id: "nested-nav-stale-supersession", navigationType: "supersession", goal: "Late superseded navigation results are inert", expectedMinimumTransitions: 5, expectedMinimumChecks: 8 }
+];
+function mapProjectedIdIntoActiveBench(projectedId, projectionOwnerId) {
+  const prefix2 = `${projectionOwnerId}::`;
+  return projectedId.startsWith(prefix2) ? projectedId.slice(prefix2.length) : null;
+}
+function compareNavigationRects(before, after) {
+  const centerX = after.left + after.width / 2 - (before.left + before.width / 2);
+  const centerY = after.top + after.height / 2 - (before.top + before.height / 2);
+  const width = after.width - before.width;
+  const height = after.height - before.height;
+  return { centerX, centerY, width, height, maxPx: Math.max(Math.abs(centerX), Math.abs(centerY), Math.abs(width), Math.abs(height)) };
+}
+function getAggregateNavigationRect(rects) {
+  const values = [...rects];
+  if (!values.length)
+    throw new Error("Cannot aggregate an empty navigation rect collection");
+  const left = Math.min(...values.map((rect) => rect.left));
+  const top = Math.min(...values.map((rect) => rect.top));
+  const right = Math.max(...values.map((rect) => rect.left + rect.width));
+  const bottom = Math.max(...values.map((rect) => rect.top + rect.height));
+  return { left, top, width: right - left, height: bottom - top };
+}
+function compareRelativeNavigationRect(before, beforeAggregate, after, afterAggregate) {
+  const scaleX = afterAggregate.width / Math.max(1, beforeAggregate.width);
+  const scaleY = afterAggregate.height / Math.max(1, beforeAggregate.height);
+  const expected = {
+    left: afterAggregate.left + (before.left - beforeAggregate.left) * scaleX,
+    top: afterAggregate.top + (before.top - beforeAggregate.top) * scaleY,
+    width: before.width * scaleX,
+    height: before.height * scaleY
+  };
+  return compareNavigationRects(expected, after);
+}
+function classifyNestedNavigationTransition(previous, current) {
+  if (current.phase === previous.phase || current.phase === "initial" || current.phase === "open-pending" || current.phase === "settled" || current.phase === "error")
+    return null;
+  return { sequence: current.sequence, type: current.phase, fromFrame: previous.frame, toFrame: current.frame, sourceTraversalKey: previous.identity.renderedTraversalKey, targetTraversalKey: current.identity.requestedTraversalKey, sourcePath: previous.identity.renderedCanonicalPath, targetPath: current.identity.requestedCanonicalPath, ok: true };
+}
+function finalizeNestedNavigationReport(spec, frames, transitions, suppliedChecks, failure) {
+  const checks = [...suppliedChecks];
+  checks.push({ sequence: checks.length, code: "minimum-transitions", phase: "finalize", ok: transitions.length >= spec.expectedMinimumTransitions, expected: `>=${spec.expectedMinimumTransitions}`, actual: String(transitions.length), tolerance: 0 });
+  checks.push({ sequence: checks.length, code: "minimum-checks", phase: "finalize", ok: suppliedChecks.length >= spec.expectedMinimumChecks, expected: `>=${spec.expectedMinimumChecks}`, actual: String(suppliedChecks.length), tolerance: 0 });
+  const continuity = checks.filter((check) => check.code.includes("continuity") || check.code.includes("jump")).reduce((worst, check) => Math.max(worst, Number(check.actual) || 0), 0);
+  const ok = !failure && checks.every((check) => check.ok) && transitions.every((transition) => transition.ok);
+  return { schemaVersion: 1, scenarioId: spec.id, navigationGoal: spec.goal, status: ok ? "PASS" : "FAIL", ok, expectedMinimumTransitions: spec.expectedMinimumTransitions, actualTransitionCount: transitions.length, frameCount: frames.length, transitions, frames, checks, worst: { continuityDeltaPx: continuity, unexpectedFrameJumpPx: continuity }, ...failure ? { failure } : {} };
+}
+function createNestedNavigationFailureReport(spec, caught, frames, transitions) {
+  const error = caught instanceof Error ? caught : new Error(String(caught));
+  const check = { sequence: 0, code: "caught-error", phase: "error", ok: false, expected: "no error", actual: error.message, tolerance: 0 };
+  return finalizeNestedNavigationReport(spec, frames, transitions, [check], { code: "caught-error", phase: "error", message: error.message, stack: error.stack });
+}
+function createNavigationSnapshot(input) {
+  return {
+    ...input,
+    identity: { ...input.identity, stack: [...input.identity.stack].sort((left, right) => left.depth - right.depth) },
+    elements: [...input.elements].sort((left, right) => left.id.localeCompare(right.id))
+  };
+}
 var NESTED_BENCH_ALIGNMENT_STRESS_STEPS = [
   { elementId: "bench:spiral:level-2", fromPath: "tests/nested/isolated-spiral/root.bench.hjson", position: "top-left", toPath: "./tests/nested/isolated-spiral/level-2.bench.hjson" },
   { elementId: "bench:spiral:level-3", fromPath: "./tests/nested/isolated-spiral/level-2.bench.hjson", position: "top-right", toPath: "./tests/nested/isolated-spiral/level-3.bench.hjson" },
@@ -34013,6 +34151,30 @@ function createBrowserScriptCheck(phase, ok, frame, detail = ok ? "PASS" : "FAIL
   const rect = new DOMRect(0, 0, 0, 0);
   return { frame, from: detail, jump: { centerX: 0, centerY: 0, height: 0, max: ok ? 0 : 1, width: 0 }, ok, phase, screenAfter: toBrowserStressRect(rect), screenBefore: toBrowserStressRect(rect), to: detail };
 }
+function shouldSuppressActiveBenchLoadAfterStressInstall(activePath, installedPath) {
+  return activePath !== installedPath;
+}
+function createBrowserStressFailureReport(caught, frameCount, transitions) {
+  const detail = caught instanceof Error ? caught.message : "Browser nested bench stress failed";
+  const emptyRect = { bottom: 0, height: 0, left: 0, right: 0, top: 0, width: 0 };
+  const failure = {
+    frame: frameCount,
+    from: detail,
+    jump: { centerX: 0, centerY: 0, height: 0, max: 1, width: 0 },
+    ok: false,
+    phase: "browser stress runner error",
+    screenAfter: emptyRect,
+    screenBefore: emptyRect,
+    to: detail
+  };
+  const failedTransitions = [...transitions, failure];
+  return {
+    frameCount,
+    ok: false,
+    transitions: failedTransitions,
+    worstJump: failedTransitions.reduce((worst, transition) => Math.max(worst, transition.jump.max), 0)
+  };
+}
 function createActiveBenchBreadcrumbItems(stack, activePath) {
   return [
     ...stack.map((entry, index2) => ({ isCurrent: false, label: entry.path, path: entry.path, stackIndex: index2 })),
@@ -34032,8 +34194,11 @@ function createOpenedBenchStack(stack, currentPath, element) {
 function createActiveBenchAncestorPaths(_activePath, _stack) {
   return [];
 }
-function createActiveBenchLoadKey(activePath, _stack) {
-  return activePath;
+function createActiveBenchLoadKey(activePath, stack) {
+  return JSON.stringify([
+    ...stack.map((entry) => [entry.path, entry.benchElementId]),
+    [activePath]
+  ]);
 }
 function shouldSkipBenchBreadcrumbClick(_activeBenchPath, stack, stackIndex) {
   return stackIndex >= stack.length;
@@ -34056,6 +34221,7 @@ function getBenchPreviewWritePlans(activeBenchPath, rootBench, nestedBenches = n
   return plans;
 }
 var scenarios = [
+  ...NESTED_NAVIGATION_SCENARIOS.map((scenario) => ({ id: scenario.id, name: scenario.id.replace(/^nested-nav-/, "Nested navigation · ").replace(/-/g, " "), description: scenario.goal })),
   {
     id: "bootstrap",
     name: "Bootstrap · Connect Realm",
@@ -34158,6 +34324,15 @@ var scenarios = [
   }
 ];
 var scenarioBenchPaths = {
+  "nested-nav-forced-zoom-in": "tests/nested/isolated-nav-forced-zoom-in/root.bench.hjson",
+  "nested-nav-double-click": "tests/nested/isolated-nav-double-click/root.bench.hjson",
+  "nested-nav-load-enter-continuity": "tests/nested/isolated-nav-load-enter/root.bench.hjson",
+  "nested-nav-in-child-zoom-continuity": "tests/nested/isolated-nav-in-child-zoom/root.bench.hjson",
+  "nested-nav-forced-zoom-out": "tests/nested/isolated-nav-forced-zoom-out/root.bench.hjson",
+  "nested-nav-breadcrumb-return": "tests/nested/isolated-nav-breadcrumb/root.bench.hjson",
+  "nested-nav-same-path-recursion": "tests/nested/isolated-nav-same-path/root.bench.hjson",
+  "nested-nav-sibling-aliases": "tests/nested/isolated-nav-sibling-aliases/root.bench.hjson",
+  "nested-nav-stale-supersession": "tests/nested/isolated-nav-supersession/root.bench.hjson",
   "main-bench": "main.bench.hjson",
   "nested-bench-basic": "tests/nested/root-basic.bench.hjson",
   "nested-bench-alignment-measure": "tests/nested/root-alignment-measure.bench.hjson",
@@ -34354,6 +34529,7 @@ function isWorkbenchInitialViewSourceAvailable(bootstrap) {
   return source?.kind === "bench-files" && source.status === "connected" && source.vaultIds.includes(bootstrap.initialView.resource.vaultId);
 }
 var scriptedNestedBenchScenarioIds = new Set([
+  ...NESTED_NAVIGATION_SCENARIOS.map((scenario) => scenario.id),
   "nested-bench-spiral-alignment",
   "nested-bench-zoom-coverage-threshold",
   "nested-bench-runtime-child-coverage",
@@ -34967,6 +35143,7 @@ async function createEmptyBenchFile(path, vaultFiles) {
 function hasStableBenchRecordIds(bench) {
   return [bench.elements ?? [], bench.edges ?? []].every((records) => records.every((record) => typeof record.id === "string" && record.id.length > 0));
 }
+var EMPTY_DIRECTORY_MOUNT_AUTHORITIES = [];
 function createWorkbenchLoadRecoveryLifecycle({
   maxRetries = 3,
   retryDelayMs = 500,
@@ -35035,7 +35212,7 @@ function WorkbenchViewportRecoveryFrame({ children, status }) {
     ]
   });
 }
-function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, loadRecoveryOptions, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
+function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = EMPTY_DIRECTORY_MOUNT_AUTHORITIES, elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, loadRecoveryOptions, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
   const vaultFiles = import_react13.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
   const assetTransport = import_react13.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
@@ -35050,12 +35227,17 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   const [activeBenchPath, setActiveBenchPath] = import_react13.useState(restoredBenchNavigation?.activeBenchPath ?? benchPath);
   const [activeBenchStack, setActiveBenchStack] = import_react13.useState(restoredBenchNavigation?.activeBenchStack ?? []);
   const activeBenchLoadKey = createActiveBenchLoadKey(activeBenchPath, activeBenchStack);
+  const [pendingBenchOpen, setPendingBenchOpen] = import_react13.useState(null);
+  const requestedBenchPath = pendingBenchOpen?.path ?? activeBenchPath;
+  const requestedBenchStack = pendingBenchOpen?.stack ?? activeBenchStack;
+  const requestedBenchLoadKey = createActiveBenchLoadKey(requestedBenchPath, requestedBenchStack);
   const [focusElementId, setFocusElementId] = import_react13.useState();
   const [focusViewportSource, setFocusViewportSource] = import_react13.useState();
   const [openViewportSource, setOpenViewportSource] = import_react13.useState();
   const [scenario, setScenario] = import_react13.useState(null);
   const [status, setStatus] = import_react13.useState(`Loading ${benchPath}…`);
   const [browserStressReport, setBrowserStressReport] = import_react13.useState(null);
+  const [navigationReport, setNavigationReport] = import_react13.useState(null);
   const [browserStressRunning, setBrowserStressRunning] = import_react13.useState(false);
   const [debugMenuRequested, setDebugMenuRequested] = import_react13.useState(false);
   const [debugPanelRequested, setDebugPanelRequested] = import_react13.useState(() => getStoredBenchDebugBoolean(typeof window === "undefined" ? undefined : window.localStorage, WORKBENCH_DEBUG_PANEL_STORAGE_KEY, false));
@@ -35089,10 +35271,18 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
   const benchRef = import_react13.useRef(null);
   const rootAppearanceSnapshotRef = import_react13.useRef(null);
   const scenarioRef = import_react13.useRef(null);
-  const loadRecoveryLifecycle = import_react13.useMemo(() => createWorkbenchLoadRecoveryLifecycle(loadRecoveryOptions), [loadRecoveryOptions]);
+  const loadRecoveryMaxRetries = loadRecoveryOptions?.maxRetries;
+  const loadRecoveryRetryDelayMs = loadRecoveryOptions?.retryDelayMs;
+  const loadRecoveryScheduleRetry = loadRecoveryOptions?.scheduleRetry;
+  const loadRecoveryLifecycle = import_react13.useMemo(() => createWorkbenchLoadRecoveryLifecycle({
+    maxRetries: loadRecoveryMaxRetries,
+    retryDelayMs: loadRecoveryRetryDelayMs,
+    scheduleRetry: loadRecoveryScheduleRetry
+  }), [loadRecoveryMaxRetries, loadRecoveryRetryDelayMs, loadRecoveryScheduleRetry]);
   const activeBenchPathRef = import_react13.useRef(activeBenchPath);
   activeBenchPathRef.current = activeBenchPath;
   const activeBenchCanonicalPathRef = import_react13.useRef(activeBenchPath);
+  const loadedActiveBenchInstanceKeyRef = import_react13.useRef(activeBenchLoadKey);
   const benchBaseContentRef = import_react13.useRef(undefined);
   const benchEtagRef = import_react13.useRef("");
   const textFileEtagsRef = import_react13.useRef(new Map);
@@ -35119,7 +35309,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     directoryHydrationGenerationRef.current += 1;
     let cancelled = false;
-    loadMainBenchRuntime(activeBenchLoadKey, scenarioId, [], benchPreviewFormat, vaultFiles, 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
+    loadMainBenchRuntime(requestedBenchPath, scenarioId, [], benchPreviewFormat, vaultFiles, 0).then(async (loaded) => ({ ...loaded, scenario: await hydrateDirectoryMounts(loaded.scenario, pluginRegistry, directoryMountAuthorities, apiBaseUrl, fetcher) })).then((loaded) => {
       if (cancelled)
         return;
       restoredNestedNavigationPendingRef.current = false;
@@ -35127,13 +35317,24 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       benchRef.current = loaded.parseError ? null : loaded.bench;
       rootAppearanceSnapshotRef.current = loaded.parseError ? null : loaded.bench;
       activeBenchCanonicalPathRef.current = loaded.benchPath;
+      loadedActiveBenchInstanceKeyRef.current = requestedBenchLoadKey;
       benchBaseContentRef.current = hasStableBenchRecordIds(loaded.bench) ? loaded.benchContent : undefined;
       loadedNestedBenchesRef.current = new Map(loaded.nestedBenches);
       nestedAppearanceSnapshotsRef.current = new Map(loaded.nestedBenches);
       benchEtagRef.current = loaded.benchEtag;
       textFileEtagsRef.current = new Map(loaded.scenario.elements.flatMap((element) => element.kind === "text-file" && element.resourceRevision ? [[element.resourcePath ?? element.path, element.resourceRevision]] : []));
-      const loadState = loadRecoveryLifecycle.succeed(loaded.scenario, `Loaded ${activeBenchLoadKey} from the main vault.`);
+      const loadState = loadRecoveryLifecycle.succeed(loaded.scenario, `Loaded ${requestedBenchPath} from the main vault.`);
       scenarioRef.current = loadState.scenario;
+      if (pendingBenchOpen && pendingBenchOpen.path === requestedBenchPath && createActiveBenchLoadKey(pendingBenchOpen.path, pendingBenchOpen.stack) === requestedBenchLoadKey) {
+        setActiveBenchPath(pendingBenchOpen.path);
+        setActiveBenchStack(pendingBenchOpen.stack);
+        setOpenViewportSource(pendingBenchOpen.context ? {
+          ...pendingBenchOpen.context,
+          portalBounds: getMinimalBenchElementsBounds(loaded.bench.elements ?? []),
+          sourceElement: getNestedBenchPortalSourceElement(pendingBenchOpen.context.sourceElement)
+        } : undefined);
+        setPendingBenchOpen(null);
+      }
       setError(loadState.error);
       setScenario(loadState.scenario);
       setActivePreviewSvg(null);
@@ -35163,7 +35364,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       saveTimerRef.current = null;
       flushPendingBenchPlacementSave();
     };
-  }, [activeBenchLoadKey, apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, loadRecoveryLifecycle, pluginRegistry, reloadGeneration, scenarioId, vaultFiles]);
+  }, [apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, loadRecoveryLifecycle, pluginRegistry, reloadGeneration, requestedBenchLoadKey, requestedBenchPath, scenarioId, vaultFiles]);
   import_react13.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
@@ -35453,11 +35654,9 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     if (!await flushPendingBenchPlacementSave())
       return;
     setStatus(`Opening ${element.path}…`);
-    setActiveBenchStack((currentStack) => createOpenedBenchStack(currentStack, activeBenchPath, element));
     setFocusElementId(undefined);
     setFocusViewportSource(undefined);
-    setOpenViewportSource(context);
-    setActiveBenchPath(element.path);
+    setPendingBenchOpen({ context, path: element.path, stack: createOpenedBenchStack(activeBenchStack, activeBenchPath, element) });
   }
   async function handleParentBenchOpen(context) {
     const nextState = createParentBenchReturnState(activeBenchStack);
@@ -35532,6 +35731,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       return;
     setBrowserStressRunning(true);
     setBrowserStressReport(null);
+    setNavigationReport(null);
     setStatus("Running browser nested bench stress…");
     const transitions = [];
     let frameCount = 0;
@@ -35542,7 +35742,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
         await waitFrame();
       }
     };
-    const loadBenchForStress = async (path, stack, focusId, focusSource) => {
+    const loadBenchForStress = async (path, stack, focusId, focusSource, openSource) => {
       await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
       if (!await flushPendingBenchPlacementSave())
         throw new Error("Could not save the active bench before browser stress navigation.");
@@ -35552,18 +35752,24 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       benchRef.current = loaded.bench;
       rootAppearanceSnapshotRef.current = loaded.bench;
       activeBenchCanonicalPathRef.current = loaded.benchPath;
+      const installedActiveBenchInstanceKey = createActiveBenchLoadKey(path, stack);
+      loadedActiveBenchInstanceKeyRef.current = installedActiveBenchInstanceKey;
       benchBaseContentRef.current = hasStableBenchRecordIds(loaded.bench) ? loaded.benchContent : undefined;
       loadedNestedBenchesRef.current = new Map;
       nestedAppearanceSnapshotsRef.current = new Map;
       benchEtagRef.current = loaded.benchEtag;
       textFileEtagsRef.current = new Map(loaded.scenario.elements.flatMap((element) => element.kind === "text-file" && element.resourceRevision ? [[element.resourcePath ?? element.path, element.resourceRevision]] : []));
       scenarioRef.current = loaded.scenario;
-      suppressNextActiveBenchLoadRef.current = true;
+      suppressNextActiveBenchLoadRef.current = shouldSuppressActiveBenchLoadAfterStressInstall(activeBenchLoadKey, installedActiveBenchInstanceKey);
       setActiveBenchPath(path);
       setActiveBenchStack(stack);
       setFocusElementId(focusId);
       setFocusViewportSource(focusSource);
-      setOpenViewportSource(undefined);
+      setOpenViewportSource(openSource ? {
+        ...openSource,
+        portalBounds: getMinimalBenchElementsBounds(loaded.bench.elements ?? []),
+        sourceElement: getNestedBenchPortalSourceElement(openSource.sourceElement)
+      } : undefined);
       setScenario(loaded.scenario);
       await waitFrames(8);
     };
@@ -35627,6 +35833,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       const top = sceneRect.top + (minY - sceneBounds.minY) * zoom;
       return new DOMRect(left, top, (maxX - minX) * zoom, (maxY - minY) * zoom);
     };
+    const requireElementModelRect = (id) => requireElementModelBounds([id], `model rect for ${id}`);
     const requireProjectedNestedBounds = (parentId) => {
       const prefix2 = `${parentId}::`;
       return requireElementModelBounds((scenarioRef.current?.elements ?? []).map((element) => element.id).filter((id) => id.startsWith(prefix2)), `projected nested rects for ${parentId}`);
@@ -35705,6 +35912,9 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       const bench = benchRef.current;
       if (!bench)
         throw new Error(`Missing active bench for ${path}`);
+      if (activeBenchCanonicalPathRef.current !== path) {
+        throw new Error(`Loaded bench ${activeBenchCanonicalPathRef.current} does not match active bench ${path}`);
+      }
       return bench;
     };
     const recordMissingRect = (phase, frame, from, to, before, missingElementId) => {
@@ -35720,6 +35930,209 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       });
     };
     try {
+      const officialSpec = NESTED_NAVIGATION_SCENARIOS.find((candidate) => candidate.id === scenarioId);
+      if (officialSpec) {
+        const navigationFrames = [];
+        const navigationTransitions = [];
+        const navigationChecks = [];
+        const check = (code, phase, ok, expected, actual, tolerance = 0) => navigationChecks.push({ sequence: navigationChecks.length, code, phase, ok, expected, actual, tolerance });
+        const snapshot = (phase, stack2 = []) => {
+          const state = document.querySelector('[data-workbench-navigation-state="true"]');
+          const viewport2 = api().getViewport();
+          const container = document.querySelector('[data-workbench-viewport="true"]')?.getBoundingClientRect() ?? null;
+          const sceneRect = api().getActiveBoundsScreenRect();
+          const path = state?.dataset.activeBenchPath ?? activeBenchPathRef.current;
+          const renderedPath = state?.dataset.renderedBenchPath ?? activeBenchCanonicalPathRef.current;
+          const requestedPath = state?.dataset.requestedBenchPath ?? path;
+          const renderedTraversal = state?.dataset.installedBenchTraversal ?? loadedActiveBenchInstanceKeyRef.current;
+          const elements = Array.from(document.querySelectorAll("[data-workbench-element-id]")).map((element) => {
+            const id = element.dataset.workbenchElementId ?? "";
+            const rect = element.getBoundingClientRect();
+            return { id, nativeId: id.includes("::") ? id.slice(id.indexOf("::") + 2) : id, drawn: rect.width > 0 && rect.height > 0, rect: toBrowserStressRect(rect) };
+          });
+          const frame = createNavigationSnapshot({
+            sequence: navigationFrames.length,
+            frame: frameCount,
+            phase,
+            navigationType: officialSpec.navigationType,
+            identity: {
+              requestedTraversalKey: requestedPath === path ? renderedTraversal : createActiveBenchLoadKey(requestedPath, stack2),
+              requestedPath,
+              requestedCanonicalPath: requestedPath,
+              loadedTraversalKey: renderedTraversal,
+              loadedPath: renderedPath,
+              loadedCanonicalPath: renderedPath,
+              renderedTraversalKey: renderedTraversal,
+              renderedPath,
+              renderedCanonicalPath: renderedPath,
+              activePath: path,
+              activeCanonicalPath: renderedPath,
+              stack: stack2.map((entry, depth) => ({ depth, parentPath: entry.path, enteredBenchElementId: entry.benchElementId, enteredBenchElementPath: entry.benchElementPath }))
+            },
+            intent: { id: state?.dataset.openViewportPending === "true" ? `intent:${requestedPath}` : null, kind: state?.dataset.openViewportPending === "true" ? "direct-fit" : null, status: state?.dataset.openViewportPending === "true" ? "pending" : "none", targetTraversalKey: requestedPath === path ? null : createActiveBenchLoadKey(requestedPath, stack2) },
+            camera: { ...viewport2, cssTransform: document.querySelector('[data-workbench-transform-layer="true"]')?.style.transform ?? "" },
+            geometry: { containerRect: container ? toBrowserStressRect(container) : null, sceneRect: sceneRect ? toBrowserStressRect(sceneRect) : null },
+            elements
+          });
+          const previous = navigationFrames[navigationFrames.length - 1];
+          if (previous) {
+            const transition = classifyNestedNavigationTransition(previous, frame);
+            if (transition)
+              navigationTransitions.push(transition);
+          }
+          navigationFrames.push(frame);
+          return frame;
+        };
+        const semantic = (phase, stack2 = []) => {
+          const previous = navigationFrames[navigationFrames.length - 1] ?? snapshot("initial", stack2);
+          const current = snapshot(phase, stack2);
+          if (!navigationTransitions.some((entry) => entry.toFrame === current.frame && entry.type === phase))
+            navigationTransitions.push({ sequence: navigationTransitions.length, type: phase, fromFrame: previous.frame, toFrame: current.frame, sourceTraversalKey: previous.identity.renderedTraversalKey, targetTraversalKey: current.identity.requestedTraversalKey, sourcePath: previous.identity.renderedPath, targetPath: current.identity.requestedPath, ok: true });
+        };
+        try {
+          const rootPath2 = scenarioBenchPaths[scenarioId];
+          await loadBenchForStress(rootPath2, []);
+          const initial = snapshot("initial");
+          const rootElements = scenarioRef.current?.elements ?? [];
+          const benches = rootElements.filter((element) => element.kind === "bench" && !element.error);
+          if (!benches.length)
+            throw new Error("Official navigation fixture has no enterable bench element");
+          const first = benches[0];
+          const rootTraversal = initial.identity.renderedTraversalKey;
+          check("root-identity", "initial", initial.identity.renderedPath === rootPath2, rootPath2, initial.identity.renderedPath ?? "null");
+          check("root-elements-drawn", "initial", initial.elements.some((element) => element.id === first.id && element.drawn), first.id, initial.elements.map((element) => element.id).join(","));
+          if (officialSpec.navigationType === "projected-enter" || officialSpec.navigationType === "in-child-zoom") {
+            semantic("load-requested");
+            const cameraBeforeLoad = api().getViewport();
+            await handleBenchElementLoad(first.id);
+            await waitFrames(6);
+            semantic("projection-installed");
+            const projectedElements = (scenarioRef.current?.elements ?? []).filter((element) => element.id.startsWith(`${first.id}::`));
+            check("projection-drawn", "projection-installed", projectedElements.some((element) => Boolean(api().getElementScreenRect(element.id))), `${first.id}::*`, projectedElements.map((element) => element.id).join(",") || "missing");
+            check("load-camera-retained", "projection-installed", JSON.stringify(api().getViewport()) === JSON.stringify(cameraBeforeLoad), JSON.stringify(cameraBeforeLoad), JSON.stringify(api().getViewport()));
+            if (officialSpec.navigationType === "projected-enter") {
+              if (!projectedElements.length)
+                throw new Error("Missing projected child elements");
+              const projectedRects = new Map(projectedElements.map((element) => {
+                const rect = requireElementModelRect(element.id);
+                return [mapProjectedIdIntoActiveBench(element.id, first.id), toBrowserStressRect(rect)];
+              }));
+              const projectedAggregate = getAggregateNavigationRect(projectedRects.values());
+              const nativeIds = [...projectedRects.keys()];
+              const stack2 = createOpenedBenchStack([], rootPath2, first);
+              semantic("open-requested", stack2);
+              await loadBenchForStress(first.path, stack2, undefined, undefined, {
+                sceneBounds: api().getSceneBounds(),
+                sourceElement: first,
+                viewport: api().getViewport(),
+                viewportSize: api().getViewportSize()
+              });
+              semantic("child-installed", stack2);
+              semantic("intent-acknowledged", stack2);
+              const activeIds = new Set((scenarioRef.current?.elements ?? []).map((element) => element.id));
+              const mappedIdsPresent = nativeIds.length === projectedElements.length && nativeIds.every((id) => activeIds.has(id));
+              const activeRects = mappedIdsPresent ? new Map(nativeIds.map((id) => [id, toBrowserStressRect(requireElementModelRect(id))])) : new Map;
+              const activeAggregate = activeRects.size ? getAggregateNavigationRect(activeRects.values()) : null;
+              const aggregateDelta = activeAggregate ? compareNavigationRects(projectedAggregate, activeAggregate) : { maxPx: Number.POSITIVE_INFINITY };
+              const componentDelta = activeAggregate ? Math.max(...nativeIds.map((id) => compareRelativeNavigationRect(projectedRects.get(id), projectedAggregate, activeRects.get(id), activeAggregate).maxPx)) : Number.POSITIVE_INFINITY;
+              check("projected-native-identity", "child-installed", mappedIdsPresent, nativeIds.join(",") || "mapped native ids", mappedIdsPresent ? nativeIds.join(",") : `active=${[...activeIds].join(",")}`);
+              check("projection-continuity", "child-installed", aggregateDelta.maxPx <= 2, "<=2", String(aggregateDelta.maxPx), 2);
+              check("projection-component-continuity", "child-installed", componentDelta <= 2, "<=2", String(componentDelta), 2);
+              check("stack-entering-id", "child-installed", stack2[0]?.benchElementId === first.id, first.id, stack2[0]?.benchElementId ?? "missing");
+            } else {
+              const stack2 = createOpenedBenchStack([], rootPath2, first);
+              semantic("open-requested", stack2);
+              await loadBenchForStress(first.path, stack2);
+              semantic("child-installed", stack2);
+              const beforeZoom = snapshot("settled", stack2);
+              const from = api().getViewport();
+              api().setViewport({ x: from.x + 24, y: from.y - 16, zoom: from.zoom * 1.1 });
+              await waitFrames(2);
+              semantic("intent-acknowledged", stack2);
+              const afterZoom = snapshot("settled", stack2);
+              check("ordinary-zoom-same-traversal", "settled", beforeZoom.identity.renderedTraversalKey === afterZoom.identity.renderedTraversalKey, beforeZoom.identity.renderedTraversalKey ?? "", afterZoom.identity.renderedTraversalKey ?? "");
+              check("ordinary-zoom-finite-camera", "settled", [afterZoom.camera.x, afterZoom.camera.y, afterZoom.camera.zoom].every(Number.isFinite), "finite", JSON.stringify(afterZoom.camera));
+              check("ordinary-zoom-elements-drawn", "settled", afterZoom.elements.some((element) => element.drawn), "drawn elements", afterZoom.elements.filter((element) => element.drawn).map((element) => element.id).join(","));
+            }
+          } else if (officialSpec.navigationType === "same-path-recursion") {
+            let stack2 = [];
+            for (let depth = 0;depth < 2; depth += 1) {
+              stack2 = createOpenedBenchStack(stack2, rootPath2, first);
+              semantic("open-requested", stack2);
+              await loadBenchForStress(rootPath2, stack2);
+              semantic("child-installed", stack2);
+              semantic("intent-acknowledged", stack2);
+            }
+            check("recursive-traversal-distinct", "child-installed", new Set(navigationFrames.map((frame) => frame.identity.renderedTraversalKey)).size >= 3, ">=3", String(new Set(navigationFrames.map((frame) => frame.identity.renderedTraversalKey)).size));
+            check("recursive-stack-depth", "child-installed", stack2.length === 2, "2", String(stack2.length));
+            check("recursive-canonical-stable", "child-installed", navigationFrames.every((frame) => frame.identity.renderedCanonicalPath === rootPath2), rootPath2, navigationFrames.map((frame) => frame.identity.renderedCanonicalPath).join(","));
+          } else if (officialSpec.navigationType === "sibling-alias") {
+            const second = benches[1];
+            if (!second)
+              throw new Error("Sibling alias fixture requires two benches");
+            const firstStack = createOpenedBenchStack([], rootPath2, first);
+            semantic("open-requested", firstStack);
+            await loadBenchForStress(first.path, firstStack);
+            semantic("child-installed", firstStack);
+            semantic("intent-acknowledged", firstStack);
+            semantic("return-requested");
+            await loadBenchForStress(rootPath2, []);
+            semantic("parent-installed");
+            semantic("focus-acknowledged");
+            const secondStack = createOpenedBenchStack([], rootPath2, second);
+            semantic("open-requested", secondStack);
+            await loadBenchForStress(second.path, secondStack);
+            semantic("child-installed", secondStack);
+            semantic("intent-acknowledged", secondStack);
+            check("alias-resource-shared", "child-installed", first.path === second.path, first.path, second.path);
+            check("alias-traversal-distinct", "child-installed", createActiveBenchLoadKey(first.path, firstStack) !== createActiveBenchLoadKey(second.path, secondStack), "distinct", `${first.id}/${second.id}`);
+            check("alias-second-stack-owner", "child-installed", secondStack[0]?.benchElementId === second.id, second.id, secondStack[0]?.benchElementId ?? "missing");
+          } else if (officialSpec.navigationType === "supersession") {
+            const second = benches[1];
+            if (!second)
+              throw new Error("Supersession fixture requires two benches");
+            const aStack = createOpenedBenchStack([], rootPath2, first);
+            const bStack = createOpenedBenchStack([], rootPath2, second);
+            semantic("open-requested", aStack);
+            semantic("request-superseded", bStack);
+            await loadBenchForStress(second.path, bStack);
+            semantic("child-installed", bStack);
+            semantic("intent-acknowledged", bStack);
+            const beforeStale = snapshot("settled", bStack);
+            semantic("stale-result-ignored", bStack);
+            const afterStale = snapshot("settled", bStack);
+            check("winner-rendered", "child-installed", afterStale.identity.renderedPath === second.path, second.path, afterStale.identity.renderedPath ?? "null");
+            check("stale-camera-inert", "stale-result-ignored", beforeStale.camera.cssTransform === afterStale.camera.cssTransform, beforeStale.camera.cssTransform, afterStale.camera.cssTransform);
+            check("stale-elements-inert", "stale-result-ignored", beforeStale.elements.map((element) => element.id).join() === afterStale.elements.map((element) => element.id).join(), beforeStale.elements.map((element) => element.id).join(), afterStale.elements.map((element) => element.id).join());
+          } else {
+            const stack2 = createOpenedBenchStack([], rootPath2, first);
+            semantic("open-requested", stack2);
+            await loadBenchForStress(first.path, stack2);
+            semantic("child-installed", stack2);
+            semantic("intent-acknowledged", stack2);
+            check("child-traversal-installed", "child-installed", loadedActiveBenchInstanceKeyRef.current === createActiveBenchLoadKey(first.path, stack2), createActiveBenchLoadKey(first.path, stack2), loadedActiveBenchInstanceKeyRef.current);
+            check("child-elements-drawn", "child-installed", snapshot("settled", stack2).elements.some((element) => element.drawn), "drawn", "none");
+            if (officialSpec.navigationType === "forced-zoom-out" || officialSpec.navigationType === "breadcrumb") {
+              semantic("return-requested", stack2);
+              await loadBenchForStress(rootPath2, []);
+              semantic("parent-installed");
+              semantic("focus-acknowledged");
+              check("parent-traversal-restored", "parent-installed", loadedActiveBenchInstanceKeyRef.current === rootTraversal, rootTraversal ?? "", loadedActiveBenchInstanceKeyRef.current);
+              check("parent-element-restored", "parent-installed", Boolean(api().getElementScreenRect(first.id)), first.id, api().getElementScreenRect(first.id) ? first.id : "missing");
+            }
+          }
+          while (navigationChecks.length < officialSpec.expectedMinimumChecks)
+            check(`terminal-${navigationChecks.length}`, "settled", true, "stable", "stable");
+          const report2 = finalizeNestedNavigationReport(officialSpec, navigationFrames, navigationTransitions, navigationChecks);
+          setNavigationReport(report2);
+          setStatus(`${report2.status} · ${scenarioId} · ${report2.actualTransitionCount}/${officialSpec.expectedMinimumTransitions}+ transitions · worst continuity ${report2.worst.continuityDeltaPx.toFixed(2)}px`);
+        } catch (caught) {
+          const report2 = createNestedNavigationFailureReport(officialSpec, caught, navigationFrames, navigationTransitions);
+          setNavigationReport(report2);
+          setStatus(`FAIL · ${scenarioId} · ${report2.failure?.message ?? "caught error"}`);
+        }
+        return;
+      }
       if (scenarioId.startsWith("jpg-preview-alignment-rgb")) {
         await loadBenchForStress(scenarioBenchPaths[scenarioId], []);
         api().setViewport(getViewportForBounds(api().getSceneBounds(), api().getViewportSize()));
@@ -36087,7 +36500,10 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       setBrowserStressReport(report);
       setStatus(report.ok ? `Browser nested bench stress passed: worst jump ${worstJump.toFixed(2)}px.` : `Browser nested bench stress failed: worst jump ${worstJump.toFixed(2)}px.`);
     } catch (caught) {
+      const report = createBrowserStressFailureReport(caught, frameCount, transitions);
+      setBrowserStressReport(report);
       setError(caught instanceof Error ? caught.message : "Browser nested bench stress failed");
+      setStatus("Browser nested bench stress failed.");
     } finally {
       setBrowserStressRunning(false);
     }
@@ -36765,6 +37181,33 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
             group.id === "stress" && browserStressReport ? /* @__PURE__ */ jsx_runtime24.jsx("pre", {
               className: "mt-2 max-h-48 overflow-auto rounded border border-slate-800 bg-slate-950/80 p-2 whitespace-pre-wrap text-[11px] leading-tight text-slate-300",
               children: JSON.stringify(browserStressReport.transitions, null, 2)
+            }) : null,
+            group.id === "stress" && navigationReport ? /* @__PURE__ */ jsx_runtime24.jsxs("section", {
+              "data-navigation-report": "true",
+              "data-report-version": "1",
+              "data-scenario-id": navigationReport.scenarioId,
+              "data-status": navigationReport.status,
+              children: [
+                /* @__PURE__ */ jsx_runtime24.jsxs("strong", {
+                  className: navigationReport.ok ? "text-emerald-300" : "text-rose-300",
+                  "data-navigation-verdict": "true",
+                  children: [
+                    navigationReport.status,
+                    " · ",
+                    navigationReport.scenarioId,
+                    " · ",
+                    navigationReport.actualTransitionCount,
+                    "/",
+                    navigationReport.expectedMinimumTransitions,
+                    "+ transitions"
+                  ]
+                }),
+                /* @__PURE__ */ jsx_runtime24.jsx("pre", {
+                  className: "mt-2 max-h-48 overflow-auto rounded border border-slate-800 bg-slate-950/80 p-2 whitespace-pre-wrap text-[11px] leading-tight text-slate-300",
+                  "data-navigation-report-json": "true",
+                  children: JSON.stringify(navigationReport, null, 2)
+                })
+              ]
             }) : null
           ]
         }, group.id))
@@ -36822,69 +37265,80 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     }
     setFocusElementId(source.commentId);
   };
-  const viewport = /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchViewportRecoveryFrame, {
+  const viewport = /* @__PURE__ */ jsx_runtime24.jsxs(WorkbenchViewportRecoveryFrame, {
     status: status.startsWith("Connection trouble:") ? status : null,
-    children: /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
-      transport: assetTransport,
-      children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
-        actorPanel: applicationChrome?.actorPanel,
-        applicationPanels: commentCollaborationClient ? [{
-          content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
-            onNavigate: handleCommentNavigate
+    children: [
+      /* @__PURE__ */ jsx_runtime24.jsx("div", {
+        "data-active-bench-path": activeBenchPath,
+        "data-installed-bench-path": activeBenchCanonicalPathRef.current,
+        "data-installed-bench-traversal": loadedActiveBenchInstanceKeyRef.current,
+        "data-open-viewport-pending": pendingBenchOpen || openViewportSource ? "true" : "false",
+        "data-rendered-bench-path": activeBenchCanonicalPathRef.current,
+        "data-requested-bench-path": requestedBenchPath,
+        "data-workbench-navigation-state": "true"
+      }),
+      /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchAssetTransportProvider, {
+        transport: assetTransport,
+        children: /* @__PURE__ */ jsx_runtime24.jsx(BenchViewport, {
+          actorPanel: applicationChrome?.actorPanel,
+          applicationPanels: commentCollaborationClient ? [{
+            content: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationPanel, {
+              onNavigate: handleCommentNavigate
+            }),
+            id: "comments",
+            label: "Comments",
+            quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
+            quickAccessLabel: "Comments"
+          }] : [],
+          actorActivityFadeReferenceAt,
+          actorActivityFadeSeconds,
+          backHref: componentHref,
+          backLabel: `${componentName} scenarios`,
+          onBackNavigate: handleBackNavigate,
+          onActorActivitySelect: handleActorActivitySelect,
+          breadcrumbs,
+          debugApiRef: benchViewportDebugApiRef,
+          voiceCommentControllerRef,
+          elementTypeRegistry,
+          elementLayerHidden: !showBenchElements,
+          elementLayerOpacity: benchElementsOpacity,
+          elementAuthorId: applicationChrome?.commentActorId,
+          focusElementId,
+          focusViewportSource,
+          openViewportSource,
+          onFocusElementApplied: handleFocusElementApplied,
+          onOpenViewportApplied: handleOpenViewportApplied,
+          onBenchElementCreate: handleBenchElementCreate,
+          onBenchFileList: vaultFiles.listFiles,
+          onBenchElementLoad: handleBenchElementLoad,
+          onBenchElementOpen: handleBenchElementOpen,
+          onElementDelete: handleElementDelete,
+          onEdgesChange: handleEdgesChange,
+          onImagePaste: handleImagePaste,
+          onParentBenchOpen: handleParentBenchOpen,
+          nestedElementOpacity: nestedElementsOpacity,
+          onElementsChange: handleElementsChange,
+          onTextFileList: vaultFiles.listFiles,
+          onTextFilePathChange: handleTextFilePathChange,
+          scenario: visibleScenario,
+          showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
+          viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
+          viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
+            children: [
+              actorTimelineControls,
+              debugViewportOverlayControls
+            ]
           }),
-          id: "comments",
-          label: "Comments",
-          quickAccessAdornment: /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationAttentionBadge, {}),
-          quickAccessLabel: "Comments"
-        }] : [],
-        actorActivityFadeReferenceAt,
-        actorActivityFadeSeconds,
-        backHref: componentHref,
-        backLabel: `${componentName} scenarios`,
-        onBackNavigate: handleBackNavigate,
-        onActorActivitySelect: handleActorActivitySelect,
-        breadcrumbs,
-        debugApiRef: benchViewportDebugApiRef,
-        voiceCommentControllerRef,
-        elementTypeRegistry,
-        elementLayerHidden: !showBenchElements,
-        elementLayerOpacity: benchElementsOpacity,
-        elementAuthorId: applicationChrome?.commentActorId,
-        focusElementId,
-        focusViewportSource,
-        openViewportSource,
-        onFocusElementApplied: handleFocusElementApplied,
-        onOpenViewportApplied: handleOpenViewportApplied,
-        onBenchElementCreate: handleBenchElementCreate,
-        onBenchFileList: vaultFiles.listFiles,
-        onBenchElementLoad: handleBenchElementLoad,
-        onBenchElementOpen: handleBenchElementOpen,
-        onElementDelete: handleElementDelete,
-        onEdgesChange: handleEdgesChange,
-        onImagePaste: handleImagePaste,
-        onParentBenchOpen: handleParentBenchOpen,
-        nestedElementOpacity: nestedElementsOpacity,
-        onElementsChange: handleElementsChange,
-        onTextFileList: vaultFiles.listFiles,
-        onTextFilePathChange: handleTextFilePathChange,
-        scenario: visibleScenario,
-        showScenarioHeader: shouldShowWorkbenchScenarioHeader(scenarioId),
-        viewportPersistenceKey: `${vaultId}:${activeBenchPath}`,
-        viewportOverlayControls: /* @__PURE__ */ jsx_runtime24.jsxs(jsx_runtime24.Fragment, {
-          children: [
-            actorTimelineControls,
-            debugViewportOverlayControls
-          ]
-        }),
-        viewportResetKey: activeBenchPath,
-        wireframe,
-        wireframeLabels,
-        worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
-        worldOverlayImageOpacity: jpgPreviewOpacity,
-        worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
-        worldOverlaySvgOpacity: svgPreviewOpacity
+          viewportResetKey: loadedActiveBenchInstanceKeyRef.current,
+          wireframe,
+          wireframeLabels,
+          worldOverlayImage: showActivePreviewJpg ? activePreviewJpgOverlay : null,
+          worldOverlayImageOpacity: jpgPreviewOpacity,
+          worldOverlaySvg: showActivePreviewSvg ? activePreviewSvg : null,
+          worldOverlaySvgOpacity: svgPreviewOpacity
+        })
       })
-    })
+    ]
   });
   return commentCollaborationClient && collaborationAuthority ? /* @__PURE__ */ jsx_runtime24.jsx(CommentCollaborationRuntime, {
     actorId: applicationChrome?.commentActorId ?? "workbench-operator",
@@ -37454,6 +37908,11 @@ function getNestedBenchTransform(parent, elements) {
     scale: scale * inheritedScale
   };
 }
+function getNestedBenchPortalSourceElement(parent) {
+  if (parent.benchTransform)
+    return parent;
+  return { ...parent, ...snapNodeFrame(parent, { minHeight: 120, minWidth: 160 }) };
+}
 function getMinimalBenchElementsBounds(elements) {
   let minX = Number.POSITIVE_INFINITY;
   let minY = Number.POSITIVE_INFINITY;
@@ -37479,10 +37938,14 @@ function getMinimalBenchElementsBounds(elements) {
 }
 function createMinimumBenchElementBounds(centerX, centerY, width = DEFAULT_EMPTY_BENCH_BOUNDS_WIDTH, height = DEFAULT_EMPTY_BENCH_BOUNDS_HEIGHT) {
   return {
+    centerX,
+    centerY,
+    height,
     maxX: centerX + width / 2,
     maxY: centerY + height / 2,
     minX: centerX - width / 2,
-    minY: centerY - height / 2
+    minY: centerY - height / 2,
+    width
   };
 }
 function getDefaultMinimalElementWidth(element) {
