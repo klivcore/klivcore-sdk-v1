@@ -11028,6 +11028,7 @@ function initializeLiveComponentFrame(port2, frameRoot) {
   port2.start();
 }
 var bridgeKey = Symbol.for("klivcore.workbench.react");
+var installedLocalStorage;
 var jsxDEV = (...args) => jsxRuntime.jsx(...args);
 var bridge = Object.freeze({
   React: Object.freeze({ ...React3 }),
@@ -11055,6 +11056,7 @@ async function mount(port2, frameRoot, rawInit) {
   };
   try {
     const init = parseLiveComponentFrameInit(rawInit);
+    installInMemoryLocalStorage(globalThis);
     componentUrl = URL.createObjectURL(new Blob([init.componentJavaScript], { type: "text/javascript" }));
     const componentModule = await import(componentUrl);
     const definition = parseComponentModule(componentModule, init);
@@ -11077,6 +11079,40 @@ async function mount(port2, frameRoot, rawInit) {
     if (componentUrl)
       URL.revokeObjectURL(componentUrl);
   }
+}
+function installInMemoryLocalStorage(target) {
+  if (installedLocalStorage) {
+    installedLocalStorage.clear();
+    return;
+  }
+  const values = new Map;
+  const storage = Object.freeze({
+    clear() {
+      values.clear();
+    },
+    getItem(key) {
+      return values.get(String(key)) ?? null;
+    },
+    key(index2) {
+      return [...values.keys()][Number(index2)] ?? null;
+    },
+    get length() {
+      return values.size;
+    },
+    removeItem(key) {
+      values.delete(String(key));
+    },
+    setItem(key, value) {
+      values.set(String(key), String(value));
+    }
+  });
+  Object.defineProperty(target, "localStorage", {
+    configurable: false,
+    enumerable: true,
+    value: storage,
+    writable: false
+  });
+  installedLocalStorage = storage;
 }
 
 class FrameErrorBoundary extends React3.Component {
@@ -11148,5 +11184,6 @@ function invalidInit() {
 }
 export {
   parseLiveComponentFrameInit,
+  installInMemoryLocalStorage,
   initializeLiveComponentFrame
 };
