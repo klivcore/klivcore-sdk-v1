@@ -589,8 +589,16 @@ export function createPasskeyAuth(options: PasskeyAuthOptions): PasskeyAuth {
     const timestamp = now();
     const reserve = database.transaction(() => {
       database.query("DELETE FROM registration_grants WHERE expires_at <= ?").run(timestamp);
-      const capacity = database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0;
-      if (capacity >= 32) throw new Error("registration URL limit reached");
+      while ((database.query<{ count: number }, []>("SELECT (SELECT count(*) FROM credentials) + (SELECT count(*) FROM registration_grants) AS count").get()?.count ?? 0) >= 32) {
+        const replacedGrant = database.query(`DELETE FROM registration_grants WHERE token_hash = (
+          SELECT token_hash FROM registration_grants ORDER BY expires_at ASC, token_hash ASC LIMIT 1
+        )`).run();
+        if (replacedGrant.changes === 1) continue;
+        const replacedCredential = database.query(`DELETE FROM credentials WHERE id = (
+          SELECT id FROM credentials ORDER BY created_at ASC, id ASC LIMIT 1
+        )`).run();
+        if (replacedCredential.changes !== 1) throw new Error("registration authority state is inconsistent");
+      }
       database.query("INSERT INTO registration_grants(token_hash, user_id, expires_at, consumed_at) VALUES (?, ?, ?, NULL)")
         .run(tokenHash(token), randomBytes(32), timestamp + ttlMs);
     });

@@ -67,8 +67,8 @@
     },
     {
       "path": "src/passkey-auth.ts",
-      "bytes": 60599,
-      "sha256": "9600d927500b3fdba446bfe9c48cb7b834413cc9fe995afec512422449d196a1"
+      "bytes": 61095,
+      "sha256": "650ea67c7bb006d29887cbdcf0ac0d9bf51040427499eb384c529c03d9e062f0"
     },
     {
       "path": "src/server.ts",
