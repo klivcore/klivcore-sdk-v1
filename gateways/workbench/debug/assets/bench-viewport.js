@@ -13656,12 +13656,204 @@ var benchElementType = {
   }
 };
 
+// packages/react/src/commentThread.ts
+var MAX_COMMENT_THREAD_ENTRIES = 500;
+var entryKinds = new Set(["message", "question", "approval", "progress", "response", "result"]);
+var resultStatuses = new Set(["succeeded", "failed", "incomplete", "no-action"]);
+var approvalResponses = new Set(["approve", "reject", "request-changes"]);
+function validateCommentThread(value, label = "Comment thread") {
+  const errors = [];
+  if (!Array.isArray(value))
+    return [`${label} must be an array`];
+  if (value.length > MAX_COMMENT_THREAD_ENTRIES)
+    errors.push(`${label} exceeds ${MAX_COMMENT_THREAD_ENTRIES} entries`);
+  const entryIds = new Set;
+  const requests = new Map;
+  const answeredRequestIds = new Set;
+  for (const [index2, candidate] of value.entries()) {
+    const path = `${label}[${index2}]`;
+    if (!isRecord(candidate)) {
+      errors.push(`${path} must be an object`);
+      continue;
+    }
+    const id = requiredString(candidate.id, `${path}.id`, errors);
+    requiredString(candidate.actorId, `${path}.actorId`, errors);
+    requiredString(candidate.body, `${path}.body`, errors, true);
+    requiredString(candidate.createdAt, `${path}.createdAt`, errors);
+    if (id) {
+      if (entryIds.has(id))
+        errors.push(`${label} has duplicate entry id: ${id}`);
+      entryIds.add(id);
+    }
+    const kind = typeof candidate.kind === "string" && entryKinds.has(candidate.kind) ? candidate.kind : undefined;
+    if (!kind)
+      errors.push(`${path}.kind is invalid`);
+    if (kind === "question" || kind === "approval") {
+      if (!isRecord(candidate.request)) {
+        errors.push(`${path}.request must be an object`);
+      } else {
+        const requestId = requiredString(candidate.request.id, `${path}.request.id`, errors);
+        if (requestId) {
+          if (requests.has(requestId))
+            errors.push(`${label} has duplicate request id: ${requestId}`);
+          else
+            requests.set(requestId, { entryIndex: index2, kind, request: candidate.request });
+        }
+        validateChoices(candidate.request.choices, `${path}.request.choices`, errors);
+      }
+    }
+    if (kind === "response") {
+      if (!isRecord(candidate.response)) {
+        errors.push(`${path}.response must be an object`);
+      } else {
+        const requestId = requiredString(candidate.response.requestId, `${path}.response.requestId`, errors);
+        const responseValue = requiredString(candidate.response.value, `${path}.response.value`, errors, candidate.response.data !== undefined);
+        if (candidate.response.data !== undefined && !isJsonValue(candidate.response.data))
+          errors.push(`${path}.response.data must be JSON-compatible`);
+        if (requestId) {
+          const request = requests.get(requestId);
+          if (!request || request.entryIndex >= index2) {
+            errors.push(`${path} references missing request: ${requestId}`);
+          } else if (answeredRequestIds.has(requestId)) {
+            errors.push(`${path} request already has a response: ${requestId}`);
+          } else {
+            answeredRequestIds.add(requestId);
+            if (request.kind === "approval" && responseValue && !approvalResponses.has(responseValue)) {
+              errors.push(`${path} has invalid approval response: ${responseValue}`);
+            }
+            const choices = request.request.choices;
+            if (request.kind === "question" && choices?.length && responseValue && !choices.some((choice) => choice.id === responseValue)) {
+              errors.push(`${path} selects unknown choice: ${responseValue}`);
+            }
+          }
+        }
+      }
+    }
+    if (kind === "result") {
+      if (!isRecord(candidate.result)) {
+        errors.push(`${path}.result must be an object`);
+      } else {
+        if (typeof candidate.result.status !== "string" || !resultStatuses.has(candidate.result.status))
+          errors.push(`${path}.result.status is invalid`);
+        requiredString(candidate.result.summary, `${path}.result.summary`, errors, true);
+      }
+    }
+    validateEvidence(candidate.evidence, `${path}.evidence`, errors);
+  }
+  return [...new Set(errors)];
+}
+function appendCommentThreadEntry(value, entry, label = "Comment thread") {
+  const thread = value === undefined ? [] : value;
+  const existingErrors = validateCommentThread(thread, label);
+  if (existingErrors.length)
+    throw new Error(existingErrors.join(`
+`));
+  const next = [...thread, structuredClone(entry)];
+  const errors = validateCommentThread(next, label);
+  if (errors.length)
+    throw new Error(errors.join(`
+`));
+  return next;
+}
+function validateChoices(value, path, errors) {
+  if (value === undefined)
+    return;
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  const ids = new Set;
+  for (const [index2, choice] of value.entries()) {
+    if (!isRecord(choice)) {
+      errors.push(`${path}[${index2}] must be an object`);
+      continue;
+    }
+    const id = requiredString(choice.id, `${path}[${index2}].id`, errors);
+    requiredString(choice.label, `${path}[${index2}].label`, errors);
+    if (id && ids.has(id))
+      errors.push(`${path} has duplicate choice id: ${id}`);
+    if (id)
+      ids.add(id);
+  }
+}
+function validateEvidence(value, path, errors) {
+  if (value === undefined)
+    return;
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  for (const [index2, evidence] of value.entries()) {
+    if (!isRecord(evidence)) {
+      errors.push(`${path}[${index2}] must be an object`);
+      continue;
+    }
+    requiredString(evidence.id, `${path}[${index2}].id`, errors);
+    requiredString(evidence.label, `${path}[${index2}].label`, errors);
+    requiredString(evidence.uri, `${path}[${index2}].uri`, errors);
+  }
+}
+function requiredString(value, path, errors, allowEmpty = false) {
+  if (typeof value !== "string" || !allowEmpty && value.length === 0) {
+    errors.push(`${path} must be ${allowEmpty ? "a string" : "a non-empty string"}`);
+    return;
+  }
+  return value;
+}
+function isJsonValue(value, seen = new Set) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number")
+    return Number.isFinite(value);
+  if (typeof value !== "object")
+    return false;
+  if (seen.has(value))
+    return false;
+  seen.add(value);
+  const valid = Array.isArray(value) ? value.every((item) => isJsonValue(item, seen)) : Object.values(value).every((item) => isJsonValue(item, seen));
+  seen.delete(value);
+  return valid;
+}
+function isRecord(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 // packages/react/src/CommentCollaboration.tsx
 var import_react4 = __toESM(require_react(), 1);
 var jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
 var CommentCollaborationContext = import_react4.createContext(null);
+function CommentCollaborationProvider({ children, value }) {
+  return /* @__PURE__ */ jsx_runtime7.jsx(CommentCollaborationContext.Provider, {
+    value,
+    children
+  });
+}
 function useCommentCollaboration() {
   return import_react4.useContext(CommentCollaborationContext);
+}
+function deriveCommentCollaborationProjection(entries) {
+  const answeredRequestIds = new Set(entries.filter((entry) => entry.kind === "response").map((entry) => entry.response?.requestId).filter((requestId) => Boolean(requestId)));
+  const activeRequestEntry = [...entries].reverse().find((entry) => (entry.kind === "question" || entry.kind === "approval") && Boolean(entry.request) && !answeredRequestIds.has(entry.request.id));
+  const latest = entries.at(-1);
+  const phase = activeRequestEntry ? "needs-you" : latest?.kind === "result" ? "done" : "active";
+  const evidence = entries.flatMap((entry) => entry.evidence ?? []);
+  const agentSession = [...entries].reverse().find((entry) => entry.agentSession)?.agentSession;
+  const outcome = [...entries].reverse().find((entry) => entry.result)?.result;
+  const relatedThreadIds = [...new Set(entries.flatMap((entry) => entry.relatedThreadIds ?? []))];
+  return {
+    ...activeRequestEntry?.request ? {
+      activeRequest: { ...activeRequestEntry.request, kind: activeRequestEntry.kind }
+    } : {},
+    ...agentSession ? { agentSession } : {},
+    entries,
+    evidence,
+    evidenceCount: evidence.length,
+    ...latest?.body ? { latestUpdate: latest.body } : {},
+    nextActor: phase === "needs-you" ? "user" : phase === "done" ? null : "agent",
+    ...outcome ? { outcome } : {},
+    phase,
+    ...relatedThreadIds.length ? { relatedThreadIds } : {}
+  };
 }
 var commentCollaborationPhasePresentation = {
   active: { icon: "•", label: "Active", tone: "border-sky-300 bg-sky-500 text-sky-950" },
@@ -13953,6 +14145,48 @@ function routeTextWheel(event, viewportZoom) {
 
 // packages/react/src/elementTypes/CommentElement.tsx
 var jsx_runtime9 = __toESM(require_jsx_runtime(), 1);
+function InlineCommentCollaboration({ element, onElementChange }) {
+  const externalController = useCommentCollaboration();
+  if (externalController?.getProjection(element.id))
+    return /* @__PURE__ */ jsx_runtime9.jsx(CommentCollaborationPopup, {
+      commentId: element.id
+    });
+  if (element.threadError) {
+    return /* @__PURE__ */ jsx_runtime9.jsx("div", {
+      "aria-label": "Invalid comment thread",
+      className: "absolute right-1 top-1 z-30 flex h-5 w-5 items-center justify-center rounded-full border border-rose-200 bg-rose-500 text-[11px] font-black text-white",
+      "data-comment-thread-error": true,
+      role: "alert",
+      title: element.threadError,
+      children: "!"
+    });
+  }
+  if (!element.thread)
+    return null;
+  const projection = deriveCommentCollaborationProjection(element.thread);
+  const act = (action) => {
+    const value = action.decision === "approved" ? "approve" : action.decision === "rejected" ? "reject" : action.decision === "changes-requested" ? "request-changes" : action.value ?? "answer";
+    const body = value === "approve" ? "Approved" : value === "reject" ? "Rejected" : value === "request-changes" ? "Changes requested" : action.value ?? "Answered";
+    const responseEntry = {
+      actorId: "human:operator",
+      body,
+      createdAt: new Date().toISOString(),
+      id: `entry:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`}`,
+      kind: "response",
+      response: { requestId: action.requestId, value }
+    };
+    onElementChange(element.id, (current) => current.kind === "comment" ? {
+      ...current,
+      thread: appendCommentThreadEntry(current.thread, responseEntry, `Comment ${current.id} thread`)
+    } : current);
+  };
+  return /* @__PURE__ */ jsx_runtime9.jsx(CommentCollaborationProvider, {
+    value: { act, getProjection: (commentId) => commentId === element.id ? projection : undefined },
+    children: /* @__PURE__ */ jsx_runtime9.jsx(CommentCollaborationPopup, {
+      commentId: element.id
+    })
+  });
+}
 var commentElementType = {
   kind: "comment",
   label: "Comment",
@@ -14011,8 +14245,9 @@ var commentElementType = {
           onPointerUp: (event) => event.stopPropagation(),
           onWheel: (event) => routeTextWheel(event, getTextContentRenderedScale(viewportZoom, element.benchTransform?.scale))
         }),
-        /* @__PURE__ */ jsx_runtime9.jsx(CommentCollaborationPopup, {
-          commentId: element.id
+        /* @__PURE__ */ jsx_runtime9.jsx(InlineCommentCollaboration, {
+          element,
+          onElementChange
         })
       ]
     });
@@ -14695,14 +14930,14 @@ function copyBuffer(bytes) {
   return copy.buffer;
 }
 function cloneBoundedJsonObject(value) {
-  if (!isJsonValue(value, new Set, 0))
+  if (!isJsonValue2(value, new Set, 0))
     throw new TypeError("Live component props must be a JSON-only object");
   const json = JSON.stringify(value);
   if (textEncoder.encode(json).byteLength > MAX_PROPS_JSON_BYTES)
     throw new TypeError("Live component props exceed the JSON bound");
   return JSON.parse(json);
 }
-function isJsonValue(value, ancestors, depth) {
+function isJsonValue2(value, ancestors, depth) {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return true;
   if (typeof value === "number")
@@ -14712,7 +14947,7 @@ function isJsonValue(value, ancestors, depth) {
   if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)
     return false;
   ancestors.add(value);
-  const valid = Array.isArray(value) ? value.every((item) => isJsonValue(item, ancestors, depth + 1)) : Object.values(value).every((item) => isJsonValue(item, ancestors, depth + 1));
+  const valid = Array.isArray(value) ? value.every((item) => isJsonValue2(item, ancestors, depth + 1)) : Object.values(value).every((item) => isJsonValue2(item, ancestors, depth + 1));
   ancestors.delete(value);
   return valid;
 }

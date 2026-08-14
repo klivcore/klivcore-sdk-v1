@@ -1580,6 +1580,169 @@ function isAlreadyExistsError(error) {
 
 // scripts/benchEdit.ts
 import { createHash } from "crypto";
+// packages/react/src/commentThread.ts
+var MAX_COMMENT_THREAD_ENTRIES = 500;
+var entryKinds = new Set(["message", "question", "approval", "progress", "response", "result"]);
+var resultStatuses = new Set(["succeeded", "failed", "incomplete", "no-action"]);
+var approvalResponses = new Set(["approve", "reject", "request-changes"]);
+function validateCommentThread(value, label = "Comment thread") {
+  const errors = [];
+  if (!Array.isArray(value))
+    return [`${label} must be an array`];
+  if (value.length > MAX_COMMENT_THREAD_ENTRIES)
+    errors.push(`${label} exceeds ${MAX_COMMENT_THREAD_ENTRIES} entries`);
+  const entryIds = new Set;
+  const requests = new Map;
+  const answeredRequestIds = new Set;
+  for (const [index, candidate] of value.entries()) {
+    const path = `${label}[${index}]`;
+    if (!isRecord2(candidate)) {
+      errors.push(`${path} must be an object`);
+      continue;
+    }
+    const id = requiredString(candidate.id, `${path}.id`, errors);
+    requiredString(candidate.actorId, `${path}.actorId`, errors);
+    requiredString(candidate.body, `${path}.body`, errors, true);
+    requiredString(candidate.createdAt, `${path}.createdAt`, errors);
+    if (id) {
+      if (entryIds.has(id))
+        errors.push(`${label} has duplicate entry id: ${id}`);
+      entryIds.add(id);
+    }
+    const kind = typeof candidate.kind === "string" && entryKinds.has(candidate.kind) ? candidate.kind : undefined;
+    if (!kind)
+      errors.push(`${path}.kind is invalid`);
+    if (kind === "question" || kind === "approval") {
+      if (!isRecord2(candidate.request)) {
+        errors.push(`${path}.request must be an object`);
+      } else {
+        const requestId = requiredString(candidate.request.id, `${path}.request.id`, errors);
+        if (requestId) {
+          if (requests.has(requestId))
+            errors.push(`${label} has duplicate request id: ${requestId}`);
+          else
+            requests.set(requestId, { entryIndex: index, kind, request: candidate.request });
+        }
+        validateChoices(candidate.request.choices, `${path}.request.choices`, errors);
+      }
+    }
+    if (kind === "response") {
+      if (!isRecord2(candidate.response)) {
+        errors.push(`${path}.response must be an object`);
+      } else {
+        const requestId = requiredString(candidate.response.requestId, `${path}.response.requestId`, errors);
+        const responseValue = requiredString(candidate.response.value, `${path}.response.value`, errors, candidate.response.data !== undefined);
+        if (candidate.response.data !== undefined && !isJsonValue(candidate.response.data))
+          errors.push(`${path}.response.data must be JSON-compatible`);
+        if (requestId) {
+          const request = requests.get(requestId);
+          if (!request || request.entryIndex >= index) {
+            errors.push(`${path} references missing request: ${requestId}`);
+          } else if (answeredRequestIds.has(requestId)) {
+            errors.push(`${path} request already has a response: ${requestId}`);
+          } else {
+            answeredRequestIds.add(requestId);
+            if (request.kind === "approval" && responseValue && !approvalResponses.has(responseValue)) {
+              errors.push(`${path} has invalid approval response: ${responseValue}`);
+            }
+            const choices = request.request.choices;
+            if (request.kind === "question" && choices?.length && responseValue && !choices.some((choice) => choice.id === responseValue)) {
+              errors.push(`${path} selects unknown choice: ${responseValue}`);
+            }
+          }
+        }
+      }
+    }
+    if (kind === "result") {
+      if (!isRecord2(candidate.result)) {
+        errors.push(`${path}.result must be an object`);
+      } else {
+        if (typeof candidate.result.status !== "string" || !resultStatuses.has(candidate.result.status))
+          errors.push(`${path}.result.status is invalid`);
+        requiredString(candidate.result.summary, `${path}.result.summary`, errors, true);
+      }
+    }
+    validateEvidence(candidate.evidence, `${path}.evidence`, errors);
+  }
+  return [...new Set(errors)];
+}
+function appendCommentThreadEntry(value, entry, label = "Comment thread") {
+  const thread = value === undefined ? [] : value;
+  const existingErrors = validateCommentThread(thread, label);
+  if (existingErrors.length)
+    throw new Error(existingErrors.join(`
+`));
+  const next = [...thread, structuredClone(entry)];
+  const errors = validateCommentThread(next, label);
+  if (errors.length)
+    throw new Error(errors.join(`
+`));
+  return next;
+}
+function validateChoices(value, path, errors) {
+  if (value === undefined)
+    return;
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  const ids = new Set;
+  for (const [index, choice] of value.entries()) {
+    if (!isRecord2(choice)) {
+      errors.push(`${path}[${index}] must be an object`);
+      continue;
+    }
+    const id = requiredString(choice.id, `${path}[${index}].id`, errors);
+    requiredString(choice.label, `${path}[${index}].label`, errors);
+    if (id && ids.has(id))
+      errors.push(`${path} has duplicate choice id: ${id}`);
+    if (id)
+      ids.add(id);
+  }
+}
+function validateEvidence(value, path, errors) {
+  if (value === undefined)
+    return;
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return;
+  }
+  for (const [index, evidence] of value.entries()) {
+    if (!isRecord2(evidence)) {
+      errors.push(`${path}[${index}] must be an object`);
+      continue;
+    }
+    requiredString(evidence.id, `${path}[${index}].id`, errors);
+    requiredString(evidence.label, `${path}[${index}].label`, errors);
+    requiredString(evidence.uri, `${path}[${index}].uri`, errors);
+  }
+}
+function requiredString(value, path, errors, allowEmpty = false) {
+  if (typeof value !== "string" || !allowEmpty && value.length === 0) {
+    errors.push(`${path} must be ${allowEmpty ? "a string" : "a non-empty string"}`);
+    return;
+  }
+  return value;
+}
+function isJsonValue(value, seen = new Set) {
+  if (value === null || typeof value === "string" || typeof value === "boolean")
+    return true;
+  if (typeof value === "number")
+    return Number.isFinite(value);
+  if (typeof value !== "object")
+    return false;
+  if (seen.has(value))
+    return false;
+  seen.add(value);
+  const valid = Array.isArray(value) ? value.every((item) => isJsonValue(item, seen)) : Object.values(value).every((item) => isJsonValue(item, seen));
+  seen.delete(value);
+  return valid;
+}
+function isRecord2(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// scripts/benchEdit.ts
 function parseBenchEditOperations(value) {
   if (!Array.isArray(value))
     throw new Error("operations must be an array");
@@ -1594,6 +1757,9 @@ function applyBenchOperations(source, operations) {
     switch (operation.op) {
       case "add-element":
         bench.elements.push(structuredClone(operation.element));
+        break;
+      case "append-comment-entry":
+        appendCommentEntry(asRecordArray(bench.elements, "elements"), operation.id, operation.entry);
         break;
       case "update-element":
         updateById(bench.elements, operation.id, operation, "element");
@@ -1611,6 +1777,12 @@ function applyBenchOperations(source, operations) {
         removeById(bench.edges, operation.id, "edge");
         break;
       case "update-document":
+        if (Object.prototype.hasOwnProperty.call(operation.patch ?? {}, "elements") || operation.unset?.includes("elements")) {
+          throw new Error("Cannot replace or unset elements with update-document; use element operations");
+        }
+        if (Object.prototype.hasOwnProperty.call(operation.patch ?? {}, "edges") || operation.unset?.includes("edges")) {
+          throw new Error("Cannot replace or unset edges with update-document; use edge operations");
+        }
         applyPatch(bench, operation.patch, operation.unset);
         break;
       default:
@@ -1662,6 +1834,9 @@ function validateBenchDocument(bench) {
       else if (element.parentId === id)
         errors.push(`Element ${id} cannot parent itself`);
     }
+    if (element.type === "comment" && element.thread !== undefined) {
+      errors.push(...validateCommentThread(element.thread, `Comment ${id} thread`));
+    }
   }
   errors.push(...findParentCycles(elements));
   for (const edge of edges) {
@@ -1686,7 +1861,7 @@ function validateRecordArray(value, name, errors) {
     return [];
   }
   return value.flatMap((item, index) => {
-    if (!isRecord2(item)) {
+    if (!isRecord3(item)) {
       errors.push(`Bench ${name}[${index}] must be an object`);
       return [];
     }
@@ -1696,7 +1871,7 @@ function validateRecordArray(value, name, errors) {
 function asRecordArray(value, name) {
   if (value === undefined)
     return [];
-  if (!Array.isArray(value) || value.some((item) => !isRecord2(item)))
+  if (!Array.isArray(value) || value.some((item) => !isRecord3(item)))
     throw new Error(`Bench ${name} must be an array of objects`);
   return value;
 }
@@ -1715,7 +1890,7 @@ function collectIds(records, kind, errors) {
 }
 function parseBenchEditOperation(value, index) {
   const prefix = `operations[${index}]`;
-  if (!isRecord2(value))
+  if (!isRecord3(value))
     throw new Error(`${prefix} must be an object`);
   if (typeof value.op !== "string")
     throw new Error(`${prefix}.op must be a string`);
@@ -1726,6 +1901,9 @@ function parseBenchEditOperation(value, index) {
     case "add-edge":
       assertAllowedKeys(value, ["op", "edge"], prefix);
       return { op: value.op, edge: requireRecord(value.edge, `${prefix}.edge`) };
+    case "append-comment-entry":
+      assertAllowedKeys(value, ["op", "id", "entry"], prefix);
+      return { op: value.op, id: requireId(value.id, `${prefix}.id`), entry: requireRecord(value.entry, `${prefix}.entry`) };
     case "update-element":
     case "update-edge": {
       assertAllowedKeys(value, ["op", "id", "patch", "unset"], prefix);
@@ -1780,7 +1958,7 @@ function parseUpdate(value, prefix, forbiddenKeys) {
   };
 }
 function requireRecord(value, path) {
-  if (!isRecord2(value))
+  if (!isRecord3(value))
     throw new Error(`${path} must be an object`);
   for (const key of Object.keys(value)) {
     if (isDangerousKey(key))
@@ -1833,7 +2011,7 @@ function findParentCycles(elements) {
   return errors;
 }
 function validateEdgeEndpoint(value, side, edgeId, elementIds, errors) {
-  if (!isRecord2(value)) {
+  if (!isRecord3(value)) {
     errors.push(`Edge ${edgeId} has invalid ${side} endpoint`);
     return;
   }
@@ -1856,7 +2034,21 @@ function updateById(records, id, operation, kind) {
   const record = records.find((candidate) => candidate.id === id);
   if (!record)
     throw new Error(`Cannot update missing ${kind}: ${id}`);
+  if (kind === "element" && (record.type === "comment" || record.thread !== undefined) && (Object.prototype.hasOwnProperty.call(operation.patch ?? {}, "type") || operation.unset?.includes("type"))) {
+    throw new Error(`Cannot replace or unset threaded comment type with update-element: ${id}`);
+  }
+  if (kind === "element" && record.type === "comment" && (Object.prototype.hasOwnProperty.call(operation.patch ?? {}, "thread") || operation.unset?.includes("thread"))) {
+    throw new Error(`Cannot replace or unset comment thread with update-element; use append-comment-entry: ${id}`);
+  }
   applyPatch(record, operation.patch, operation.unset);
+}
+function appendCommentEntry(elements, id, entry) {
+  const element = elements.find((candidate) => candidate.id === id);
+  if (!element)
+    throw new Error(`Cannot append comment entry to missing element: ${id}`);
+  if (element.type !== "comment")
+    throw new Error(`Cannot append comment entry: element ${id} is not a comment`);
+  element.thread = appendCommentThreadEntry(element.thread, entry, `Comment ${id} thread`);
 }
 function removeById(records, id, kind) {
   const index = records.findIndex((record) => record.id === id);
@@ -1889,7 +2081,7 @@ function removeElement(bench, id, cascade) {
   bench.edges = edges.filter((edge) => !endpointReferencesAny(edge.from, removed) && !endpointReferencesAny(edge.to, removed));
 }
 function endpointReferencesAny(value, ids) {
-  return isRecord2(value) && (typeof value.elementId === "string" && ids.has(value.elementId) || typeof value.parentId === "string" && ids.has(value.parentId));
+  return isRecord3(value) && (typeof value.elementId === "string" && ids.has(value.elementId) || typeof value.parentId === "string" && ids.has(value.parentId));
 }
 function applyPatch(record, patch, unset) {
   if (patch)
@@ -1901,6 +2093,8 @@ function summarizeOperation(operation) {
   switch (operation.op) {
     case "add-element":
       return `add-element ${recordId(operation.element, "<missing-id>")}`;
+    case "append-comment-entry":
+      return `append-comment-entry ${operation.id} ${recordId(operation.entry, "<missing-entry-id>")}`;
     case "add-edge":
       return `add-edge ${recordId(operation.edge, "<missing-id>")}`;
     case "update-document":
@@ -1918,7 +2112,7 @@ function sha256(content) {
 function unique(values) {
   return [...new Set(values)];
 }
-function isRecord2(value) {
+function isRecord3(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -1943,6 +2137,7 @@ Operation file:
 
   { "operations": [
     { "op": "add-element", "element": { ... } },
+    { "op": "append-comment-entry", "id": "comment:review", "entry": { ... } },
     { "op": "update-element", "id": "text:intro", "patch": { ... }, "unset": ["parentId"] },
     { "op": "remove-element", "id": "group:old", "cascade": true },
     { "op": "add-edge", "edge": { ... } },
@@ -2041,7 +2236,7 @@ async function createCommand(file, parsed) {
     throw new Error("create requires --document <json-file|->");
   const text = documentPath === "-" ? await Bun.stdin.text() : await readFile(resolve(documentPath), "utf8");
   const document = JSON.parse(text);
-  if (!isRecord3(document))
+  if (!isRecord4(document))
     throw new Error("Create document must be a JSON object");
   const root = resolveRoot(file, parsed);
   const errors = [
@@ -2056,7 +2251,7 @@ async function createCommand(file, parsed) {
   try {
     await atomicCreate(file, content);
   } catch (error) {
-    if (isRecord3(error) && error.code === "EEXIST")
+    if (isRecord4(error) && error.code === "EEXIST")
       throw new Error(`Bench already exists: ${file}`);
     throw error;
   }
@@ -2130,7 +2325,7 @@ function parseArguments(args) {
 async function readOperations(path) {
   const text = path === "-" ? await Bun.stdin.text() : await readFile(resolve(path), "utf8");
   const parsed = parseHjsonValue(text);
-  const operations = Array.isArray(parsed) ? parsed : isRecord3(parsed) ? parsed.operations : undefined;
+  const operations = Array.isArray(parsed) ? parsed : isRecord4(parsed) ? parsed.operations : undefined;
   if (!Array.isArray(operations))
     throw new Error("Operations input must be an array or an object containing an operations array");
   return parseBenchEditOperations(operations);
@@ -2235,7 +2430,7 @@ async function unifiedDiff(path, before, after) {
   }
 }
 function records(value) {
-  return Array.isArray(value) ? value.filter(isRecord3) : [];
+  return Array.isArray(value) ? value.filter(isRecord4) : [];
 }
 function flagString(parsed, name) {
   const value = parsed.flags.get(name);
@@ -2261,6 +2456,6 @@ ${result.diff}`);
 function sha2562(content) {
   return createHash2("sha256").update(content).digest("hex");
 }
-function isRecord3(value) {
+function isRecord4(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
