@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { loadPublishedAppV2, resolvePublishedAppV2Root } from "./app-launcher";
 import { gatewayDurableHome, gatewayImmutablePackageRoot, gatewayMountRevision, gatewayPackageDigest, gatewayServiceUser, parseActiveGatewayMount, readGatewayAsset } from "./gateway-runtime";
 import { createPasskeyAuth, createRealmGateway, type RealmGatewayHttpRelay, type RealmGatewayRouteConfig } from "./server";
-import { desktopSshRelayPort, parseActiveRealmRecord, parseActiveSshRelayRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
+import { desktopSshRelayPort, parseActiveRealmRecord, parseActiveSshRelayRecord, parseQuickTunnelUrl, parseStartRealmArgs, parseStartRealmConfig, planStartRealmTunnel, probePublicHealth, realmHomeRouteArtifacts, resolveCloudflaredAsset, waitForManagedPublicHealth } from "./start-realm-core";
 
 let invocation: ReturnType<typeof parseStartRealmArgs>;
 try {
@@ -417,6 +417,7 @@ try {
   const appRoot = await resolvePublishedAppV2Root(resolve(import.meta.dir, "../app-v2"));
   const appV2 = await loadPublishedAppV2(appRoot);
   const mountedGateways = await loadMountedGateways();
+  const home = realmHomeRouteArtifacts(config.realm.name, config.realm.canvasColor, mountedGateways.routes);
   const publishedCapabilities = Object.freeze(["realm:view", ...mountedGateways.capabilities]);
   console.log(`Starting Realm on http://127.0.0.1:${config.port}...`);
   auth = createPasskeyAuth({
@@ -457,8 +458,8 @@ try {
       title: `${config.realm.name} Home`,
       requiredCapabilities: ["realm:view"],
       componentId: "realm-home",
-      js: `export function mount(host){const main=document.createElement("main");const label=document.createElement("p");label.textContent="Realm";const title=document.createElement("h1");title.textContent=${JSON.stringify(config.realm.name)};const ready=document.createElement("p");ready.textContent="Ready.";main.append(label,title,ready);host.root.replaceChildren(main);return ()=>host.root.replaceChildren()}`,
-      css: `:host{display:block;min-height:100%;background:${config.realm.canvasColor};color:#f7f3e8;font-family:ui-sans-serif,system-ui,sans-serif}main{box-sizing:border-box;min-height:100%;padding:clamp(3rem,9vw,7rem);display:grid;align-content:center}h1{font-size:clamp(3rem,8vw,7rem);margin:0}`,
+      js: home.js,
+      css: home.css,
     },
   });
   await waitForHealth(gateway.endpoint, config.realm.id, 10_000);

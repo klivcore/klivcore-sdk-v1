@@ -100,6 +100,18 @@ export function formatStartRealmFailure(error: unknown): string {
   return `${rendered.slice(0, START_REALM_FAILURE_LIMIT - suffix.length)}${suffix}`;
 }
 
+export function realmHomeRouteArtifacts(
+  realmName: string,
+  canvasColor: string,
+  routes: readonly Readonly<{ path: string; title: string }>[],
+): Readonly<{ js: string; css: string }> {
+  const links = routes.map((route) => Object.freeze({ href: route.path, title: route.title }));
+  return Object.freeze({
+    js: `export function mount(host){const links=${JSON.stringify(links)};const main=document.createElement("main");const label=document.createElement("p");label.textContent="Realm";const title=document.createElement("h1");title.textContent=${JSON.stringify(realmName)};const nav=document.createElement("nav");nav.setAttribute("aria-label","Gateways");for(const link of links){const anchor=document.createElement("a");anchor.href=link.href;anchor.textContent=link.title;nav.append(anchor)}main.append(label,title,nav);host.root.replaceChildren(main);return ()=>host.root.replaceChildren()}`,
+    css: `:host{display:block;min-height:100%;background:${canvasColor};color:#f7f3e8;font-family:ui-sans-serif,system-ui,sans-serif}main{box-sizing:border-box;min-height:100%;padding:clamp(3rem,9vw,7rem);display:grid;align-content:center;gap:1.5rem}h1{font-size:clamp(3rem,8vw,7rem);margin:0}nav{display:flex;flex-wrap:wrap;gap:.75rem}a{border:1px solid currentColor;border-radius:.5rem;color:inherit;padding:.65rem .9rem;text-decoration:none}a:hover,a:focus-visible{background:rgba(255,255,255,.12)}`,
+  });
+}
+
 export function formatRegistrationUrlBlock(value: string): string {
   let parsed: URL;
   try {

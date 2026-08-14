@@ -390,7 +390,7 @@ const PASSKEY_BROWSER_JS = String.raw`(() => {
   const safeError = (error) => error instanceof DOMException ? error.name : error instanceof Error && (/^Request failed \([0-9]{3}\)(: [a-z-]+)?$/.test(error.message) || error.message === 'Registration capability is missing' || /was cancelled$/.test(error.message)) ? error.message : 'UnexpectedError';
   const pageKind = body.dataset.passkeyPage === 'register' ? 'register' : 'login';
   const registrationToken = pageKind === 'register' ? new URL(location.href).hash.slice('#token='.length) : '';
-  if (pageKind === 'register') history.replaceState(null, '', '/auth/register');
+  if (pageKind === 'register') history.replaceState(null, '', '/');
   log('page.loaded', 'kind=' + pageKind + ' origin=' + location.origin + ' webauthn=' + ('PublicKeyCredential' in window));
   if (pageKind === 'register') log('registration.capability present=' + Boolean(registrationToken));
   copyLog.addEventListener('click', async () => { try { await navigator.clipboard.writeText(entries.join('\n')); copyLog.textContent = 'Copied'; setTimeout(() => { copyLog.textContent = 'Copy log'; }, 1600); } catch { copyLog.textContent = 'Copy unavailable'; } });
