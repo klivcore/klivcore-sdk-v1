@@ -12706,11 +12706,11 @@ var require_hjson = __commonJS((exports, module) => {
 });
 
 // packages/publish-sdk/src/gateway-ui.ts
-var import_react15 = __toESM(require_react(), 1);
+var import_react16 = __toESM(require_react(), 1);
 var import_client = __toESM(require_client(), 1);
 
 // packages/react/src/Workbench.debug.tsx
-var import_react13 = __toESM(require_react(), 1);
+var import_react14 = __toESM(require_react(), 1);
 var import_react_dom2 = __toESM(require_react_dom(), 1);
 
 // packages/react/src/BenchViewport.tsx
@@ -27653,6 +27653,204 @@ function virtualGroupContainsGroupId(group, candidateId, groupsById, seen = new 
   seen.add(group.id);
   return group.childGroupIds.some((childId) => childId === candidateId || Boolean(groupsById.get(childId) && virtualGroupContainsGroupId(groupsById.get(childId), candidateId, groupsById, seen)));
 }
+function BenchBreadcrumbNavigation({
+  benchFilename,
+  breadcrumbs,
+  className,
+  onParentBenchLocationOpen,
+  onParentBenchLocationsRequest,
+  parentBenchLocations = [],
+  parentBenchLocationsError,
+  parentBenchLocationsLoading = false
+}) {
+  const [copyStatus, setCopyStatus] = import_react9.useState(null);
+  const [locationsOpen, setLocationsOpen] = import_react9.useState(false);
+  const actionsRef = import_react9.useRef(null);
+  const locationsPanelId = import_react9.useId();
+  const locationsTriggerRef = import_react9.useRef(null);
+  const currentBenchIdentity = breadcrumbs.find((item) => item.isCurrent)?.path ?? benchFilename;
+  import_react9.useEffect(() => {
+    setCopyStatus(null);
+    setLocationsOpen(false);
+  }, [currentBenchIdentity]);
+  import_react9.useEffect(() => {
+    if (!locationsOpen)
+      return;
+    const closeOnOutsidePointer = (event) => {
+      if (!actionsRef.current?.contains(event.target))
+        setLocationsOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape")
+        return;
+      setLocationsOpen(false);
+      locationsTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [locationsOpen]);
+  const copyFilename = async () => {
+    if (!benchFilename)
+      return;
+    try {
+      await navigator.clipboard.writeText(benchFilename);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
+  const toggleLocations = () => {
+    const nextOpen = !locationsOpen;
+    setLocationsOpen(nextOpen);
+    if (nextOpen)
+      onParentBenchLocationsRequest?.();
+  };
+  return /* @__PURE__ */ jsx_runtime20.jsxs("nav", {
+    "aria-label": "Bench path",
+    className,
+    "data-workbench-viewport-controls": "true",
+    children: [
+      /* @__PURE__ */ jsx_runtime20.jsx("div", {
+        className: "flex min-w-0 items-center gap-1 overflow-hidden",
+        children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
+          children: [
+            index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+              className: "shrink-0 text-slate-600",
+              children: "/"
+            }) : null,
+            item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+              className: "truncate text-slate-300",
+              children: item.label
+            }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
+              className: "truncate text-cyan-300 hover:text-cyan-200",
+              onClick: item.onClick,
+              type: "button",
+              children: item.label
+            })
+          ]
+        }, `${item.path}:${index2}`))
+      }),
+      benchFilename ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        className: "relative ml-1 flex shrink-0 items-center gap-1",
+        ref: actionsRef,
+        children: [
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-label": "Copy current bench filename",
+            className: "flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-900/90 text-slate-300 hover:border-cyan-500 hover:text-cyan-100",
+            onClick: () => void copyFilename(),
+            title: `Copy ${benchFilename}`,
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
+              "aria-hidden": "true",
+              fill: "none",
+              height: "14",
+              viewBox: "0 0 16 16",
+              width: "14",
+              children: [
+                /* @__PURE__ */ jsx_runtime20.jsx("rect", {
+                  height: "9",
+                  rx: "1.5",
+                  stroke: "currentColor",
+                  width: "8",
+                  x: "5",
+                  y: "2"
+                }),
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "M3.5 5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-.5",
+                  stroke: "currentColor"
+                })
+              ]
+            })
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-controls": locationsPanelId,
+            "aria-expanded": locationsOpen,
+            "aria-label": "Show benches containing this bench",
+            className: "flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-900/90 text-slate-300 hover:border-cyan-500 hover:text-cyan-100",
+            onClick: toggleLocations,
+            ref: locationsTriggerRef,
+            title: "Show benches containing this bench",
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
+              "aria-hidden": "true",
+              fill: "none",
+              height: "14",
+              viewBox: "0 0 16 16",
+              width: "14",
+              children: [
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "M3 3.5h6.5a1 1 0 0 1 1 1V6M5.5 6h6.5a1 1 0 0 1 1 1v5.5H5.5z",
+                  stroke: "currentColor"
+                }),
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "m2 7 1.5 1.5L5 7",
+                  stroke: "currentColor"
+                })
+              ]
+            })
+          }),
+          copyStatus ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+            className: "sr-only",
+            "data-workbench-copy-status": "true",
+            role: "status",
+            children: copyStatus === "copied" ? `Copied ${benchFilename}.` : `Could not copy ${benchFilename}.`
+          }) : null,
+          locationsOpen ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+            className: "absolute right-0 top-full z-[70] mt-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-slate-700 bg-slate-950 text-left text-xs shadow-2xl",
+            "data-workbench-parent-locations": "true",
+            id: locationsPanelId,
+            children: [
+              /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                className: "border-b border-slate-800 px-3 py-2 font-semibold text-slate-300",
+                children: "Nested in"
+              }),
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                className: "max-h-72 overflow-y-auto py-1",
+                children: [
+                  parentBenchLocationsLoading ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-slate-400",
+                    children: "Finding parent benches…"
+                  }) : null,
+                  !parentBenchLocationsLoading && parentBenchLocationsError ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-rose-300",
+                    children: parentBenchLocationsError
+                  }) : null,
+                  !parentBenchLocationsLoading && !parentBenchLocationsError && parentBenchLocations.length === 0 ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-slate-400",
+                    children: "This bench is not nested in another bench."
+                  }) : null,
+                  !parentBenchLocationsLoading && !parentBenchLocationsError ? parentBenchLocations.map((location2) => /* @__PURE__ */ jsx_runtime20.jsxs("button", {
+                    className: "block w-full px-3 py-2 text-left text-cyan-100 hover:bg-slate-800",
+                    "data-workbench-parent-location": "true",
+                    onClick: () => {
+                      setLocationsOpen(false);
+                      onParentBenchLocationOpen?.(location2);
+                    },
+                    type: "button",
+                    children: [
+                      /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                        className: "block truncate font-medium",
+                        children: location2.path
+                      }),
+                      location2.benchElementLabel ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                        className: "block truncate text-[10px] text-slate-400",
+                        children: location2.benchElementLabel
+                      }) : null
+                    ]
+                  }, `${location2.path}:${location2.benchElementId}`)) : null
+                ]
+              })
+            ]
+          }) : null
+        ]
+      }) : null
+    ]
+  });
+}
 function BenchViewport({
   actorPanel,
   applicationPanels = [],
@@ -27661,6 +27859,7 @@ function BenchViewport({
   backHref,
   backLabel,
   onBackNavigate,
+  benchFilename,
   breadcrumbs,
   debugApiRef,
   voiceCommentControllerRef,
@@ -27679,6 +27878,8 @@ function BenchViewport({
   onBenchElementOpen,
   onElementDelete,
   onParentBenchOpen,
+  onParentBenchLocationOpen,
+  onParentBenchLocationsRequest,
   onEdgesChange,
   onElementsChange,
   onImagePaste,
@@ -27686,6 +27887,9 @@ function BenchViewport({
   onTextFileList,
   onTextFilePathChange,
   nestedElementOpacity = 1,
+  parentBenchLocations,
+  parentBenchLocationsError,
+  parentBenchLocationsLoading,
   scenario: scene,
   showScenarioHeader = true,
   viewportPersistenceKey,
@@ -29014,26 +29218,15 @@ function BenchViewport({
                 className: "mt-1 truncate text-base font-bold sm:text-xl",
                 children: scene.name
               }),
-              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
-                "aria-label": "Bench path",
-                className: "mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-slate-400 sm:text-xs",
-                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
-                  children: [
-                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "text-slate-600",
-                      children: "/"
-                    }) : null,
-                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "truncate text-slate-300",
-                      children: item.label
-                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "truncate text-cyan-300 hover:text-cyan-200",
-                      onClick: item.onClick,
-                      type: "button",
-                      children: item.label
-                    })
-                  ]
-                }, `${item.path}:${index2}`))
+              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx(BenchBreadcrumbNavigation, {
+                benchFilename,
+                breadcrumbs,
+                className: "mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-slate-400 sm:text-xs",
+                onParentBenchLocationOpen,
+                onParentBenchLocationsRequest,
+                parentBenchLocations,
+                parentBenchLocationsError,
+                parentBenchLocationsLoading
               }) : null
             ]
           }),
@@ -29328,27 +29521,15 @@ function BenchViewport({
               }, { commitAfterIdle: true, deferUi: true });
             },
             children: [
-              !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
-                "aria-label": "Bench path",
-                className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
-                "data-workbench-viewport-controls": "true",
-                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
-                  children: [
-                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "text-slate-600",
-                      children: "/"
-                    }) : null,
-                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "truncate text-slate-300",
-                      children: item.label
-                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "truncate text-cyan-300 hover:text-cyan-200",
-                      onClick: item.onClick,
-                      type: "button",
-                      children: item.label
-                    })
-                  ]
-                }, `${item.path}:${index2}`))
+              !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx(BenchBreadcrumbNavigation, {
+                benchFilename,
+                breadcrumbs,
+                className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
+                onParentBenchLocationOpen,
+                onParentBenchLocationsRequest,
+                parentBenchLocations,
+                parentBenchLocationsError,
+                parentBenchLocationsLoading
               }) : null,
               /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
                 fullViewportActive: false,
@@ -34243,6 +34424,775 @@ function compareProjections(a, b) {
   return rank[a.phase] - rank[b.phase] || (b.changedRevision ?? 0) - (a.changedRevision ?? 0) || (a.commentId ?? "").localeCompare(b.commentId ?? "");
 }
 
+// packages/react/src/LiveWorkbenchRuntimeProvider.tsx
+var import_react13 = __toESM(require_react(), 1);
+// packages/bench-gateway-client/src/index.ts
+var SHA2563 = /^[a-f0-9]{64}$/;
+var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
+var ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024;
+async function loadBenchGatewayArtifact(options2) {
+  const { artifact } = options2;
+  if (!SHA2563.test(artifact.sha256))
+    throw new TypeError("Bench Gateway artifact SHA-256 must be lowercase hexadecimal");
+  const extension = artifact.kind === "js" ? "js" : "css";
+  const expectedContentType = artifact.kind === "js" ? "text/javascript" : "text/css";
+  if (artifact.contentType !== expectedContentType)
+    throw new TypeError("Bench Gateway artifact kind and content type do not match");
+  const maxBytes = options2.maxBytes ?? ABSOLUTE_MAX_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > ABSOLUTE_MAX_BYTES)
+    throw new TypeError("Bench Gateway artifact byte limit is invalid");
+  if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 1 || artifact.bytes > maxBytes)
+    throw new TypeError("Bench Gateway artifact exceeds its byte limit");
+  const baseUrl = options2.baseUrl ?? (typeof globalThis.location === "object" ? globalThis.location.href : undefined);
+  if (!baseUrl)
+    throw new TypeError("Bench Gateway artifact loading requires a base URL");
+  const endpoint = new URL(options2.endpoint, baseUrl);
+  if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
+    throw new TypeError("Bench Gateway endpoint must be an HTTP(S) URL without credentials, query, or fragment");
+  }
+  const artifactUrl = new URL(artifact.path, endpoint);
+  if (artifactUrl.origin !== endpoint.origin)
+    throw new TypeError("Bench Gateway artifact origin does not match its authorized Gateway");
+  if (!artifact.path.startsWith("/") || artifactUrl.search || artifactUrl.hash || !artifactUrl.pathname.endsWith(`/${artifact.sha256}.${extension}`)) {
+    throw new TypeError("Bench Gateway artifact path must be canonical and content-addressed");
+  }
+  if (options2.signal?.aborted)
+    throw abortReason(options2.signal);
+  const responsePromise = options2.fetcher.call(globalThis, artifactUrl, {
+    credentials: "omit",
+    headers: { accept: artifact.contentType },
+    redirect: "error",
+    ...options2.signal ? { signal: options2.signal } : {}
+  });
+  let response;
+  try {
+    response = await settleOnAbort(responsePromise, options2.signal);
+  } catch (error) {
+    if (options2.signal?.aborted)
+      responsePromise.then((lateResponse) => lateResponse.body?.cancel(abortReason(options2.signal))).catch(() => {
+        return;
+      });
+    throw error;
+  }
+  if (response.status !== 200)
+    rejectBeforeStreaming(response, `Bench Gateway artifact requires status 200, received ${response.status}`);
+  if (response.redirected)
+    rejectBeforeStreaming(response, "Bench Gateway artifact redirect is not authorized");
+  if (response.url && response.url !== artifactUrl.href)
+    rejectBeforeStreaming(response, "Bench Gateway artifact final URL does not match its authorized URL");
+  const responseContentType = response.headers.get("content-type")?.trim().toLowerCase() ?? "";
+  if (responseContentType !== artifact.contentType && !new RegExp(`^${artifact.contentType};\\s*charset=utf-8$`).test(responseContentType)) {
+    rejectBeforeStreaming(response, "Bench Gateway artifact content type does not match its catalog");
+  }
+  const declaredLength = response.headers.get("content-length");
+  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== artifact.bytes)) {
+    rejectBeforeStreaming(response, "Bench Gateway artifact byte length does not match its catalog");
+  }
+  if (!response.body)
+    throw new Error("Bench Gateway artifact response body is missing");
+  const reader = response.body.getReader();
+  const bytes = new Uint8Array(artifact.bytes);
+  let offset = 0;
+  let readPending = false;
+  try {
+    while (true) {
+      readPending = true;
+      const read = reader.read().finally(() => {
+        readPending = false;
+      });
+      const result = await settleOnAbort(read, options2.signal);
+      if (result.done)
+        break;
+      if (offset + result.value.byteLength > artifact.bytes) {
+        await reader.cancel("Bench Gateway artifact byte length does not match its catalog");
+        throw new Error("Bench Gateway artifact byte length does not match its catalog");
+      }
+      bytes.set(result.value, offset);
+      offset += result.value.byteLength;
+    }
+  } catch (error) {
+    if (options2.signal?.aborted)
+      reader.cancel(abortReason(options2.signal)).catch(() => {
+        return;
+      });
+    throw error;
+  } finally {
+    if (!readPending)
+      reader.releaseLock();
+  }
+  if (offset !== artifact.bytes)
+    throw new Error("Bench Gateway artifact byte length does not match its catalog");
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const actualSha256 = [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
+  if (actualSha256 !== artifact.sha256)
+    throw new Error("Bench Gateway artifact SHA-256 does not match its catalog");
+  return bytes;
+}
+function settleOnAbort(promise, signal) {
+  if (!signal)
+    return promise;
+  if (signal.aborted)
+    return Promise.reject(abortReason(signal));
+  return new Promise((resolve2, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(abortReason(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve2(value);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+function abortReason(signal) {
+  return signal.reason ?? new DOMException("Bench Gateway catalog request aborted", "AbortError");
+}
+function rejectBeforeStreaming(response, message) {
+  response.body?.cancel(message).catch(() => {
+    return;
+  });
+  throw new Error(message);
+}
+
+// packages/react/src/liveComponentRuntime.ts
+var unavailableSnapshot = Object.freeze({ status: "unavailable" });
+var MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+var MAX_FRAME_RUNTIME_BYTES2 = 8 * 1024 * 1024;
+var MAX_SOURCE_RESPONSE_BYTES = 8 * 1024;
+var MAX_EVENT_BUFFER_BYTES = 64 * 1024;
+var DEFAULT_CATALOG_REQUEST_TIMEOUT_MS = 1e4;
+function createLiveComponentRuntime(options2) {
+  const listeners = new Set;
+  const requested = new Set;
+  const requestedSources = new Set;
+  const snapshots = new Map;
+  const sourceDiagnostics = new Map;
+  const sourceSnapshots = new Map;
+  const sourceTypeIds = new Map;
+  const baseUrl = options2.baseUrl ?? globalThis.location?.href ?? "http://localhost/";
+  const apiBase = new URL(options2.apiBasePath.replace(/\/$/, "") + "/", baseUrl);
+  const catalogRequestTimeoutMs = options2.catalogRequestTimeoutMs ?? DEFAULT_CATALOG_REQUEST_TIMEOUT_MS;
+  const reconcileIntervalMs = options2.reconcileIntervalMs ?? 2000;
+  if (!Number.isFinite(catalogRequestTimeoutMs) || catalogRequestTimeoutMs < 10)
+    throw new TypeError("Live component catalog request timeout is invalid");
+  if (!Number.isFinite(reconcileIntervalMs) || reconcileIntervalMs < 10)
+    throw new TypeError("Live component reconciliation interval is invalid");
+  const lifecycleAbort = new AbortController;
+  let catalog = null;
+  let closed = false;
+  let eventAbort = null;
+  let eventRetryTimer = null;
+  let finishEventRetry = null;
+  let reconcileTimer = null;
+  let startupRetryTimer = null;
+  let started = false;
+  let refreshInFlight = null;
+  let queuedRefresh = null;
+  let startupFailurePublished = false;
+  let frameRuntimePromise = null;
+  const notify = () => {
+    for (const listener of listeners)
+      listener();
+  };
+  const setSnapshot = (typeId, snapshot) => {
+    if (closed)
+      return false;
+    snapshots.set(typeId, Object.freeze(snapshot));
+    notify();
+    return !closed;
+  };
+  const loadCandidate = async (descriptor, nextCatalog) => {
+    if (descriptor.schemaVersion !== 1 || descriptor.hostApiRange !== "^1.0.0")
+      throw new Error(`Live component ${descriptor.typeId} requires an unsupported host ABI`);
+    const jsArtifact = nextCatalog.artifacts.find((artifact) => artifact.sha256 === descriptor.jsArtifactSha256);
+    if (!jsArtifact)
+      throw new Error(`Component JavaScript artifact is missing: ${descriptor.typeId}`);
+    const jsBytes = await loadBenchGatewayArtifact({
+      artifact: jsArtifact,
+      baseUrl,
+      endpoint: apiBase.origin,
+      fetcher: options2.fetcher,
+      signal: lifecycleAbort.signal
+    });
+    frameRuntimePromise ??= loadFrameRuntime(options2.fetcher, apiBase, lifecycleAbort.signal);
+    const frameRuntimeBytes = await frameRuntimePromise.catch((error) => {
+      frameRuntimePromise = null;
+      throw error;
+    });
+    let cssBytes;
+    if (descriptor.cssArtifactSha256) {
+      const cssArtifact = nextCatalog.artifacts.find((artifact) => artifact.sha256 === descriptor.cssArtifactSha256);
+      if (!cssArtifact)
+        throw new Error(`Component CSS artifact is missing: ${descriptor.typeId}`);
+      cssBytes = await loadBenchGatewayArtifact({
+        artifact: cssArtifact,
+        baseUrl,
+        endpoint: apiBase.origin,
+        fetcher: options2.fetcher,
+        signal: lifecycleAbort.signal
+      });
+    }
+    return Object.freeze({
+      artifacts: Object.freeze({
+        ...cssBytes ? { componentCss: cssBytes.slice() } : {},
+        componentJavaScript: jsBytes.slice(),
+        frameRuntimeJavaScript: frameRuntimeBytes.slice()
+      }),
+      implementationRevision: descriptor.implementationRevision,
+      status: "ready",
+      typeId: descriptor.typeId
+    });
+  };
+  const loadCatalog = async () => {
+    const controller = new AbortController;
+    const onLifecycleAbort = () => controller.abort(lifecycleAbort.signal.reason);
+    lifecycleAbort.signal.addEventListener("abort", onLifecycleAbort, { once: true });
+    const timeout = setTimeout(() => controller.abort(new DOMException("Live component catalog request timed out", "TimeoutError")), catalogRequestTimeoutMs);
+    const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("catalog", apiBase), {
+      cache: "no-store",
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: controller.signal
+    }));
+    let response = null;
+    try {
+      response = await settleOnAbort2(responsePromise, controller.signal);
+      if (response.status !== 200 || response.redirected)
+        throw new Error(`Live component catalog requires status 200, received ${response.status}`);
+      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
+        throw new Error("Live component catalog has an invalid content type");
+      return parseWorkbenchExtensionCatalog(await readBoundedJson(response, MAX_CATALOG_BYTES, controller.signal));
+    } catch (error) {
+      if (response)
+        cancelResponseBody(response, error);
+      else if (controller.signal.aborted)
+        responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
+          return;
+        });
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+      lifecycleAbort.signal.removeEventListener("abort", onLifecycleAbort);
+    }
+  };
+  const refreshNow = async () => {
+    if (closed)
+      return;
+    const nextCatalog = await loadCatalog();
+    if (closed)
+      return;
+    if (catalog) {
+      if (JSON.stringify(nextCatalog.authority) !== JSON.stringify(catalog.authority))
+        throw new Error("Live component catalog authority changed");
+      if (nextCatalog.sequence < catalog.sequence)
+        throw new Error("Live component catalog sequence regressed");
+      if (nextCatalog.sequence === catalog.sequence) {
+        if (nextCatalog.catalogRevision !== catalog.catalogRevision || JSON.stringify(nextCatalog) !== JSON.stringify(catalog)) {
+          throw new Error("Live component catalog equivocated at one sequence");
+        }
+      } else if (nextCatalog.sequence === catalog.sequence + 1) {
+        if (nextCatalog.parentCatalogRevision !== catalog.catalogRevision)
+          throw new Error("Live component catalog revision chain is discontinuous");
+      }
+    }
+    catalog = nextCatalog;
+    for (const typeId of requested) {
+      if (closed || catalog !== nextCatalog)
+        return;
+      const descriptor = nextCatalog.components.find((component) => component.typeId === typeId);
+      const previous = snapshots.get(typeId);
+      if (!descriptor) {
+        const sourceDiagnostic = sourceDiagnostics.get(typeId);
+        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: sourceDiagnostic ?? `Component type is not published: ${typeId}`, status: "error" }))
+          return;
+        continue;
+      }
+      if (previous?.artifacts && previous.implementationRevision === descriptor.implementationRevision)
+        continue;
+      if (!previous?.artifacts && !setSnapshot(typeId, { status: "loading" }))
+        return;
+      try {
+        const candidate = await loadCandidate(descriptor, nextCatalog);
+        if (closed || catalog !== nextCatalog)
+          return;
+        sourceDiagnostics.delete(typeId);
+        if (!setSnapshot(typeId, candidate))
+          return;
+      } catch (error) {
+        if (closed || catalog !== nextCatalog)
+          return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" }))
+          return;
+      }
+    }
+  };
+  const runRefresh = () => {
+    const operation = refreshNow();
+    refreshInFlight = operation;
+    operation.finally(() => {
+      if (refreshInFlight !== operation)
+        return;
+      refreshInFlight = null;
+      const queued = queuedRefresh;
+      queuedRefresh = null;
+      if (!queued)
+        return;
+      if (closed) {
+        queued.resolve();
+        return;
+      }
+      runRefresh().then(queued.resolve, queued.reject);
+    }).catch(() => {
+      return;
+    });
+    return operation;
+  };
+  const refresh = () => {
+    if (!refreshInFlight)
+      return runRefresh();
+    if (!queuedRefresh) {
+      let resolve2;
+      let reject;
+      const promise = new Promise((onResolve, onReject) => {
+        resolve2 = onResolve;
+        reject = onReject;
+      });
+      queuedRefresh = { promise, reject, resolve: resolve2 };
+    }
+    return queuedRefresh.promise;
+  };
+  const startReconciliation = () => {
+    if (reconcileTimer !== null)
+      return;
+    reconcileTimer = setInterval(() => {
+      if (!closed)
+        refresh().catch(() => {
+          return;
+        });
+    }, reconcileIntervalMs);
+  };
+  const markBuildFailure = (event) => {
+    if (closed)
+      return;
+    const dataLine = event.split(`
+`).find((line) => line.startsWith("data:"));
+    if (!dataLine)
+      return;
+    try {
+      const data = JSON.parse(dataLine.slice(5));
+      if (typeof data.componentTypeId !== "string" || !requested.has(data.componentTypeId))
+        return;
+      const previous = snapshots.get(data.componentTypeId);
+      const error = typeof data.message === "string" ? data.message : "Candidate build failed.";
+      setSnapshot(data.componentTypeId, previous?.artifacts ? { ...previous, error, status: "stale" } : { error, status: "error" });
+    } catch {}
+  };
+  const waitForEventRetry = () => new Promise((resolve2) => {
+    const finish = () => {
+      if (eventRetryTimer !== null)
+        clearTimeout(eventRetryTimer);
+      eventRetryTimer = null;
+      if (finishEventRetry === finish)
+        finishEventRetry = null;
+      resolve2();
+    };
+    finishEventRetry = finish;
+    eventRetryTimer = setTimeout(finish, 500);
+  });
+  const connectEvents = async () => {
+    while (!closed) {
+      const controller = new AbortController;
+      eventAbort = controller;
+      let reader = null;
+      let pendingRead = null;
+      let response = null;
+      const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("events", apiBase), {
+        headers: { accept: "text/event-stream" },
+        redirect: "error",
+        signal: controller.signal
+      }));
+      try {
+        response = await settleOnAbort2(responsePromise, controller.signal);
+        if (response.status !== 200 || !response.body)
+          throw new Error(`Live component event stream requires status 200, received ${response.status}`);
+        if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
+          throw new Error("Live component event stream has an invalid content type");
+        reader = response.body.getReader();
+        const decoder = new TextDecoder;
+        let pending = "";
+        while (!closed) {
+          const readPromise = reader.read();
+          pendingRead = readPromise;
+          const result = await settleOnAbort2(readPromise, controller.signal);
+          pendingRead = null;
+          if (result.done)
+            throw new Error("Live component event stream disconnected");
+          pending += decoder.decode(result.value, { stream: true });
+          if (pending.length > MAX_EVENT_BUFFER_BYTES)
+            throw new Error("Live component event exceeded the supported bound");
+          let boundary = pending.indexOf(`
+
+`);
+          while (boundary >= 0) {
+            const event = pending.slice(0, boundary);
+            pending = pending.slice(boundary + 2);
+            if (/^event:\s*component-revision-activated\s*$/mu.test(event))
+              await refresh();
+            else if (/^event:\s*component-build-failed\s*$/mu.test(event))
+              markBuildFailure(event);
+            boundary = pending.indexOf(`
+
+`);
+          }
+        }
+      } catch {
+        if (!reader) {
+          if (response)
+            cancelResponseBody(response, controller.signal.reason);
+          else if (controller.signal.aborted)
+            responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
+              return;
+            });
+        }
+        if (closed || controller.signal.aborted)
+          return;
+      } finally {
+        if (reader) {
+          const ownedReader = reader;
+          const reason = controller.signal.aborted ? controller.signal.reason : new DOMException("Live component event reader closed", "AbortError");
+          try {
+            ownedReader.cancel(reason).catch(() => {
+              return;
+            });
+          } catch {}
+          if (pendingRead) {
+            pendingRead.finally(() => {
+              try {
+                ownedReader.releaseLock();
+              } catch {}
+            }).catch(() => {
+              return;
+            });
+          } else {
+            try {
+              ownedReader.releaseLock();
+            } catch {}
+          }
+        }
+        if (eventAbort === controller)
+          eventAbort = null;
+      }
+      await waitForEventRetry();
+      if (!closed) {
+        try {
+          await refresh();
+        } catch {}
+      }
+    }
+  };
+  const startTransport = () => {
+    refresh().then(() => {
+      if (closed)
+        return;
+      startReconciliation();
+      return connectEvents();
+    }).catch((error) => {
+      if (closed)
+        return;
+      if (!startupFailurePublished) {
+        startupFailurePublished = true;
+        const message = error instanceof Error ? error.message : String(error);
+        for (const requestedTypeId of requested) {
+          if (!setSnapshot(requestedTypeId, { error: message, status: "error" }))
+            return;
+        }
+      }
+      if (closed)
+        return;
+      startupRetryTimer = setTimeout(() => {
+        startupRetryTimer = null;
+        if (!closed)
+          startTransport();
+      }, reconcileIntervalMs);
+    });
+  };
+  const ensureType = (typeId) => {
+    if (closed || requested.has(typeId))
+      return;
+    requested.add(typeId);
+    setSnapshot(typeId, { status: "loading" });
+    if (!started) {
+      started = true;
+      startTransport();
+    } else if (catalog) {
+      refresh().catch((error) => {
+        if (!closed)
+          setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" });
+      });
+    }
+  };
+  const ensureSource = (source) => {
+    const key = sourceKey(source);
+    if (closed || requestedSources.has(key))
+      return;
+    requestedSources.add(key);
+    sourceSnapshots.set(key, Object.freeze({ status: "loading" }));
+    notify();
+    (async () => {
+      let response;
+      try {
+        response = await options2.fetcher.call(globalThis, new URL("sources/ensure", apiBase), {
+          body: JSON.stringify(source),
+          cache: "no-store",
+          headers: { accept: "application/json", "content-type": "application/json" },
+          method: "POST",
+          redirect: "error",
+          signal: lifecycleAbort.signal
+        });
+        const payload = await readBoundedSourceResponse(response);
+        if (closed)
+          return;
+        const typeId = typeof payload.typeId === "string" && /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u.test(payload.typeId) ? payload.typeId : undefined;
+        if (response.status === 200 && typeId) {
+          sourceTypeIds.set(key, typeId);
+          sourceSnapshots.delete(key);
+          sourceDiagnostics.delete(typeId);
+          ensureType(typeId);
+          return;
+        }
+        const message = typeof payload.error === "string" && payload.error.length <= 2048 ? payload.error : `Live component source ensure failed with status ${response.status}`;
+        if (response.status === 422 && typeId) {
+          sourceTypeIds.set(key, typeId);
+          sourceSnapshots.delete(key);
+          sourceDiagnostics.set(typeId, message);
+          ensureType(typeId);
+          setSnapshot(typeId, { error: message, status: "error" });
+          return;
+        }
+        sourceSnapshots.set(key, Object.freeze({ error: message, status: "error" }));
+        requestedSources.delete(key);
+        notify();
+      } catch (error) {
+        if (closed)
+          return;
+        sourceSnapshots.set(key, Object.freeze({ error: error instanceof Error ? error.message : String(error), status: "error" }));
+        requestedSources.delete(key);
+        notify();
+      }
+    })();
+  };
+  return Object.freeze({
+    close() {
+      closed = true;
+      lifecycleAbort.abort();
+      eventAbort?.abort();
+      finishEventRetry?.();
+      if (reconcileTimer !== null)
+        clearInterval(reconcileTimer);
+      if (startupRetryTimer !== null)
+        clearTimeout(startupRetryTimer);
+      queuedRefresh?.resolve();
+      queuedRefresh = null;
+      reconcileTimer = null;
+      startupRetryTimer = null;
+      listeners.clear();
+    },
+    ensure: ensureType,
+    ensureSource,
+    getSnapshot(typeId) {
+      return snapshots.get(typeId) ?? unavailableSnapshot;
+    },
+    getSourceSnapshot(source) {
+      const key = sourceKey(source);
+      const typeId = sourceTypeIds.get(key);
+      return typeId ? snapshots.get(typeId) ?? sourceSnapshots.get(key) ?? unavailableSnapshot : sourceSnapshots.get(key) ?? unavailableSnapshot;
+    },
+    refresh,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }
+  });
+}
+async function readBoundedJson(response, maximumBytes, signal) {
+  const declared = response.headers.get("content-length");
+  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
+    throw new Error("Live component catalog exceeded the supported bound");
+  if (!response.body)
+    throw new Error("Live component catalog response body is missing");
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  let pendingRead = null;
+  try {
+    while (true) {
+      const readPromise = reader.read();
+      pendingRead = readPromise;
+      const result = await settleOnAbort2(readPromise, signal);
+      pendingRead = null;
+      if (result.done)
+        break;
+      total += result.value.byteLength;
+      if (total > maximumBytes)
+        throw new Error("Live component catalog exceeded the supported bound");
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    reader.cancel(error).catch(() => {
+      return;
+    });
+    throw error;
+  } finally {
+    if (pendingRead) {
+      pendingRead.finally(() => reader.releaseLock()).catch(() => {
+        return;
+      });
+    } else {
+      reader.releaseLock();
+    }
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+}
+function cancelResponseBody(response, reason) {
+  try {
+    response.body?.cancel(reason).catch(() => {
+      return;
+    });
+  } catch {}
+}
+function settleOnAbort2(promise, signal) {
+  if (!signal)
+    return promise;
+  if (signal.aborted)
+    return Promise.reject(signal.reason);
+  return new Promise((resolve2, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      resolve2(value);
+    }, (error) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+function sourceKey(source) {
+  return JSON.stringify([source.vaultId, source.path]);
+}
+async function readBoundedSourceResponse(response) {
+  const payload = await readBoundedJson(response, MAX_SOURCE_RESPONSE_BYTES);
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    throw new Error("Live component source response is invalid");
+  return payload;
+}
+async function loadFrameRuntime(fetcher, apiBase, signal) {
+  const response = await fetcher.call(globalThis, new URL("frame-runtime.js", apiBase), {
+    cache: "no-store",
+    headers: { accept: "text/javascript" },
+    redirect: "error",
+    signal
+  });
+  try {
+    if (response.status !== 200 || response.redirected)
+      throw new Error(`Live component frame runtime requires status 200, received ${response.status}`);
+    if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/javascript"))
+      throw new Error("Live component frame runtime has an invalid content type");
+    if (response.headers.get("cache-control")?.toLowerCase() !== "private, no-store, no-transform")
+      throw new Error("Live component frame runtime cache policy is invalid");
+    const expectedSha256 = response.headers.get("x-content-sha256");
+    if (!expectedSha256 || !/^[a-f0-9]{64}$/u.test(expectedSha256))
+      throw new Error("Live component frame runtime hash is invalid");
+    const bytes = await readBoundedBytes(response, MAX_FRAME_RUNTIME_BYTES2, signal, "Live component frame runtime");
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice().buffer));
+    const actualSha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    if (actualSha256 !== expectedSha256)
+      throw new Error("Live component frame runtime hash mismatch");
+    return bytes;
+  } catch (error) {
+    cancelResponseBody(response, error);
+    throw error;
+  }
+}
+async function readBoundedBytes(response, maximumBytes, signal, label) {
+  const declared = response.headers.get("content-length");
+  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
+    throw new Error(`${label} exceeded the supported bound`);
+  if (!response.body)
+    throw new Error(`${label} response body is missing`);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const result = await settleOnAbort2(reader.read(), signal);
+      if (result.done)
+        break;
+      total += result.value.byteLength;
+      if (total > maximumBytes)
+        throw new Error(`${label} exceeded the supported bound`);
+      chunks.push(result.value);
+    }
+  } catch (error) {
+    reader.cancel(error).catch(() => {
+      return;
+    });
+    throw error;
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+// packages/react/src/LiveWorkbenchRuntimeProvider.tsx
+function LiveWorkbenchRuntimeProvider({
+  apiBaseUrl,
+  children,
+  fetcher,
+  liveComponents
+}) {
+  const liveApiBasePath = liveComponents?.apiBasePath ?? `${apiBaseUrl.replace(/\/$/, "")}/components`;
+  const liveBaseUrl = liveComponents?.baseUrl;
+  const liveComponentRuntime = import_react13.useMemo(() => createLiveComponentRuntime({
+    apiBasePath: liveApiBasePath,
+    ...liveBaseUrl ? { baseUrl: liveBaseUrl } : {},
+    fetcher
+  }), [fetcher, liveApiBasePath, liveBaseUrl]);
+  const lifecycleRef = import_react13.useRef(null);
+  import_react13.useEffect(() => {
+    const generation = lifecycleRef.current?.runtime === liveComponentRuntime ? lifecycleRef.current.generation + 1 : 1;
+    lifecycleRef.current = { generation, runtime: liveComponentRuntime };
+    return () => queueMicrotask(() => {
+      const active = lifecycleRef.current;
+      if (active?.runtime !== liveComponentRuntime || active.generation === generation)
+        liveComponentRuntime.close();
+    });
+  }, [liveComponentRuntime]);
+  return import_react13.createElement(LiveComponentRuntimeContext.Provider, { value: liveComponentRuntime }, children);
+}
+
 // packages/react/src/Workbench.debug.tsx
 var jsx_runtime24 = __toESM(require_jsx_runtime(), 1);
 function getCommentSourceRevision(baseRevision, element) {
@@ -34415,6 +35365,65 @@ function createActiveBenchBreadcrumbItems(stack, activePath) {
     ...stack.map((entry, index2) => ({ isCurrent: false, label: entry.path, path: entry.path, stackIndex: index2 })),
     { isCurrent: true, label: activePath, path: activePath, stackIndex: stack.length }
   ];
+}
+function normalizeBenchLookupPath(path) {
+  const parts = [];
+  for (const part of path.trim().replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".")
+      continue;
+    if (part === "..")
+      parts.pop();
+    else
+      parts.push(part);
+  }
+  return parts.join("/");
+}
+function getBenchFilename(path) {
+  const normalized = normalizeBenchLookupPath(path);
+  return normalized.split("/").pop() ?? path;
+}
+async function findParentBenchLocations(activePath, vaultFiles) {
+  const directories = ["."];
+  const visitedDirectories = new Set;
+  const benchPaths = [];
+  while (directories.length > 0) {
+    const directory = directories.shift();
+    if (visitedDirectories.has(directory))
+      continue;
+    visitedDirectories.add(directory);
+    const listing = await vaultFiles.listFiles(directory);
+    const listedDirectory = listing.path || directory;
+    for (const entry of [...listing.files].sort((left, right) => left.name.localeCompare(right.name))) {
+      const path = joinVaultFilePath(listedDirectory, entry.name);
+      if (entry.type === "directory")
+        directories.push(path);
+      else if (isBenchDocumentPath(path))
+        benchPaths.push(path);
+    }
+  }
+  const targetPath = normalizeBenchLookupPath(activePath);
+  const locations = [];
+  let nextIndex = 0;
+  const inspectNext = async () => {
+    while (nextIndex < benchPaths.length) {
+      const path = benchPaths[nextIndex++];
+      try {
+        const file = await vaultFiles.readFile(path);
+        const bench = parseBenchDocument(file.content, path);
+        for (const element of bench.elements ?? []) {
+          if (element.type !== "bench" || typeof element.path !== "string" || normalizeBenchLookupPath(element.path) !== targetPath || typeof element.id !== "string")
+            continue;
+          locations.push({
+            benchElementId: element.id,
+            benchElementLabel: typeof element.label === "string" && element.label ? element.label : element.path,
+            path: file.path || path
+          });
+        }
+      } catch {}
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(8, benchPaths.length) }, inspectNext));
+  return locations.sort((left, right) => left.path.localeCompare(right.path) || left.benchElementId.localeCompare(right.benchElementId));
 }
 function createParentBenchReturnState(stack) {
   const parent = stack[stack.length - 1];
@@ -34594,33 +35603,42 @@ function createWorkbenchDebugComponent(pluginRegistry = createWorkbenchPluginReg
     description: "Integrated workbench scenarios backed by real vault files and server APIs.",
     scenarios,
     renderScenario(scenarioId, context) {
+      const fetcher = dataPlane.fetcher ?? fetch;
       if (scenarioId === "bootstrap" || scenarioId === "bootstrap-main")
-        return /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchBootstrapScenario, {
+        return /* @__PURE__ */ jsx_runtime24.jsx(LiveWorkbenchRuntimeProvider, {
           apiBaseUrl: dataPlane.apiBaseUrl,
-          applicationChrome,
-          componentHref: context.componentHref,
-          componentName: context.componentName,
-          directoryMountAuthorities,
-          elementTypeRegistry,
-          expectedInitialView: dataPlane.expectedInitialView,
-          fetcher: dataPlane.fetcher,
-          pluginRegistry,
-          scenarioId,
-          uploadRawFile: dataPlane.uploadRawFile
+          fetcher,
+          children: /* @__PURE__ */ jsx_runtime24.jsx(WorkbenchBootstrapScenario, {
+            apiBaseUrl: dataPlane.apiBaseUrl,
+            applicationChrome,
+            componentHref: context.componentHref,
+            componentName: context.componentName,
+            directoryMountAuthorities,
+            elementTypeRegistry,
+            expectedInitialView: dataPlane.expectedInitialView,
+            fetcher: dataPlane.fetcher,
+            pluginRegistry,
+            scenarioId,
+            uploadRawFile: dataPlane.uploadRawFile
+          })
         });
       const benchPath = scenarioBenchPaths[scenarioId];
       if (benchPath)
-        return /* @__PURE__ */ jsx_runtime24.jsx(MainBenchScenario, {
+        return /* @__PURE__ */ jsx_runtime24.jsx(LiveWorkbenchRuntimeProvider, {
           apiBaseUrl: dataPlane.apiBaseUrl,
-          applicationChrome,
-          benchPath,
-          componentHref: context.componentHref,
-          componentName: context.componentName,
-          elementTypeRegistry,
-          fetcher: dataPlane.fetcher,
-          pluginRegistry,
-          scenarioId,
-          uploadRawFile: dataPlane.uploadRawFile
+          fetcher,
+          children: /* @__PURE__ */ jsx_runtime24.jsx(MainBenchScenario, {
+            apiBaseUrl: dataPlane.apiBaseUrl,
+            applicationChrome,
+            benchPath,
+            componentHref: context.componentHref,
+            componentName: context.componentName,
+            elementTypeRegistry,
+            fetcher: dataPlane.fetcher,
+            pluginRegistry,
+            scenarioId,
+            uploadRawFile: dataPlane.uploadRawFile
+          })
         });
       return /* @__PURE__ */ jsx_runtime24.jsx(DebugMissingScenario, {
         componentHref: context.componentHref,
@@ -34696,9 +35714,9 @@ function isStringArray(value) {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 function WorkbenchBootstrapScenario({ apiBaseUrl = "/api/workbench", applicationChrome, componentHref, componentName, directoryMountAuthorities = [], elementTypeRegistry = debugElementTypeRegistry, expectedInitialView, fetcher = fetch, pluginRegistry = createWorkbenchPluginRegistry(), scenarioId, uploadRawFile }) {
-  const [bootstrap, setBootstrap] = import_react13.useState(null);
-  const [error, setError] = import_react13.useState(null);
-  import_react13.useEffect(() => {
+  const [bootstrap, setBootstrap] = import_react14.useState(null);
+  const [error, setError] = import_react14.useState(null);
+  import_react14.useEffect(() => {
     let cancelled = false;
     loadWorkbenchBootstrap(apiBaseUrl, fetcher).then((loaded) => {
       if (expectedInitialView)
@@ -35448,96 +36466,106 @@ function WorkbenchViewportRecoveryFrame({ children, status }) {
   });
 }
 function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, benchPath, bootstrapSources, collaborationAuthority, componentHref, componentName, directoryMountAuthorities = EMPTY_DIRECTORY_MOUNT_AUTHORITIES, elementTypeRegistry = debugElementTypeRegistry, fetcher = fetch, loadRecoveryOptions, pluginRegistry, scenarioId, uploadRawFile, vaultId = "main" }) {
-  const vaultFiles = import_react13.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
-  const assetTransport = import_react13.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
+  const vaultFiles = import_react14.useMemo(() => createVaultFileClient(vaultId, apiBaseUrl, fetcher, uploadRawFile), [apiBaseUrl, fetcher, uploadRawFile, vaultId]);
+  const assetTransport = import_react14.useMemo(() => ({ apiBaseUrl, fetcher }), [apiBaseUrl, fetcher]);
   const commentCollaborationClient = collaborationAuthority ? applicationChrome?.commentCollaboration?.client ?? null : null;
-  const benchNavigationStorageKey = import_react13.useMemo(() => createBenchNavigationStorageKey(apiBaseUrl, vaultId, benchPath), [apiBaseUrl, benchPath, vaultId]);
-  const restoredBenchNavigation = import_react13.useMemo(() => {
+  const benchNavigationStorageKey = import_react14.useMemo(() => createBenchNavigationStorageKey(apiBaseUrl, vaultId, benchPath), [apiBaseUrl, benchPath, vaultId]);
+  const restoredBenchNavigation = import_react14.useMemo(() => {
     try {
       return getStoredBenchNavigation(typeof window === "undefined" ? undefined : window.localStorage, benchNavigationStorageKey, benchPath);
     } catch {
       return null;
     }
   }, [benchNavigationStorageKey, benchPath]);
-  const [activeBenchPath, setActiveBenchPath] = import_react13.useState(restoredBenchNavigation?.activeBenchPath ?? benchPath);
-  const [activeBenchStack, setActiveBenchStack] = import_react13.useState(restoredBenchNavigation?.activeBenchStack ?? []);
+  const [activeBenchPath, setActiveBenchPath] = import_react14.useState(restoredBenchNavigation?.activeBenchPath ?? benchPath);
+  const [activeBenchStack, setActiveBenchStack] = import_react14.useState(restoredBenchNavigation?.activeBenchStack ?? []);
   const activeBenchLoadKey = createActiveBenchLoadKey(activeBenchPath, activeBenchStack);
-  const [pendingBenchOpen, setPendingBenchOpen] = import_react13.useState(null);
+  const [pendingBenchOpen, setPendingBenchOpen] = import_react14.useState(null);
   const requestedBenchPath = pendingBenchOpen?.path ?? activeBenchPath;
   const requestedBenchStack = pendingBenchOpen?.stack ?? activeBenchStack;
   const requestedBenchLoadKey = createActiveBenchLoadKey(requestedBenchPath, requestedBenchStack);
-  const [focusElementId, setFocusElementId] = import_react13.useState();
-  const [focusViewportSource, setFocusViewportSource] = import_react13.useState();
-  const [openViewportSource, setOpenViewportSource] = import_react13.useState();
-  const [scenario, setScenario] = import_react13.useState(null);
-  const [status, setStatus] = import_react13.useState(`Loading ${benchPath}…`);
-  const [browserStressReport, setBrowserStressReport] = import_react13.useState(null);
-  const [navigationReport, setNavigationReport] = import_react13.useState(null);
-  const [browserStressRunning, setBrowserStressRunning] = import_react13.useState(false);
-  const [debugMenuRequested, setDebugMenuRequested] = import_react13.useState(false);
-  const [debugPanelRequested, setDebugPanelRequested] = import_react13.useState(() => getStoredBenchDebugBoolean(typeof window === "undefined" ? undefined : window.localStorage, WORKBENCH_DEBUG_PANEL_STORAGE_KEY, false));
-  const [benchPreviewFormat, setBenchPreviewFormat] = import_react13.useState(() => getStoredBenchPreviewFormat(typeof window === "undefined" ? undefined : window.localStorage, WORKBENCH_BENCH_PREVIEW_FORMAT_STORAGE_KEY, "svg"));
-  const [activePreviewSvg, setActivePreviewSvg] = import_react13.useState(null);
-  const [showActivePreviewSvg, setShowActivePreviewSvg] = import_react13.useState(false);
-  const [activePreviewJpgOverlay, setActivePreviewJpgOverlay] = import_react13.useState(null);
-  const [showActivePreviewJpg, setShowActivePreviewJpg] = import_react13.useState(false);
-  const [jpgPreviewOpacity, setJpgPreviewOpacity] = import_react13.useState(0.6);
-  const [svgPreviewOpacity, setSvgPreviewOpacity] = import_react13.useState(0.7);
-  const [benchElementsOpacity, setBenchElementsOpacity] = import_react13.useState(1);
-  const [nestedElementsOpacity, setNestedElementsOpacity] = import_react13.useState(1);
-  const [showBenchElements, setShowBenchElements] = import_react13.useState(true);
-  const [showNestedBenchElements, setShowNestedBenchElements] = import_react13.useState(true);
-  const [wireframe, setWireframe] = import_react13.useState(false);
-  const [nestedLoadDepth, setNestedLoadDepth] = import_react13.useState(1);
-  const actorActivityPlugin = import_react13.useMemo(() => bootstrapSources?.some((source) => source.kind === "agents" && source.status === "connected") ? pluginRegistry.list().find((plugin) => plugin.kind === "actor-activity") : undefined, [bootstrapSources, pluginRegistry]);
-  const [actorContributions, setActorContributions] = import_react13.useState(null);
-  const [actorCursorSeconds, setActorCursorSeconds] = import_react13.useState(0);
-  const [actorCursorExactAt, setActorCursorExactAt] = import_react13.useState(null);
-  const [actorTimelinePlaying, setActorTimelinePlaying] = import_react13.useState(false);
-  const [actorTimelineFollowingLatest, setActorTimelineFollowingLatest] = import_react13.useState(true);
-  const [actorActivityFadeSeconds, setActorActivityFadeSeconds] = import_react13.useState(TIMELINE_FADE_SECONDS[3]);
-  const [actorActivityFadeClock, setActorActivityFadeClock] = import_react13.useState(() => Date.now());
-  const [actorTimelineStepSeconds, setActorTimelineStepSeconds] = import_react13.useState(TIMELINE_STEP_SECONDS[0]);
-  const [actorTimelineStepsPerSecond, setActorTimelineStepsPerSecond] = import_react13.useState(3);
-  const actorTimelineFallbackAtRef = import_react13.useRef(new Date().toISOString());
-  const [error, setError] = import_react13.useState(null);
-  const [saveError, setSaveError] = import_react13.useState(null);
-  const [reloadGeneration, setReloadGeneration] = import_react13.useState(0);
-  const benchRef = import_react13.useRef(null);
-  const rootAppearanceSnapshotRef = import_react13.useRef(null);
-  const scenarioRef = import_react13.useRef(null);
+  const [focusElementId, setFocusElementId] = import_react14.useState();
+  const [focusViewportSource, setFocusViewportSource] = import_react14.useState();
+  const [openViewportSource, setOpenViewportSource] = import_react14.useState();
+  const [parentBenchLocations, setParentBenchLocations] = import_react14.useState([]);
+  const [parentBenchLocationsError, setParentBenchLocationsError] = import_react14.useState(null);
+  const [parentBenchLocationsLoading, setParentBenchLocationsLoading] = import_react14.useState(false);
+  const [scenario, setScenario] = import_react14.useState(null);
+  const [status, setStatus] = import_react14.useState(`Loading ${benchPath}…`);
+  const [browserStressReport, setBrowserStressReport] = import_react14.useState(null);
+  const [navigationReport, setNavigationReport] = import_react14.useState(null);
+  const [browserStressRunning, setBrowserStressRunning] = import_react14.useState(false);
+  const [debugMenuRequested, setDebugMenuRequested] = import_react14.useState(false);
+  const [debugPanelRequested, setDebugPanelRequested] = import_react14.useState(() => getStoredBenchDebugBoolean(typeof window === "undefined" ? undefined : window.localStorage, WORKBENCH_DEBUG_PANEL_STORAGE_KEY, false));
+  const [benchPreviewFormat, setBenchPreviewFormat] = import_react14.useState(() => getStoredBenchPreviewFormat(typeof window === "undefined" ? undefined : window.localStorage, WORKBENCH_BENCH_PREVIEW_FORMAT_STORAGE_KEY, "svg"));
+  const [activePreviewSvg, setActivePreviewSvg] = import_react14.useState(null);
+  const [showActivePreviewSvg, setShowActivePreviewSvg] = import_react14.useState(false);
+  const [activePreviewJpgOverlay, setActivePreviewJpgOverlay] = import_react14.useState(null);
+  const [showActivePreviewJpg, setShowActivePreviewJpg] = import_react14.useState(false);
+  const [jpgPreviewOpacity, setJpgPreviewOpacity] = import_react14.useState(0.6);
+  const [svgPreviewOpacity, setSvgPreviewOpacity] = import_react14.useState(0.7);
+  const [benchElementsOpacity, setBenchElementsOpacity] = import_react14.useState(1);
+  const [nestedElementsOpacity, setNestedElementsOpacity] = import_react14.useState(1);
+  const [showBenchElements, setShowBenchElements] = import_react14.useState(true);
+  const [showNestedBenchElements, setShowNestedBenchElements] = import_react14.useState(true);
+  const [wireframe, setWireframe] = import_react14.useState(false);
+  const [nestedLoadDepth, setNestedLoadDepth] = import_react14.useState(1);
+  const actorActivityPlugin = import_react14.useMemo(() => bootstrapSources?.some((source) => source.kind === "agents" && source.status === "connected") ? pluginRegistry.list().find((plugin) => plugin.kind === "actor-activity") : undefined, [bootstrapSources, pluginRegistry]);
+  const [actorContributions, setActorContributions] = import_react14.useState(null);
+  const [actorCursorSeconds, setActorCursorSeconds] = import_react14.useState(0);
+  const [actorCursorExactAt, setActorCursorExactAt] = import_react14.useState(null);
+  const [actorTimelinePlaying, setActorTimelinePlaying] = import_react14.useState(false);
+  const [actorTimelineFollowingLatest, setActorTimelineFollowingLatest] = import_react14.useState(true);
+  const [actorActivityFadeSeconds, setActorActivityFadeSeconds] = import_react14.useState(TIMELINE_FADE_SECONDS[3]);
+  const [actorActivityFadeClock, setActorActivityFadeClock] = import_react14.useState(() => Date.now());
+  const [actorTimelineStepSeconds, setActorTimelineStepSeconds] = import_react14.useState(TIMELINE_STEP_SECONDS[0]);
+  const [actorTimelineStepsPerSecond, setActorTimelineStepsPerSecond] = import_react14.useState(3);
+  const actorTimelineFallbackAtRef = import_react14.useRef(new Date().toISOString());
+  const [error, setError] = import_react14.useState(null);
+  const [saveError, setSaveError] = import_react14.useState(null);
+  const [reloadGeneration, setReloadGeneration] = import_react14.useState(0);
+  const benchRef = import_react14.useRef(null);
+  const rootAppearanceSnapshotRef = import_react14.useRef(null);
+  const scenarioRef = import_react14.useRef(null);
   const loadRecoveryMaxRetries = loadRecoveryOptions?.maxRetries;
   const loadRecoveryRetryDelayMs = loadRecoveryOptions?.retryDelayMs;
   const loadRecoveryScheduleRetry = loadRecoveryOptions?.scheduleRetry;
-  const loadRecoveryLifecycle = import_react13.useMemo(() => createWorkbenchLoadRecoveryLifecycle({
+  const loadRecoveryLifecycle = import_react14.useMemo(() => createWorkbenchLoadRecoveryLifecycle({
     maxRetries: loadRecoveryMaxRetries,
     retryDelayMs: loadRecoveryRetryDelayMs,
     scheduleRetry: loadRecoveryScheduleRetry
   }), [loadRecoveryMaxRetries, loadRecoveryRetryDelayMs, loadRecoveryScheduleRetry]);
-  const activeBenchPathRef = import_react13.useRef(activeBenchPath);
+  const activeBenchPathRef = import_react14.useRef(activeBenchPath);
   activeBenchPathRef.current = activeBenchPath;
-  const activeBenchCanonicalPathRef = import_react13.useRef(activeBenchPath);
-  const loadedActiveBenchInstanceKeyRef = import_react13.useRef(activeBenchLoadKey);
-  const benchBaseContentRef = import_react13.useRef(undefined);
-  const benchEtagRef = import_react13.useRef("");
-  const textFileEtagsRef = import_react13.useRef(new Map);
-  const directoryHydrationGenerationRef = import_react13.useRef(0);
-  const previewPreferenceGenerationRef = import_react13.useRef(0);
-  const loadedNestedBenchesRef = import_react13.useRef(new Map);
-  const nestedAppearanceSnapshotsRef = import_react13.useRef(new Map);
-  const benchViewportDebugApiRef = import_react13.useRef(null);
-  const voiceCommentControllerRef = import_react13.useRef(null);
-  const suppressNextActiveBenchLoadRef = import_react13.useRef(false);
-  const saveTimerRef = import_react13.useRef(null);
-  const pendingBenchSaveRef = import_react13.useRef(null);
-  const saveInFlightRef = import_react13.useRef(null);
-  const restoredNestedNavigationPendingRef = import_react13.useRef(restoredBenchNavigation !== null && restoredBenchNavigation.activeBenchStack.length > 0);
-  import_react13.useEffect(() => {
+  const activeBenchCanonicalPathRef = import_react14.useRef(activeBenchPath);
+  const loadedActiveBenchInstanceKeyRef = import_react14.useRef(activeBenchLoadKey);
+  const benchBaseContentRef = import_react14.useRef(undefined);
+  const benchEtagRef = import_react14.useRef("");
+  const textFileEtagsRef = import_react14.useRef(new Map);
+  const directoryHydrationGenerationRef = import_react14.useRef(0);
+  const previewPreferenceGenerationRef = import_react14.useRef(0);
+  const parentBenchLocationsRequestGenerationRef = import_react14.useRef(0);
+  const loadedNestedBenchesRef = import_react14.useRef(new Map);
+  const nestedAppearanceSnapshotsRef = import_react14.useRef(new Map);
+  const benchViewportDebugApiRef = import_react14.useRef(null);
+  const voiceCommentControllerRef = import_react14.useRef(null);
+  const suppressNextActiveBenchLoadRef = import_react14.useRef(false);
+  const saveTimerRef = import_react14.useRef(null);
+  const pendingBenchSaveRef = import_react14.useRef(null);
+  const saveInFlightRef = import_react14.useRef(null);
+  const restoredNestedNavigationPendingRef = import_react14.useRef(restoredBenchNavigation !== null && restoredBenchNavigation.activeBenchStack.length > 0);
+  import_react14.useEffect(() => {
     try {
       setStoredBenchNavigation(window.localStorage, benchNavigationStorageKey, { activeBenchPath, activeBenchStack });
     } catch {}
   }, [activeBenchPath, activeBenchStack, benchNavigationStorageKey]);
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
+    parentBenchLocationsRequestGenerationRef.current += 1;
+    setParentBenchLocations([]);
+    setParentBenchLocationsError(null);
+    setParentBenchLocationsLoading(false);
+  }, [activeBenchPath]);
+  import_react14.useEffect(() => {
     if (suppressNextActiveBenchLoadRef.current) {
       suppressNextActiveBenchLoadRef.current = false;
       return;
@@ -35600,7 +36628,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       flushPendingBenchPlacementSave();
     };
   }, [apiBaseUrl, benchPreviewFormat, directoryMountAuthorities, fetcher, loadRecoveryLifecycle, pluginRegistry, reloadGeneration, requestedBenchLoadKey, requestedBenchPath, scenarioId, vaultFiles]);
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
     if (!actorActivityPlugin?.actorActivity) {
       setActorContributions(null);
       return;
@@ -35623,7 +36651,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     });
     return () => controller.abort(new DOMException("Workbench actor activity load superseded", "AbortError"));
   }, [actorActivityFadeSeconds, actorActivityPlugin]);
-  const actorTimelineRange = import_react13.useMemo(() => {
+  const actorTimelineRange = import_react14.useMemo(() => {
     const instants = [
       ...actorContributions?.activities.map((activity) => activity.occurredAt) ?? [],
       ...actorContributions?.actors.flatMap((actor) => [actor.startedAt, actor.endedAt].filter((value) => typeof value === "string")) ?? []
@@ -35635,21 +36663,21 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     return { end: Date.parse(endAt), endAt, start: Date.parse(startAt), startAt };
   }, [actorContributions]);
   const actorTimelineDuration = actorTimelineRange ? Math.max(5, Math.ceil((actorTimelineRange.end - actorTimelineRange.start) / 1000)) : 5;
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
     if (actorTimelineRange && actorTimelineFollowingLatest) {
       setActorCursorExactAt(null);
       setActorCursorSeconds(actorTimelineDuration);
     }
   }, [actorTimelineDuration, actorTimelineFollowingLatest, actorTimelineRange]);
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
     if (!actorTimelineFollowingLatest)
       return;
-    const updateClock = () => import_react13.startTransition(() => setActorActivityFadeClock(Date.now()));
+    const updateClock = () => import_react14.startTransition(() => setActorActivityFadeClock(Date.now()));
     updateClock();
     const timer = window.setInterval(updateClock, getActorActivityFadeTickMs(actorActivityFadeSeconds));
     return () => window.clearInterval(timer);
   }, [actorActivityFadeSeconds, actorTimelineFollowingLatest]);
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
     if (!actorTimelinePlaying)
       return;
     setActorCursorExactAt(null);
@@ -35724,7 +36752,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
       return false;
     }
   }
-  import_react13.useEffect(() => {
+  import_react14.useEffect(() => {
     const handleBeforeUnload = (event) => {
       const hasFocusedTextarea = document.activeElement?.tagName === "TEXTAREA";
       if (hasFocusedTextarea)
@@ -35881,6 +36909,37 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setFocusViewportSource(undefined);
     setOpenViewportSource(undefined);
     setActiveBenchPath(path);
+  }
+  async function handleParentBenchLocationsRequest() {
+    const requestedPath = activeBenchPath;
+    const requestGeneration = ++parentBenchLocationsRequestGenerationRef.current;
+    setParentBenchLocationsLoading(true);
+    setParentBenchLocationsError(null);
+    try {
+      const locations = await findParentBenchLocations(requestedPath, vaultFiles);
+      if (activeBenchPathRef.current !== requestedPath || parentBenchLocationsRequestGenerationRef.current !== requestGeneration)
+        return;
+      setParentBenchLocations(locations);
+    } catch (caught) {
+      if (activeBenchPathRef.current !== requestedPath || parentBenchLocationsRequestGenerationRef.current !== requestGeneration)
+        return;
+      setParentBenchLocations([]);
+      setParentBenchLocationsError(`Could not find parent benches: ${formatCaughtError(caught)}`);
+    } finally {
+      if (activeBenchPathRef.current === requestedPath && parentBenchLocationsRequestGenerationRef.current === requestGeneration)
+        setParentBenchLocationsLoading(false);
+    }
+  }
+  async function handleParentBenchLocationOpen(location2) {
+    await flushBufferedTextareaCommit(() => import_react_dom2.flushSync(() => blurActiveBufferedTextarea()));
+    if (!await flushPendingBenchPlacementSave())
+      return;
+    setStatus(`Opening ${location2.path}…`);
+    setActiveBenchStack([]);
+    setFocusElementId(location2.benchElementId);
+    setFocusViewportSource(undefined);
+    setOpenViewportSource(undefined);
+    setActiveBenchPath(location2.path);
   }
   async function handleBenchElementOpen(element, context) {
     if (element.error || !element.path)
@@ -36920,27 +37979,27 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
     setScenario(nextScenario);
     scheduleBenchPlacementSave(nextScenario.elements, authoredEdges);
   }
-  const handleFocusElementApplied = import_react13.useCallback(() => {
+  const handleFocusElementApplied = import_react14.useCallback(() => {
     setFocusElementId(undefined);
     setFocusViewportSource(undefined);
   }, []);
-  const handleOpenViewportApplied = import_react13.useCallback((appliedSource) => {
+  const handleOpenViewportApplied = import_react14.useCallback((appliedSource) => {
     setOpenViewportSource((currentSource) => currentSource === appliedSource ? undefined : currentSource);
   }, []);
-  const authoredVisibleScenario = import_react13.useMemo(() => scenario ? createBenchDebugVisibleScenario(scenario, {
+  const authoredVisibleScenario = import_react14.useMemo(() => scenario ? createBenchDebugVisibleScenario(scenario, {
     showElements: showBenchElements,
     showLoadedNestedBenchElements: showNestedBenchElements
   }) : null, [scenario, showBenchElements, showNestedBenchElements]);
   const actorCursorAt = (actorTimelineFollowingLatest && actorTimelineRange ? actorTimelineRange.endAt : getActorTimelineCursorAt(actorTimelineRange, actorCursorSeconds, actorTimelineDuration, actorCursorExactAt)) ?? actorTimelineFallbackAtRef.current;
   const actorActivityFadeReferenceAt = actorTimelineFollowingLatest ? new Date(actorActivityFadeClock).toISOString() : actorCursorAt;
-  const actorTimelineState = import_react13.useMemo(() => ({
+  const actorTimelineState = import_react14.useMemo(() => ({
     activityFade: { durationMs: actorActivityFadeSeconds * 1000, referenceAt: actorActivityFadeReferenceAt },
     cursor: { at: actorCursorAt, mode: "replay" },
     ...actorTimelineRange ? { replayWindow: { start: actorTimelineRange.startAt, end: actorTimelineRange.endAt } } : {},
     visibleLayers: ["replay"]
   }), [actorActivityFadeReferenceAt, actorActivityFadeSeconds, actorCursorAt, actorTimelineRange]);
-  const actorVisibleScenario = import_react13.useMemo(() => authoredVisibleScenario && actorContributions ? createWorkbenchActorOverlayScenario(authoredVisibleScenario, actorContributions, actorTimelineState, vaultId, elementTypeRegistry) : authoredVisibleScenario, [actorContributions, actorTimelineState, authoredVisibleScenario, elementTypeRegistry, vaultId]);
-  const handleActorActivitySelect = import_react13.useCallback((occurredAt) => {
+  const actorVisibleScenario = import_react14.useMemo(() => authoredVisibleScenario && actorContributions ? createWorkbenchActorOverlayScenario(authoredVisibleScenario, actorContributions, actorTimelineState, vaultId, elementTypeRegistry) : authoredVisibleScenario, [actorContributions, actorTimelineState, authoredVisibleScenario, elementTypeRegistry, vaultId]);
+  const handleActorActivitySelect = import_react14.useCallback((occurredAt) => {
     const nextCursorSeconds = getActorTimelineCursorSeconds(actorTimelineRange, occurredAt, actorTimelineDuration);
     if (nextCursorSeconds === null)
       return;
@@ -37529,6 +38588,7 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
           actorActivityFadeSeconds,
           backHref: componentHref,
           backLabel: `${componentName} scenarios`,
+          benchFilename: getBenchFilename(activeBenchPath),
           onBackNavigate: handleBackNavigate,
           onActorActivitySelect: handleActorActivitySelect,
           breadcrumbs,
@@ -37551,7 +38611,12 @@ function MainBenchScenario({ apiBaseUrl = "/api/workbench", applicationChrome, b
           onEdgesChange: handleEdgesChange,
           onImagePaste: handleImagePaste,
           onParentBenchOpen: handleParentBenchOpen,
+          onParentBenchLocationOpen: handleParentBenchLocationOpen,
+          onParentBenchLocationsRequest: handleParentBenchLocationsRequest,
           nestedElementOpacity: nestedElementsOpacity,
+          parentBenchLocations,
+          parentBenchLocationsError,
+          parentBenchLocationsLoading,
           onElementsChange: handleElementsChange,
           onTextFileList: vaultFiles.listFiles,
           onTextFilePathChange: handleTextFilePathChange,
@@ -39276,755 +40341,14 @@ function DebugMissingScenario({ componentHref, componentName, scenarioId }) {
 }
 
 // packages/react/src/Workbench.tsx
-var import_react14 = __toESM(require_react(), 1);
-// packages/bench-gateway-client/src/index.ts
-var SHA2563 = /^[a-f0-9]{64}$/;
-var DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
-var ABSOLUTE_MAX_BYTES = 16 * 1024 * 1024;
-async function loadBenchGatewayArtifact(options2) {
-  const { artifact } = options2;
-  if (!SHA2563.test(artifact.sha256))
-    throw new TypeError("Bench Gateway artifact SHA-256 must be lowercase hexadecimal");
-  const extension = artifact.kind === "js" ? "js" : "css";
-  const expectedContentType = artifact.kind === "js" ? "text/javascript" : "text/css";
-  if (artifact.contentType !== expectedContentType)
-    throw new TypeError("Bench Gateway artifact kind and content type do not match");
-  const maxBytes = options2.maxBytes ?? ABSOLUTE_MAX_BYTES;
-  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > ABSOLUTE_MAX_BYTES)
-    throw new TypeError("Bench Gateway artifact byte limit is invalid");
-  if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes < 1 || artifact.bytes > maxBytes)
-    throw new TypeError("Bench Gateway artifact exceeds its byte limit");
-  const baseUrl = options2.baseUrl ?? (typeof globalThis.location === "object" ? globalThis.location.href : undefined);
-  if (!baseUrl)
-    throw new TypeError("Bench Gateway artifact loading requires a base URL");
-  const endpoint = new URL(options2.endpoint, baseUrl);
-  if (endpoint.protocol !== "http:" && endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash) {
-    throw new TypeError("Bench Gateway endpoint must be an HTTP(S) URL without credentials, query, or fragment");
-  }
-  const artifactUrl = new URL(artifact.path, endpoint);
-  if (artifactUrl.origin !== endpoint.origin)
-    throw new TypeError("Bench Gateway artifact origin does not match its authorized Gateway");
-  if (!artifact.path.startsWith("/") || artifactUrl.search || artifactUrl.hash || !artifactUrl.pathname.endsWith(`/${artifact.sha256}.${extension}`)) {
-    throw new TypeError("Bench Gateway artifact path must be canonical and content-addressed");
-  }
-  if (options2.signal?.aborted)
-    throw abortReason(options2.signal);
-  const responsePromise = options2.fetcher.call(globalThis, artifactUrl, {
-    credentials: "omit",
-    headers: { accept: artifact.contentType },
-    redirect: "error",
-    ...options2.signal ? { signal: options2.signal } : {}
-  });
-  let response;
-  try {
-    response = await settleOnAbort(responsePromise, options2.signal);
-  } catch (error) {
-    if (options2.signal?.aborted)
-      responsePromise.then((lateResponse) => lateResponse.body?.cancel(abortReason(options2.signal))).catch(() => {
-        return;
-      });
-    throw error;
-  }
-  if (response.status !== 200)
-    rejectBeforeStreaming(response, `Bench Gateway artifact requires status 200, received ${response.status}`);
-  if (response.redirected)
-    rejectBeforeStreaming(response, "Bench Gateway artifact redirect is not authorized");
-  if (response.url && response.url !== artifactUrl.href)
-    rejectBeforeStreaming(response, "Bench Gateway artifact final URL does not match its authorized URL");
-  const responseContentType = response.headers.get("content-type")?.trim().toLowerCase() ?? "";
-  if (responseContentType !== artifact.contentType && !new RegExp(`^${artifact.contentType};\\s*charset=utf-8$`).test(responseContentType)) {
-    rejectBeforeStreaming(response, "Bench Gateway artifact content type does not match its catalog");
-  }
-  const declaredLength = response.headers.get("content-length");
-  if (declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== artifact.bytes)) {
-    rejectBeforeStreaming(response, "Bench Gateway artifact byte length does not match its catalog");
-  }
-  if (!response.body)
-    throw new Error("Bench Gateway artifact response body is missing");
-  const reader = response.body.getReader();
-  const bytes = new Uint8Array(artifact.bytes);
-  let offset = 0;
-  let readPending = false;
-  try {
-    while (true) {
-      readPending = true;
-      const read = reader.read().finally(() => {
-        readPending = false;
-      });
-      const result = await settleOnAbort(read, options2.signal);
-      if (result.done)
-        break;
-      if (offset + result.value.byteLength > artifact.bytes) {
-        await reader.cancel("Bench Gateway artifact byte length does not match its catalog");
-        throw new Error("Bench Gateway artifact byte length does not match its catalog");
-      }
-      bytes.set(result.value, offset);
-      offset += result.value.byteLength;
-    }
-  } catch (error) {
-    if (options2.signal?.aborted)
-      reader.cancel(abortReason(options2.signal)).catch(() => {
-        return;
-      });
-    throw error;
-  } finally {
-    if (!readPending)
-      reader.releaseLock();
-  }
-  if (offset !== artifact.bytes)
-    throw new Error("Bench Gateway artifact byte length does not match its catalog");
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
-  const actualSha256 = [...digest].map((value) => value.toString(16).padStart(2, "0")).join("");
-  if (actualSha256 !== artifact.sha256)
-    throw new Error("Bench Gateway artifact SHA-256 does not match its catalog");
-  return bytes;
-}
-function settleOnAbort(promise, signal) {
-  if (!signal)
-    return promise;
-  if (signal.aborted)
-    return Promise.reject(abortReason(signal));
-  return new Promise((resolve2, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(abortReason(signal));
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then((value) => {
-      signal.removeEventListener("abort", onAbort);
-      resolve2(value);
-    }, (error) => {
-      signal.removeEventListener("abort", onAbort);
-      reject(error);
-    });
-  });
-}
-function abortReason(signal) {
-  return signal.reason ?? new DOMException("Bench Gateway catalog request aborted", "AbortError");
-}
-function rejectBeforeStreaming(response, message) {
-  response.body?.cancel(message).catch(() => {
-    return;
-  });
-  throw new Error(message);
-}
-
-// packages/react/src/liveComponentRuntime.ts
-var unavailableSnapshot = Object.freeze({ status: "unavailable" });
-var MAX_CATALOG_BYTES = 2 * 1024 * 1024;
-var MAX_FRAME_RUNTIME_BYTES2 = 8 * 1024 * 1024;
-var MAX_SOURCE_RESPONSE_BYTES = 8 * 1024;
-var MAX_EVENT_BUFFER_BYTES = 64 * 1024;
-var DEFAULT_CATALOG_REQUEST_TIMEOUT_MS = 1e4;
-function createLiveComponentRuntime(options2) {
-  const listeners = new Set;
-  const requested = new Set;
-  const requestedSources = new Set;
-  const snapshots = new Map;
-  const sourceDiagnostics = new Map;
-  const sourceSnapshots = new Map;
-  const sourceTypeIds = new Map;
-  const baseUrl = options2.baseUrl ?? globalThis.location?.href ?? "http://localhost/";
-  const apiBase = new URL(options2.apiBasePath.replace(/\/$/, "") + "/", baseUrl);
-  const catalogRequestTimeoutMs = options2.catalogRequestTimeoutMs ?? DEFAULT_CATALOG_REQUEST_TIMEOUT_MS;
-  const reconcileIntervalMs = options2.reconcileIntervalMs ?? 2000;
-  if (!Number.isFinite(catalogRequestTimeoutMs) || catalogRequestTimeoutMs < 10)
-    throw new TypeError("Live component catalog request timeout is invalid");
-  if (!Number.isFinite(reconcileIntervalMs) || reconcileIntervalMs < 10)
-    throw new TypeError("Live component reconciliation interval is invalid");
-  const lifecycleAbort = new AbortController;
-  let catalog = null;
-  let closed = false;
-  let eventAbort = null;
-  let eventRetryTimer = null;
-  let finishEventRetry = null;
-  let reconcileTimer = null;
-  let startupRetryTimer = null;
-  let started = false;
-  let refreshInFlight = null;
-  let queuedRefresh = null;
-  let startupFailurePublished = false;
-  let frameRuntimePromise = null;
-  const notify = () => {
-    for (const listener of listeners)
-      listener();
-  };
-  const setSnapshot = (typeId, snapshot) => {
-    if (closed)
-      return false;
-    snapshots.set(typeId, Object.freeze(snapshot));
-    notify();
-    return !closed;
-  };
-  const loadCandidate = async (descriptor, nextCatalog) => {
-    if (descriptor.schemaVersion !== 1 || descriptor.hostApiRange !== "^1.0.0")
-      throw new Error(`Live component ${descriptor.typeId} requires an unsupported host ABI`);
-    const jsArtifact = nextCatalog.artifacts.find((artifact) => artifact.sha256 === descriptor.jsArtifactSha256);
-    if (!jsArtifact)
-      throw new Error(`Component JavaScript artifact is missing: ${descriptor.typeId}`);
-    const jsBytes = await loadBenchGatewayArtifact({
-      artifact: jsArtifact,
-      baseUrl,
-      endpoint: apiBase.origin,
-      fetcher: options2.fetcher,
-      signal: lifecycleAbort.signal
-    });
-    frameRuntimePromise ??= loadFrameRuntime(options2.fetcher, apiBase, lifecycleAbort.signal);
-    const frameRuntimeBytes = await frameRuntimePromise.catch((error) => {
-      frameRuntimePromise = null;
-      throw error;
-    });
-    let cssBytes;
-    if (descriptor.cssArtifactSha256) {
-      const cssArtifact = nextCatalog.artifacts.find((artifact) => artifact.sha256 === descriptor.cssArtifactSha256);
-      if (!cssArtifact)
-        throw new Error(`Component CSS artifact is missing: ${descriptor.typeId}`);
-      cssBytes = await loadBenchGatewayArtifact({
-        artifact: cssArtifact,
-        baseUrl,
-        endpoint: apiBase.origin,
-        fetcher: options2.fetcher,
-        signal: lifecycleAbort.signal
-      });
-    }
-    return Object.freeze({
-      artifacts: Object.freeze({
-        ...cssBytes ? { componentCss: cssBytes.slice() } : {},
-        componentJavaScript: jsBytes.slice(),
-        frameRuntimeJavaScript: frameRuntimeBytes.slice()
-      }),
-      implementationRevision: descriptor.implementationRevision,
-      status: "ready",
-      typeId: descriptor.typeId
-    });
-  };
-  const loadCatalog = async () => {
-    const controller = new AbortController;
-    const onLifecycleAbort = () => controller.abort(lifecycleAbort.signal.reason);
-    lifecycleAbort.signal.addEventListener("abort", onLifecycleAbort, { once: true });
-    const timeout = setTimeout(() => controller.abort(new DOMException("Live component catalog request timed out", "TimeoutError")), catalogRequestTimeoutMs);
-    const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("catalog", apiBase), {
-      cache: "no-store",
-      headers: { accept: "application/json" },
-      redirect: "error",
-      signal: controller.signal
-    }));
-    let response = null;
-    try {
-      response = await settleOnAbort2(responsePromise, controller.signal);
-      if (response.status !== 200 || response.redirected)
-        throw new Error(`Live component catalog requires status 200, received ${response.status}`);
-      if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json"))
-        throw new Error("Live component catalog has an invalid content type");
-      return parseWorkbenchExtensionCatalog(await readBoundedJson(response, MAX_CATALOG_BYTES, controller.signal));
-    } catch (error) {
-      if (response)
-        cancelResponseBody(response, error);
-      else if (controller.signal.aborted)
-        responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
-          return;
-        });
-      throw error;
-    } finally {
-      clearTimeout(timeout);
-      lifecycleAbort.signal.removeEventListener("abort", onLifecycleAbort);
-    }
-  };
-  const refreshNow = async () => {
-    if (closed)
-      return;
-    const nextCatalog = await loadCatalog();
-    if (closed)
-      return;
-    if (catalog) {
-      if (JSON.stringify(nextCatalog.authority) !== JSON.stringify(catalog.authority))
-        throw new Error("Live component catalog authority changed");
-      if (nextCatalog.sequence < catalog.sequence)
-        throw new Error("Live component catalog sequence regressed");
-      if (nextCatalog.sequence === catalog.sequence) {
-        if (nextCatalog.catalogRevision !== catalog.catalogRevision || JSON.stringify(nextCatalog) !== JSON.stringify(catalog)) {
-          throw new Error("Live component catalog equivocated at one sequence");
-        }
-      } else if (nextCatalog.sequence === catalog.sequence + 1) {
-        if (nextCatalog.parentCatalogRevision !== catalog.catalogRevision)
-          throw new Error("Live component catalog revision chain is discontinuous");
-      }
-    }
-    catalog = nextCatalog;
-    for (const typeId of requested) {
-      if (closed || catalog !== nextCatalog)
-        return;
-      const descriptor = nextCatalog.components.find((component) => component.typeId === typeId);
-      const previous = snapshots.get(typeId);
-      if (!descriptor) {
-        const sourceDiagnostic = sourceDiagnostics.get(typeId);
-        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: `Component type is no longer published: ${typeId}`, status: "stale" } : { error: sourceDiagnostic ?? `Component type is not published: ${typeId}`, status: "error" }))
-          return;
-        continue;
-      }
-      if (previous?.artifacts && previous.implementationRevision === descriptor.implementationRevision)
-        continue;
-      if (!previous?.artifacts && !setSnapshot(typeId, { status: "loading" }))
-        return;
-      try {
-        const candidate = await loadCandidate(descriptor, nextCatalog);
-        if (closed || catalog !== nextCatalog)
-          return;
-        sourceDiagnostics.delete(typeId);
-        if (!setSnapshot(typeId, candidate))
-          return;
-      } catch (error) {
-        if (closed || catalog !== nextCatalog)
-          return;
-        const message = error instanceof Error ? error.message : String(error);
-        if (!setSnapshot(typeId, previous?.artifacts ? { ...previous, error: message, status: "stale" } : { error: message, status: "error" }))
-          return;
-      }
-    }
-  };
-  const runRefresh = () => {
-    const operation = refreshNow();
-    refreshInFlight = operation;
-    operation.finally(() => {
-      if (refreshInFlight !== operation)
-        return;
-      refreshInFlight = null;
-      const queued = queuedRefresh;
-      queuedRefresh = null;
-      if (!queued)
-        return;
-      if (closed) {
-        queued.resolve();
-        return;
-      }
-      runRefresh().then(queued.resolve, queued.reject);
-    }).catch(() => {
-      return;
-    });
-    return operation;
-  };
-  const refresh = () => {
-    if (!refreshInFlight)
-      return runRefresh();
-    if (!queuedRefresh) {
-      let resolve2;
-      let reject;
-      const promise = new Promise((onResolve, onReject) => {
-        resolve2 = onResolve;
-        reject = onReject;
-      });
-      queuedRefresh = { promise, reject, resolve: resolve2 };
-    }
-    return queuedRefresh.promise;
-  };
-  const startReconciliation = () => {
-    if (reconcileTimer !== null)
-      return;
-    reconcileTimer = setInterval(() => {
-      if (!closed)
-        refresh().catch(() => {
-          return;
-        });
-    }, reconcileIntervalMs);
-  };
-  const markBuildFailure = (event) => {
-    if (closed)
-      return;
-    const dataLine = event.split(`
-`).find((line) => line.startsWith("data:"));
-    if (!dataLine)
-      return;
-    try {
-      const data = JSON.parse(dataLine.slice(5));
-      if (typeof data.componentTypeId !== "string" || !requested.has(data.componentTypeId))
-        return;
-      const previous = snapshots.get(data.componentTypeId);
-      const error = typeof data.message === "string" ? data.message : "Candidate build failed.";
-      setSnapshot(data.componentTypeId, previous?.artifacts ? { ...previous, error, status: "stale" } : { error, status: "error" });
-    } catch {}
-  };
-  const waitForEventRetry = () => new Promise((resolve2) => {
-    const finish = () => {
-      if (eventRetryTimer !== null)
-        clearTimeout(eventRetryTimer);
-      eventRetryTimer = null;
-      if (finishEventRetry === finish)
-        finishEventRetry = null;
-      resolve2();
-    };
-    finishEventRetry = finish;
-    eventRetryTimer = setTimeout(finish, 500);
-  });
-  const connectEvents = async () => {
-    while (!closed) {
-      const controller = new AbortController;
-      eventAbort = controller;
-      let reader = null;
-      let pendingRead = null;
-      let response = null;
-      const responsePromise = Promise.resolve().then(() => options2.fetcher.call(globalThis, new URL("events", apiBase), {
-        headers: { accept: "text/event-stream" },
-        redirect: "error",
-        signal: controller.signal
-      }));
-      try {
-        response = await settleOnAbort2(responsePromise, controller.signal);
-        if (response.status !== 200 || !response.body)
-          throw new Error(`Live component event stream requires status 200, received ${response.status}`);
-        if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/event-stream"))
-          throw new Error("Live component event stream has an invalid content type");
-        reader = response.body.getReader();
-        const decoder = new TextDecoder;
-        let pending = "";
-        while (!closed) {
-          const readPromise = reader.read();
-          pendingRead = readPromise;
-          const result = await settleOnAbort2(readPromise, controller.signal);
-          pendingRead = null;
-          if (result.done)
-            throw new Error("Live component event stream disconnected");
-          pending += decoder.decode(result.value, { stream: true });
-          if (pending.length > MAX_EVENT_BUFFER_BYTES)
-            throw new Error("Live component event exceeded the supported bound");
-          let boundary = pending.indexOf(`
-
-`);
-          while (boundary >= 0) {
-            const event = pending.slice(0, boundary);
-            pending = pending.slice(boundary + 2);
-            if (/^event:\s*component-revision-activated\s*$/mu.test(event))
-              await refresh();
-            else if (/^event:\s*component-build-failed\s*$/mu.test(event))
-              markBuildFailure(event);
-            boundary = pending.indexOf(`
-
-`);
-          }
-        }
-      } catch {
-        if (!reader) {
-          if (response)
-            cancelResponseBody(response, controller.signal.reason);
-          else if (controller.signal.aborted)
-            responsePromise.then((lateResponse) => cancelResponseBody(lateResponse, controller.signal.reason)).catch(() => {
-              return;
-            });
-        }
-        if (closed || controller.signal.aborted)
-          return;
-      } finally {
-        if (reader) {
-          const ownedReader = reader;
-          const reason = controller.signal.aborted ? controller.signal.reason : new DOMException("Live component event reader closed", "AbortError");
-          try {
-            ownedReader.cancel(reason).catch(() => {
-              return;
-            });
-          } catch {}
-          if (pendingRead) {
-            pendingRead.finally(() => {
-              try {
-                ownedReader.releaseLock();
-              } catch {}
-            }).catch(() => {
-              return;
-            });
-          } else {
-            try {
-              ownedReader.releaseLock();
-            } catch {}
-          }
-        }
-        if (eventAbort === controller)
-          eventAbort = null;
-      }
-      await waitForEventRetry();
-      if (!closed) {
-        try {
-          await refresh();
-        } catch {}
-      }
-    }
-  };
-  const startTransport = () => {
-    refresh().then(() => {
-      if (closed)
-        return;
-      startReconciliation();
-      return connectEvents();
-    }).catch((error) => {
-      if (closed)
-        return;
-      if (!startupFailurePublished) {
-        startupFailurePublished = true;
-        const message = error instanceof Error ? error.message : String(error);
-        for (const requestedTypeId of requested) {
-          if (!setSnapshot(requestedTypeId, { error: message, status: "error" }))
-            return;
-        }
-      }
-      if (closed)
-        return;
-      startupRetryTimer = setTimeout(() => {
-        startupRetryTimer = null;
-        if (!closed)
-          startTransport();
-      }, reconcileIntervalMs);
-    });
-  };
-  const ensureType = (typeId) => {
-    if (closed || requested.has(typeId))
-      return;
-    requested.add(typeId);
-    setSnapshot(typeId, { status: "loading" });
-    if (!started) {
-      started = true;
-      startTransport();
-    } else if (catalog) {
-      refresh().catch((error) => {
-        if (!closed)
-          setSnapshot(typeId, { error: error instanceof Error ? error.message : String(error), status: "error" });
-      });
-    }
-  };
-  const ensureSource = (source) => {
-    const key = sourceKey(source);
-    if (closed || requestedSources.has(key))
-      return;
-    requestedSources.add(key);
-    sourceSnapshots.set(key, Object.freeze({ status: "loading" }));
-    notify();
-    (async () => {
-      let response;
-      try {
-        response = await options2.fetcher.call(globalThis, new URL("sources/ensure", apiBase), {
-          body: JSON.stringify(source),
-          cache: "no-store",
-          headers: { accept: "application/json", "content-type": "application/json" },
-          method: "POST",
-          redirect: "error",
-          signal: lifecycleAbort.signal
-        });
-        const payload = await readBoundedSourceResponse(response);
-        if (closed)
-          return;
-        const typeId = typeof payload.typeId === "string" && /^[a-z][a-z0-9-]*:[a-z0-9][a-z0-9-]*$/u.test(payload.typeId) ? payload.typeId : undefined;
-        if (response.status === 200 && typeId) {
-          sourceTypeIds.set(key, typeId);
-          sourceSnapshots.delete(key);
-          sourceDiagnostics.delete(typeId);
-          ensureType(typeId);
-          return;
-        }
-        const message = typeof payload.error === "string" && payload.error.length <= 2048 ? payload.error : `Live component source ensure failed with status ${response.status}`;
-        if (response.status === 422 && typeId) {
-          sourceTypeIds.set(key, typeId);
-          sourceSnapshots.delete(key);
-          sourceDiagnostics.set(typeId, message);
-          ensureType(typeId);
-          setSnapshot(typeId, { error: message, status: "error" });
-          return;
-        }
-        sourceSnapshots.set(key, Object.freeze({ error: message, status: "error" }));
-        requestedSources.delete(key);
-        notify();
-      } catch (error) {
-        if (closed)
-          return;
-        sourceSnapshots.set(key, Object.freeze({ error: error instanceof Error ? error.message : String(error), status: "error" }));
-        requestedSources.delete(key);
-        notify();
-      }
-    })();
-  };
-  return Object.freeze({
-    close() {
-      closed = true;
-      lifecycleAbort.abort();
-      eventAbort?.abort();
-      finishEventRetry?.();
-      if (reconcileTimer !== null)
-        clearInterval(reconcileTimer);
-      if (startupRetryTimer !== null)
-        clearTimeout(startupRetryTimer);
-      queuedRefresh?.resolve();
-      queuedRefresh = null;
-      reconcileTimer = null;
-      startupRetryTimer = null;
-      listeners.clear();
-    },
-    ensure: ensureType,
-    ensureSource,
-    getSnapshot(typeId) {
-      return snapshots.get(typeId) ?? unavailableSnapshot;
-    },
-    getSourceSnapshot(source) {
-      const key = sourceKey(source);
-      const typeId = sourceTypeIds.get(key);
-      return typeId ? snapshots.get(typeId) ?? sourceSnapshots.get(key) ?? unavailableSnapshot : sourceSnapshots.get(key) ?? unavailableSnapshot;
-    },
-    refresh,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }
-  });
-}
-async function readBoundedJson(response, maximumBytes, signal) {
-  const declared = response.headers.get("content-length");
-  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
-    throw new Error("Live component catalog exceeded the supported bound");
-  if (!response.body)
-    throw new Error("Live component catalog response body is missing");
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
-  let pendingRead = null;
-  try {
-    while (true) {
-      const readPromise = reader.read();
-      pendingRead = readPromise;
-      const result = await settleOnAbort2(readPromise, signal);
-      pendingRead = null;
-      if (result.done)
-        break;
-      total += result.value.byteLength;
-      if (total > maximumBytes)
-        throw new Error("Live component catalog exceeded the supported bound");
-      chunks.push(result.value);
-    }
-  } catch (error) {
-    reader.cancel(error).catch(() => {
-      return;
-    });
-    throw error;
-  } finally {
-    if (pendingRead) {
-      pendingRead.finally(() => reader.releaseLock()).catch(() => {
-        return;
-      });
-    } else {
-      reader.releaseLock();
-    }
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-}
-function cancelResponseBody(response, reason) {
-  try {
-    response.body?.cancel(reason).catch(() => {
-      return;
-    });
-  } catch {}
-}
-function settleOnAbort2(promise, signal) {
-  if (!signal)
-    return promise;
-  if (signal.aborted)
-    return Promise.reject(signal.reason);
-  return new Promise((resolve2, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then((value) => {
-      signal.removeEventListener("abort", onAbort);
-      resolve2(value);
-    }, (error) => {
-      signal.removeEventListener("abort", onAbort);
-      reject(error);
-    });
-  });
-}
-function sourceKey(source) {
-  return JSON.stringify([source.vaultId, source.path]);
-}
-async function readBoundedSourceResponse(response) {
-  const payload = await readBoundedJson(response, MAX_SOURCE_RESPONSE_BYTES);
-  if (!payload || typeof payload !== "object" || Array.isArray(payload))
-    throw new Error("Live component source response is invalid");
-  return payload;
-}
-async function loadFrameRuntime(fetcher, apiBase, signal) {
-  const response = await fetcher.call(globalThis, new URL("frame-runtime.js", apiBase), {
-    cache: "no-store",
-    headers: { accept: "text/javascript" },
-    redirect: "error",
-    signal
-  });
-  try {
-    if (response.status !== 200 || response.redirected)
-      throw new Error(`Live component frame runtime requires status 200, received ${response.status}`);
-    if (!response.headers.get("content-type")?.toLowerCase().startsWith("text/javascript"))
-      throw new Error("Live component frame runtime has an invalid content type");
-    if (response.headers.get("cache-control")?.toLowerCase() !== "private, no-store, no-transform")
-      throw new Error("Live component frame runtime cache policy is invalid");
-    const expectedSha256 = response.headers.get("x-content-sha256");
-    if (!expectedSha256 || !/^[a-f0-9]{64}$/u.test(expectedSha256))
-      throw new Error("Live component frame runtime hash is invalid");
-    const bytes = await readBoundedBytes(response, MAX_FRAME_RUNTIME_BYTES2, signal, "Live component frame runtime");
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes.slice().buffer));
-    const actualSha256 = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (actualSha256 !== expectedSha256)
-      throw new Error("Live component frame runtime hash mismatch");
-    return bytes;
-  } catch (error) {
-    cancelResponseBody(response, error);
-    throw error;
-  }
-}
-async function readBoundedBytes(response, maximumBytes, signal, label) {
-  const declared = response.headers.get("content-length");
-  if (declared && (!/^\d+$/u.test(declared) || Number(declared) > maximumBytes))
-    throw new Error(`${label} exceeded the supported bound`);
-  if (!response.body)
-    throw new Error(`${label} response body is missing`);
-  const reader = response.body.getReader();
-  const chunks = [];
-  let total = 0;
-  try {
-    while (true) {
-      const result = await settleOnAbort2(reader.read(), signal);
-      if (result.done)
-        break;
-      total += result.value.byteLength;
-      if (total > maximumBytes)
-        throw new Error(`${label} exceeded the supported bound`);
-      chunks.push(result.value);
-    }
-  } catch (error) {
-    reader.cancel(error).catch(() => {
-      return;
-    });
-    throw error;
-  } finally {
-    try {
-      reader.releaseLock();
-    } catch {}
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-// packages/react/src/Workbench.tsx
+var import_react15 = __toESM(require_react(), 1);
 function Workbench({
   liveComponents,
   ...props
 }) {
   if (liveComponents === false)
     return createWorkbenchElement(props);
-  return import_react14.createElement(LiveWorkbench, { ...props, liveComponents });
+  return import_react15.createElement(LiveWorkbench, { ...props, liveComponents });
 }
 function LiveWorkbench({
   apiBaseUrl = "/api/workbench",
@@ -40037,15 +40361,7 @@ function LiveWorkbench({
   pluginRegistry,
   uploadRawFile
 }) {
-  const liveApiBasePath = liveComponents?.apiBasePath ?? `${apiBaseUrl.replace(/\/$/, "")}/components`;
-  const liveBaseUrl = liveComponents?.baseUrl;
-  const liveComponentRuntime = import_react14.useMemo(() => createLiveComponentRuntime({
-    apiBasePath: liveApiBasePath,
-    ...liveBaseUrl ? { baseUrl: liveBaseUrl } : {},
-    fetcher
-  }), [fetcher, liveApiBasePath, liveBaseUrl]);
-  import_react14.useEffect(() => () => liveComponentRuntime.close(), [liveComponentRuntime]);
-  return import_react14.createElement(LiveComponentRuntimeContext.Provider, { value: liveComponentRuntime }, createWorkbenchElement({
+  return import_react15.createElement(LiveWorkbenchRuntimeProvider, { apiBaseUrl, fetcher, liveComponents }, createWorkbenchElement({
     apiBaseUrl,
     applicationChrome,
     directoryMountAuthorities,
@@ -40066,7 +40382,7 @@ function createWorkbenchElement({
   pluginRegistry,
   uploadRawFile
 }) {
-  return import_react14.createElement(WorkbenchBootstrapScenario, {
+  return import_react15.createElement(WorkbenchBootstrapScenario, {
     apiBaseUrl,
     applicationChrome,
     componentHref: "#",
@@ -40130,7 +40446,7 @@ function mount(host) {
   const container = createWorkbenchMountContainer(host.root);
   try {
     const root2 = import_client.createRoot(container);
-    root2.render(import_react15.createElement(Workbench, { apiBaseUrl: "/v1", fetcher: createWorkbenchServiceFetcher(service) }));
+    root2.render(import_react16.createElement(Workbench, { apiBaseUrl: "/v1", fetcher: createWorkbenchServiceFetcher(service) }));
     return () => {
       try {
         root2.unmount();

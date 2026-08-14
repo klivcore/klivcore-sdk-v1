@@ -26446,6 +26446,204 @@ function virtualGroupContainsGroupId(group, candidateId, groupsById, seen = new 
   seen.add(group.id);
   return group.childGroupIds.some((childId) => childId === candidateId || Boolean(groupsById.get(childId) && virtualGroupContainsGroupId(groupsById.get(childId), candidateId, groupsById, seen)));
 }
+function BenchBreadcrumbNavigation({
+  benchFilename,
+  breadcrumbs,
+  className,
+  onParentBenchLocationOpen,
+  onParentBenchLocationsRequest,
+  parentBenchLocations = [],
+  parentBenchLocationsError,
+  parentBenchLocationsLoading = false
+}) {
+  const [copyStatus, setCopyStatus] = import_react9.useState(null);
+  const [locationsOpen, setLocationsOpen] = import_react9.useState(false);
+  const actionsRef = import_react9.useRef(null);
+  const locationsPanelId = import_react9.useId();
+  const locationsTriggerRef = import_react9.useRef(null);
+  const currentBenchIdentity = breadcrumbs.find((item) => item.isCurrent)?.path ?? benchFilename;
+  import_react9.useEffect(() => {
+    setCopyStatus(null);
+    setLocationsOpen(false);
+  }, [currentBenchIdentity]);
+  import_react9.useEffect(() => {
+    if (!locationsOpen)
+      return;
+    const closeOnOutsidePointer = (event) => {
+      if (!actionsRef.current?.contains(event.target))
+        setLocationsOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key !== "Escape")
+        return;
+      setLocationsOpen(false);
+      locationsTriggerRef.current?.focus();
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [locationsOpen]);
+  const copyFilename = async () => {
+    if (!benchFilename)
+      return;
+    try {
+      await navigator.clipboard.writeText(benchFilename);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
+  const toggleLocations = () => {
+    const nextOpen = !locationsOpen;
+    setLocationsOpen(nextOpen);
+    if (nextOpen)
+      onParentBenchLocationsRequest?.();
+  };
+  return /* @__PURE__ */ jsx_runtime20.jsxs("nav", {
+    "aria-label": "Bench path",
+    className,
+    "data-workbench-viewport-controls": "true",
+    children: [
+      /* @__PURE__ */ jsx_runtime20.jsx("div", {
+        className: "flex min-w-0 items-center gap-1 overflow-hidden",
+        children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
+          children: [
+            index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+              className: "shrink-0 text-slate-600",
+              children: "/"
+            }) : null,
+            item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+              className: "truncate text-slate-300",
+              children: item.label
+            }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
+              className: "truncate text-cyan-300 hover:text-cyan-200",
+              onClick: item.onClick,
+              type: "button",
+              children: item.label
+            })
+          ]
+        }, `${item.path}:${index2}`))
+      }),
+      benchFilename ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+        className: "relative ml-1 flex shrink-0 items-center gap-1",
+        ref: actionsRef,
+        children: [
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-label": "Copy current bench filename",
+            className: "flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-900/90 text-slate-300 hover:border-cyan-500 hover:text-cyan-100",
+            onClick: () => void copyFilename(),
+            title: `Copy ${benchFilename}`,
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
+              "aria-hidden": "true",
+              fill: "none",
+              height: "14",
+              viewBox: "0 0 16 16",
+              width: "14",
+              children: [
+                /* @__PURE__ */ jsx_runtime20.jsx("rect", {
+                  height: "9",
+                  rx: "1.5",
+                  stroke: "currentColor",
+                  width: "8",
+                  x: "5",
+                  y: "2"
+                }),
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "M3.5 5H3a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-.5",
+                  stroke: "currentColor"
+                })
+              ]
+            })
+          }),
+          /* @__PURE__ */ jsx_runtime20.jsx("button", {
+            "aria-controls": locationsPanelId,
+            "aria-expanded": locationsOpen,
+            "aria-label": "Show benches containing this bench",
+            className: "flex h-6 w-6 items-center justify-center rounded border border-slate-700 bg-slate-900/90 text-slate-300 hover:border-cyan-500 hover:text-cyan-100",
+            onClick: toggleLocations,
+            ref: locationsTriggerRef,
+            title: "Show benches containing this bench",
+            type: "button",
+            children: /* @__PURE__ */ jsx_runtime20.jsxs("svg", {
+              "aria-hidden": "true",
+              fill: "none",
+              height: "14",
+              viewBox: "0 0 16 16",
+              width: "14",
+              children: [
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "M3 3.5h6.5a1 1 0 0 1 1 1V6M5.5 6h6.5a1 1 0 0 1 1 1v5.5H5.5z",
+                  stroke: "currentColor"
+                }),
+                /* @__PURE__ */ jsx_runtime20.jsx("path", {
+                  d: "m2 7 1.5 1.5L5 7",
+                  stroke: "currentColor"
+                })
+              ]
+            })
+          }),
+          copyStatus ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+            className: "sr-only",
+            "data-workbench-copy-status": "true",
+            role: "status",
+            children: copyStatus === "copied" ? `Copied ${benchFilename}.` : `Could not copy ${benchFilename}.`
+          }) : null,
+          locationsOpen ? /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+            className: "absolute right-0 top-full z-[70] mt-1 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-md border border-slate-700 bg-slate-950 text-left text-xs shadow-2xl",
+            "data-workbench-parent-locations": "true",
+            id: locationsPanelId,
+            children: [
+              /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                className: "border-b border-slate-800 px-3 py-2 font-semibold text-slate-300",
+                children: "Nested in"
+              }),
+              /* @__PURE__ */ jsx_runtime20.jsxs("div", {
+                className: "max-h-72 overflow-y-auto py-1",
+                children: [
+                  parentBenchLocationsLoading ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-slate-400",
+                    children: "Finding parent benches…"
+                  }) : null,
+                  !parentBenchLocationsLoading && parentBenchLocationsError ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-rose-300",
+                    children: parentBenchLocationsError
+                  }) : null,
+                  !parentBenchLocationsLoading && !parentBenchLocationsError && parentBenchLocations.length === 0 ? /* @__PURE__ */ jsx_runtime20.jsx("div", {
+                    className: "px-3 py-2 text-slate-400",
+                    children: "This bench is not nested in another bench."
+                  }) : null,
+                  !parentBenchLocationsLoading && !parentBenchLocationsError ? parentBenchLocations.map((location2) => /* @__PURE__ */ jsx_runtime20.jsxs("button", {
+                    className: "block w-full px-3 py-2 text-left text-cyan-100 hover:bg-slate-800",
+                    "data-workbench-parent-location": "true",
+                    onClick: () => {
+                      setLocationsOpen(false);
+                      onParentBenchLocationOpen?.(location2);
+                    },
+                    type: "button",
+                    children: [
+                      /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                        className: "block truncate font-medium",
+                        children: location2.path
+                      }),
+                      location2.benchElementLabel ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
+                        className: "block truncate text-[10px] text-slate-400",
+                        children: location2.benchElementLabel
+                      }) : null
+                    ]
+                  }, `${location2.path}:${location2.benchElementId}`)) : null
+                ]
+              })
+            ]
+          }) : null
+        ]
+      }) : null
+    ]
+  });
+}
 function BenchViewport({
   actorPanel,
   applicationPanels = [],
@@ -26454,6 +26652,7 @@ function BenchViewport({
   backHref,
   backLabel,
   onBackNavigate,
+  benchFilename,
   breadcrumbs,
   debugApiRef,
   voiceCommentControllerRef,
@@ -26472,6 +26671,8 @@ function BenchViewport({
   onBenchElementOpen,
   onElementDelete,
   onParentBenchOpen,
+  onParentBenchLocationOpen,
+  onParentBenchLocationsRequest,
   onEdgesChange,
   onElementsChange,
   onImagePaste,
@@ -26479,6 +26680,9 @@ function BenchViewport({
   onTextFileList,
   onTextFilePathChange,
   nestedElementOpacity = 1,
+  parentBenchLocations,
+  parentBenchLocationsError,
+  parentBenchLocationsLoading,
   scenario: scene,
   showScenarioHeader = true,
   viewportPersistenceKey,
@@ -27807,26 +28011,15 @@ function BenchViewport({
                 className: "mt-1 truncate text-base font-bold sm:text-xl",
                 children: scene.name
               }),
-              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
-                "aria-label": "Bench path",
-                className: "mt-0.5 flex min-w-0 items-center gap-1 overflow-hidden text-[11px] text-slate-400 sm:text-xs",
-                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(import_react9.Fragment, {
-                  children: [
-                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "text-slate-600",
-                      children: "/"
-                    }) : null,
-                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "truncate text-slate-300",
-                      children: item.label
-                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "truncate text-cyan-300 hover:text-cyan-200",
-                      onClick: item.onClick,
-                      type: "button",
-                      children: item.label
-                    })
-                  ]
-                }, `${item.path}:${index2}`))
+              breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx(BenchBreadcrumbNavigation, {
+                benchFilename,
+                breadcrumbs,
+                className: "mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-slate-400 sm:text-xs",
+                onParentBenchLocationOpen,
+                onParentBenchLocationsRequest,
+                parentBenchLocations,
+                parentBenchLocationsError,
+                parentBenchLocationsLoading
               }) : null
             ]
           }),
@@ -28121,27 +28314,15 @@ function BenchViewport({
               }, { commitAfterIdle: true, deferUi: true });
             },
             children: [
-              !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx("nav", {
-                "aria-label": "Bench path",
-                className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 overflow-hidden rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
-                "data-workbench-viewport-controls": "true",
-                children: breadcrumbs.map((item, index2) => /* @__PURE__ */ jsx_runtime20.jsxs(jsx_runtime20.Fragment, {
-                  children: [
-                    index2 > 0 ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "text-slate-600",
-                      children: "/"
-                    }) : null,
-                    item.isCurrent || !item.onClick ? /* @__PURE__ */ jsx_runtime20.jsx("span", {
-                      className: "truncate text-slate-300",
-                      children: item.label
-                    }) : /* @__PURE__ */ jsx_runtime20.jsx("button", {
-                      className: "truncate text-cyan-300 hover:text-cyan-200",
-                      onClick: item.onClick,
-                      type: "button",
-                      children: item.label
-                    })
-                  ]
-                }, `${item.path}:${index2}`))
+              !showScenarioHeader && breadcrumbs?.length ? /* @__PURE__ */ jsx_runtime20.jsx(BenchBreadcrumbNavigation, {
+                benchFilename,
+                breadcrumbs,
+                className: "absolute left-20 top-2 z-50 flex max-w-[calc(100%-6rem)] min-w-0 select-text items-center gap-1 rounded bg-slate-950/80 px-2 py-1 text-[11px] text-slate-400 shadow-lg sm:top-4 sm:text-xs",
+                onParentBenchLocationOpen,
+                onParentBenchLocationsRequest,
+                parentBenchLocations,
+                parentBenchLocationsError,
+                parentBenchLocationsLoading
               }) : null,
               /* @__PURE__ */ jsx_runtime20.jsxs(ViewportTransformLayer, {
                 fullViewportActive: false,
