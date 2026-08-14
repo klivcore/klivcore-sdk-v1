@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import {
   planLatestSdkExecution,
   reconcileRealmDirectory,
@@ -7,6 +9,7 @@ import {
   type SdkChannel,
 } from "./start-realm-directory";
 import { formatStartRealmFailure } from "./start-realm-core";
+import { installRealmKcRegistration, preflightRealmKcRegistration } from "./realm-kc-registration";
 
 const SDK_REPOSITORY = "https://github.com/klivcore/klivcore-sdk-v1.git";
 const INTERNAL_SDK_REVISION_ARGUMENT = "--klivcore-internal-sdk-revision";
@@ -84,10 +87,21 @@ try {
   } else {
     const invocation = resolveRealmDirectoryArgs(sdkInvocation.realmArgs);
     const configPath = await reconcileRealmDirectory(invocation.realmDirectory, execution.revision);
+    const kcRegistration = {
+      home: homedir(),
+      realmRoot: invocation.realmDirectory,
+      sdkRevision: execution.revision,
+      sourceEntrypoint: resolve(import.meta.dir, "../bin/kc.ts"),
+    };
+    if (invocation.command === "run") await preflightRealmKcRegistration(kcRegistration);
     process.argv = invocation.command === "registration-url"
       ? [process.argv[0]!, process.argv[1]!, "registration-url", configPath]
       : [process.argv[0]!, process.argv[1]!, ...(invocation.forcePriorDirectory ? ["--force"] : []), configPath];
     await import("./start-realm-coordinator");
+    if (invocation.command === "run") {
+      await installRealmKcRegistration(kcRegistration);
+      console.log(`Realm commands: kc plugins (registered ${invocation.realmDirectory})`);
+    }
   }
 } catch (error) {
   console.error(formatStartRealmFailure(error));
