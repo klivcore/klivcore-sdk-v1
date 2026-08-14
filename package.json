@@ -4,8 +4,8 @@
   "private": false,
   "type": "module",
   "bin": {
-    "kc": "./bin/kc.ts",
-    "sdk-v1": "./bin/klivcore.ts"
+    "sdk-v1": "./bin/klivcore.ts",
+    "kc": "./bin/kc.ts"
   },
   "exports": {
     ".": "./src/index.ts",

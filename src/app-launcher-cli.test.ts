@@ -6,6 +6,7 @@ import { parseAppV2LauncherArgs } from "./app-launcher-cli";
 describe("SDK App V2 launcher CLI", () => {
   test("declares the executable name Bun infers from the scoped SDK package", async () => {
     const packageJson = JSON.parse(await readFile(resolve(import.meta.dir, "../package.json"), "utf8"));
+    expect(Object.keys(packageJson.bin)[0]).toBe("sdk-v1");
     expect(packageJson.bin["sdk-v1"]).toBe("./bin/klivcore.ts");
   });
 
