@@ -5,6 +5,7 @@
   "type": "module",
   "bin": {
     "sdk-v1": "./bin/klivcore.ts",
+    "sdk-v1-acme-authenticate": "./bin/acme-agent-authenticate.ts",
     "sdk-v1-kc": "./bin/kc.ts"
   },
   "exports": {

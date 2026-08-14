@@ -11,9 +11,19 @@
       "sha256": "fc6bb15ebfb7fac05250d29b5ba9e0123051bdfbd77e219b53a7555c6a0e033a"
     },
     {
+      "path": "bin/acme-agent-authenticate.ts",
+      "bytes": 10602,
+      "sha256": "aa5d9ee3291a2d9c11ec9875beb6412520ebe6a0b719e65b346188d702f57a93"
+    },
+    {
       "path": "bin/connect-desktop.ts",
       "bytes": 215,
       "sha256": "29b0dd7593ba59ad2abf7d603b813bd94f2e4424c9e5db935d568910978e8eff"
+    },
+    {
+      "path": "bin/kc.ts",
+      "bytes": 122,
+      "sha256": "04986cd99059387a9928092b15086a7c9618cb6baa70c9638ef5125b94f66d1c"
     },
     {
       "path": "bin/klivcore.ts",
@@ -32,8 +42,8 @@
     },
     {
       "path": "package.json",
-      "bytes": 734,
-      "sha256": "287918cd22789aa5cee79b8b4c4cf59c9bbe8986a2c9b99ddad2fd4bf2d2a013"
+      "bytes": 834,
+      "sha256": "723b98cfa067978cc5d88030a33e86cffb53d632fd407b9026f1722fa05aeeed"
     },
     {
       "path": "src/client.ts",
@@ -71,6 +81,16 @@
       "sha256": "650ea67c7bb006d29887cbdcf0ac0d9bf51040427499eb384c529c03d9e062f0"
     },
     {
+      "path": "src/realm-kc-registration.ts",
+      "bytes": 4104,
+      "sha256": "36478a3d083ba9a099d6c1add67e0fcbdb42fe864260743722746b4f25581d28"
+    },
+    {
+      "path": "src/realm-kc.ts",
+      "bytes": 8631,
+      "sha256": "ae6bf45ad7016b6845a78ef5838c97a4ef4f549404cf06cafd560de117b94486"
+    },
+    {
       "path": "src/server.ts",
       "bytes": 59345,
       "sha256": "f6fddd609b5c19c86868b67846882093e4961961b4eb5e4592c78da292ab5eab"
@@ -92,8 +112,8 @@
     },
     {
       "path": "src/start-realm-entry.ts",
-      "bytes": 3850,
-      "sha256": "8ebfb22901cd49a9a5eb7c9d053a20e07dafa6052ca52cfa7cbab7516fa9ed8c"
+      "bytes": 4513,
+      "sha256": "27b48cd4bd3cf64451d61ecc50c37838bd87c7afc2bda82864bc761671679424"
     },
     {
       "path": "src/start-realm.ts",
