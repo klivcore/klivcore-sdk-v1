@@ -129,6 +129,7 @@ describe("start-realm kc registration", () => {
     const launcher = await readFile(join(home, ".local", "bin", "kc"), "utf8");
     expect(launcher.startsWith("#!/bin/sh\n# klivcore managed realm kc\n")).toBe(true);
     expect(launcher).toContain("klivcore managed realm kc");
+    expect(launcher).toContain(" sdk-v1-kc \"$@\"");
     expect(launcher).toContain(`${SDK_REVISION}`);
     expect(JSON.parse(await readFile(join(home, ".config", "klivcore", "realms", "test-realm.json"), "utf8"))).toEqual({
       id: "test-realm",

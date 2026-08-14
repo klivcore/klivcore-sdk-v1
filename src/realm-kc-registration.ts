@@ -39,7 +39,7 @@ export async function installRealmKcRegistration(options: RealmKcRegistrationOpt
   const launcher = [
     "#!/bin/sh",
     MANAGED_MARKER,
-    `exec bunx --bun --package '${SDK_REPOSITORY}#${options.sdkRevision}' kc \"$@\"`,
+    `exec bunx --bun --package '${SDK_REPOSITORY}#${options.sdkRevision}' sdk-v1-kc \"$@\"`,
     "",
   ].join("\n");
   await atomicFile(launcherPath, launcher, 0o700);
