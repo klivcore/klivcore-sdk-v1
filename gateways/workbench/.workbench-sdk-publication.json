@@ -31,8 +31,8 @@
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1678030,
-      "sha256": "dcd48b192c5e784854bfd9978eb41cc085c65cb8b3745045ae9bb2389f85496f",
+      "bytes": 977281,
+      "sha256": "8e18a12115d324529b8616875185dde3c50349ea58e060ee422e00f4eb02e623",
       "mode": 420
     },
     {
@@ -55,8 +55,8 @@
     },
     {
       "path": "ui/debug-index.js",
-      "bytes": 532586,
-      "sha256": "0ebd733ea6d6eeec58f3804d1e0b88cd072964d61f6aa37acec9440284b31acd",
+      "bytes": 191661,
+      "sha256": "c971c5b52ece60c1db259ff57380d01ef033751fd45cd07807dd4590193624d3",
       "mode": 420
     },
     {
@@ -67,14 +67,14 @@
     },
     {
       "path": "ui/debug-loader.js",
-      "bytes": 4274,
-      "sha256": "af73c9cef9f55bf74f7a2fcb408fc05c062c28e35bce9b430effd44f310abdac",
+      "bytes": 2455,
+      "sha256": "28682cc9b26c59b7843b59e1f4437ea6f18ebbf8f267099d3d81e8036fccb15e",
       "mode": 420
     },
     {
       "path": "ui/live-component-frame-runtime.js",
-      "bytes": 531752,
-      "sha256": "6cf531f772859d3afeb7148161a8e646345d78b8ce36752779f66583ca692073",
+      "bytes": 197399,
+      "sha256": "e97ac47fe4729d199889862e331531b78b8981c59187f6f90442fa3c216ac083",
       "mode": 420
     },
     {
@@ -85,8 +85,8 @@
     },
     {
       "path": "ui/main.js",
-      "bytes": 2107744,
-      "sha256": "a0c2be35c58e64d14fb558950fac50882d0459c9d509a94bf1d17f6b9679850e",
+      "bytes": 1181332,
+      "sha256": "63cbeff252f2828607eede569505642a6734c90f19ca8bd9186fde8e04b9b259",
       "mode": 420
     }
   ]
