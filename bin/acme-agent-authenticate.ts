@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
 /** One-command, secret-safe Acme browser authentication + acceptance. */
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import {
+  browserSafeStateExpression,
+  browserWaitDeadline,
+  createBrowserDiagnosticTracker,
+  writePrivateScreenshot,
+  withBrowserDeadline,
+  WORKBENCH_MOUNT_SELECTOR,
+} from "../src/acme-agent-authenticate";
 
 // Acme has one registration authority. Concurrent agents queue behind one
 // lock rather than racing supported Realm-owned issuance.
@@ -23,7 +31,8 @@ const route = value("--route", "/workbench");
 const screenshot = resolve(value("--screenshot", `/tmp/${session}.png`));
 const staging = argv.includes("--staging");
 const doctor = argv.includes("--doctor");
-const timeoutAt = Date.now() + Number(value("--timeout-ms", "180000"));
+const timeoutMs = Number(value("--timeout-ms", "180000"));
+browserWaitDeadline(timeoutMs);
 if (!/^\/[A-Za-z0-9_./-]*$/u.test(route) || route.includes("..")) throw new Error("invalid protected route");
 
 type RunOptions = Readonly<{ cwd?: string; env?: Record<string, string>; stdin?: "ignore" | "inherit"; timeout?: number }>;
@@ -51,34 +60,40 @@ function ab(...args: string[]): string {
 
 type CdpMessage = Readonly<{ id?: number; method?: string; params?: Record<string, unknown>; result?: Record<string, any>; error?: Readonly<{ message: string }> }>;
 type Pending = Readonly<{ resolve: (value: Record<string, any>) => void; reject: (error: Error) => void }>;
-async function connect(url: string) {
+async function connect(url: string, timeout: number) {
   const socket = new WebSocket(url);
-  await new Promise<void>((ok, fail) => {
-    socket.onopen = () => ok();
-    socket.onerror = () => fail(new Error("CDP connection failed"));
-  });
+  try {
+    await withBrowserDeadline(new Promise<void>((ok, fail) => {
+      socket.onopen = () => ok();
+      socket.onerror = () => fail(new Error("CDP connection failed"));
+    }), Date.now() + timeout, "CDP connection");
+  } catch (error) {
+    try { socket.close(); } catch {}
+    throw error;
+  }
   let id = 0;
   const pending = new Map<number, Pending>();
-  const events: CdpMessage[] = [];
+  const diagnostics = createBrowserDiagnosticTracker();
   socket.onmessage = (event) => {
     const message = JSON.parse(String(event.data)) as CdpMessage;
     if (message.id && pending.has(message.id)) {
       const item = pending.get(message.id)!;
       pending.delete(message.id);
       message.error ? item.reject(new Error(message.error.message)) : item.resolve(message.result ?? {});
-    } else if (message.method) events.push(message);
+    } else if (message.method) diagnostics.record(message);
   };
   const call = (method: string, params?: Record<string, unknown>) => new Promise<Record<string, any>>((resolveCall, reject) => {
     const requestId = ++id;
     pending.set(requestId, { resolve: resolveCall, reject });
     socket.send(JSON.stringify({ id: requestId, method, ...(params === undefined ? {} : { params }) }));
   });
-  return { socket, call, events };
+  return { socket, call, diagnostics };
 }
 
 async function until<T>(fn: () => Promise<T | false>, label: string, delay = 100): Promise<T> {
-  while (Date.now() < timeoutAt) {
-    const result = await fn();
+  const deadline = browserWaitDeadline(timeoutMs);
+  while (Date.now() < deadline) {
+    const result = await withBrowserDeadline(fn(), deadline, label);
     if (result) return result;
     await Bun.sleep(delay);
   }
@@ -98,6 +113,7 @@ function safeFailure(error: unknown): string {
 
 let cdp: Awaited<ReturnType<typeof connect>> | undefined;
 let authenticatorId: string | undefined;
+let protectedUrl: string | undefined;
 let stage = "preflight";
 try {
   run("agent-browser", ["--version"], { timeout: 30000 });
@@ -138,52 +154,59 @@ try {
   ab("open", registrationUrl.href);
   const browserCdpUrl = ab("get", "cdp-url").trim();
   const port = new URL(browserCdpUrl).port;
-  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as Array<Record<string, any>>;
+  const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, {
+    signal: AbortSignal.timeout(timeoutMs),
+  })).json() as Array<Record<string, any>>;
   const target = targets.find((entry) => entry.type === "page"
     && new URL(entry.url).origin === origin
     && /register passkey/iu.test(entry.title ?? ""));
   if (!target?.webSocketDebuggerUrl) throw new Error("registration page target unavailable");
-  cdp = await connect(target.webSocketDebuggerUrl);
+  cdp = await connect(target.webSocketDebuggerUrl, timeoutMs);
+  const cdpCall = (method: string, params?: Record<string, unknown>, operationTimeoutMs = timeoutMs) => withBrowserDeadline(
+    cdp!.call(method, params),
+    Date.now() + operationTimeoutMs,
+    method,
+  );
   stage = "authenticator-attach";
-  await cdp.call("Page.enable");
-  await cdp.call("Runtime.enable");
-  await cdp.call("Log.enable");
-  await cdp.call("WebAuthn.enable", { enableUI: false });
-  ({ authenticatorId } = await cdp.call("WebAuthn.addVirtualAuthenticator", {
+  await cdpCall("Page.enable");
+  await cdpCall("Runtime.enable");
+  await cdpCall("Log.enable");
+  await cdpCall("WebAuthn.enable", { enableUI: false });
+  ({ authenticatorId } = await cdpCall("WebAuthn.addVirtualAuthenticator", {
     options: {
       protocol: "ctap2", ctap2Version: "ctap2_1", transport: "internal",
       hasResidentKey: true, hasUserVerification: true, isUserVerified: true,
       automaticPresenceSimulation: true,
     },
   }));
-  await cdp.call("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: true });
-  await cdp.call("WebAuthn.setUserVerified", { authenticatorId, isUserVerified: true });
+  await cdpCall("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId, enabled: true });
+  await cdpCall("WebAuthn.setUserVerified", { authenticatorId, isUserVerified: true });
 
   stage = "registration";
-  await until(async () => (await cdp!.call("Runtime.evaluate", { expression: "document.readyState", returnByValue: true })).result.value !== "loading", "registration document");
-  cdp.events.length = 0;
-  const clicked = await cdp.call("Runtime.evaluate", {
+  await until(async () => (await cdpCall("Runtime.evaluate", { expression: "document.readyState", returnByValue: true })).result.value !== "loading", "registration document");
+  cdp.diagnostics.reset();
+  const clicked = await cdpCall("Runtime.evaluate", {
     expression: `(()=>{const buttons=[...document.querySelectorAll('button')];const button=buttons.find(b=>/register passkey/i.test(b.textContent||''))||buttons[0];if(!button)return false;button.click();return true})()`,
     returnByValue: true,
   });
   if (!clicked.result.value) throw new Error("registration control unavailable");
 
   await until(async () => {
-    const added = cdp!.events.some((event) => event.method === "WebAuthn.credentialAdded");
-    const document = (await cdp!.call("Runtime.evaluate", {
+    const added = cdp!.diagnostics.credentialAdded();
+    const document = (await cdpCall("Runtime.evaluate", {
       expression: "({ href: location.href, registrationDocument: /register passkey/iu.test(document.title) })",
       returnByValue: true,
     })).result.value;
     return added && !document.registrationDocument ? document.href as string : false;
   }, "credential commit and authenticated redirect");
 
-  const protectedUrl = `${origin}${route}`;
+  protectedUrl = `${origin}${route}`;
   stage = "protected-route";
-  cdp.events.length = 0;
-  await cdp.call("Page.navigate", { url: protectedUrl });
+  cdp.diagnostics.reset();
+  await cdpCall("Page.navigate", { url: protectedUrl });
   const mounted = await until(async () => {
-    const result = await cdp!.call("Runtime.evaluate", {
-      expression: `(()=>{const walk=(root)=>{if(root.querySelector?.('[data-workbench-element-id]'))return true;for(const el of root.querySelectorAll?.('*')||[])if(el.shadowRoot&&walk(el.shadowRoot))return true;return false};return {href:location.href,mounted:walk(document),title:document.title}})()`,
+    const result = await cdpCall("Runtime.evaluate", {
+      expression: `(()=>{const selector=${JSON.stringify(WORKBENCH_MOUNT_SELECTOR)};const walk=(root)=>{if(root.querySelector?.(selector))return true;for(const el of root.querySelectorAll?.('*')||[])if(el.shadowRoot&&walk(el.shadowRoot))return true;return false};return {href:location.href,mounted:walk(document),title:document.title}})()`,
       returnByValue: true,
     });
     const state = result.result.value as Readonly<{ href: string; mounted: boolean; title: string }>;
@@ -191,10 +214,10 @@ try {
   }, "protected Workbench mount", 200);
 
   mkdirSync(dirname(screenshot), { recursive: true });
-  const shot = await cdp.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-  writeFileSync(screenshot, Buffer.from(shot.data, "base64"), { mode: 0o600 });
-  const consoleErrors = cdp.events.filter((event) => event.method === "Runtime.exceptionThrown"
-    || (event.method === "Log.entryAdded" && ["error", "warning"].includes(String((event.params?.entry as Record<string, unknown> | undefined)?.level)))).length;
+  const shot = await cdpCall("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+  writePrivateScreenshot(screenshot, Buffer.from(shot.data, "base64"));
+  const diagnosticCounts = cdp.diagnostics.snapshot();
+  const consoleErrors = diagnosticCounts.exceptions + diagnosticCounts.logErrors + diagnosticCounts.logWarnings;
   console.log(JSON.stringify({
     status: "PASS", executionProfile: "acme", session, channel: staging ? "staging" : "production",
     origin, route, finalUrl: mounted.href, title: mounted.title,
@@ -202,11 +225,46 @@ try {
     consoleOrPageErrors: consoleErrors, screenshot,
   }));
 } catch (error) {
-  console.log(JSON.stringify({ status: "FAIL", stage, reason: safeFailure(error), session }));
+  let browserState: unknown;
+  let failureScreenshot: string | undefined;
+  if (cdp) {
+    try {
+      const diagnosticExpression = protectedUrl ? browserSafeStateExpression(protectedUrl) : undefined;
+      browserState = diagnosticExpression ? (await withBrowserDeadline(cdp.call("Runtime.evaluate", {
+        expression: diagnosticExpression,
+        returnByValue: true,
+      }), Date.now() + 5_000, "browser diagnostics")).result.value : undefined;
+    } catch { /* diagnostics are best effort */ }
+    try {
+      mkdirSync(dirname(screenshot), { recursive: true });
+      const shot = await withBrowserDeadline(
+        cdp.call("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }),
+        Date.now() + 5_000,
+        "failure screenshot",
+      );
+      writePrivateScreenshot(screenshot, Buffer.from(shot.data, "base64"));
+      failureScreenshot = screenshot;
+    } catch { /* diagnostics are best effort */ }
+  }
+  console.log(JSON.stringify({
+    status: "FAIL",
+    stage,
+    reason: safeFailure(error),
+    session,
+    browserState,
+    browserDiagnostics: cdp ? cdp.diagnostics.snapshot() : undefined,
+    screenshot: failureScreenshot,
+  }));
   process.exitCode = 1;
 } finally {
   if (cdp && authenticatorId) {
-    try { await cdp.call("WebAuthn.removeVirtualAuthenticator", { authenticatorId }); } catch {}
+    try {
+      await withBrowserDeadline(
+        cdp.call("WebAuthn.removeVirtualAuthenticator", { authenticatorId }),
+        Date.now() + 5_000,
+        "authenticator cleanup",
+      );
+    } catch {}
   }
   try { cdp?.socket.close(); } catch {}
   try { ab("close"); } catch {}

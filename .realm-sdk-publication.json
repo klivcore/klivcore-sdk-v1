@@ -12,8 +12,8 @@
     },
     {
       "path": "bin/acme-agent-authenticate.ts",
-      "bytes": 10602,
-      "sha256": "aa5d9ee3291a2d9c11ec9875beb6412520ebe6a0b719e65b346188d702f57a93"
+      "bytes": 12505,
+      "sha256": "716155e76b803e6d60c7a393e3fcd6cbbfd31e7f961920978dd57786cd4e4b41"
     },
     {
       "path": "bin/connect-desktop.ts",
@@ -44,6 +44,11 @@
       "path": "package.json",
       "bytes": 834,
       "sha256": "723b98cfa067978cc5d88030a33e86cffb53d632fd407b9026f1722fa05aeeed"
+    },
+    {
+      "path": "src/acme-agent-authenticate.ts",
+      "bytes": 5097,
+      "sha256": "b798cc7e82e6f44c0038e018ec8715f84306a18f1049ea594702a4c16e298ac4"
     },
     {
       "path": "src/client.ts",
