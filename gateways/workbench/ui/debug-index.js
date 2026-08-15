@@ -10989,7 +10989,7 @@ var workbenchReactDebugContributions = Object.freeze([
     debugId: "bench-viewport",
     description: "Pan and zoom mock scenarios for tuning workbench viewport controls.",
     name: "Bench viewport",
-    scenarioIds: Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+    scenarioIds: Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "comment-collaboration", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
   }),
   Object.freeze({
     debugId: "directory-scene",
@@ -11049,7 +11049,7 @@ var workbenchReactDebugContributions = Object.freeze([
 
 // packages/publish-sdk/src/gateway-debug-publication.ts
 var publishedScenarioIdsByCategory = Object.freeze({
-  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "comment-collaboration", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
 });
 var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
   const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);

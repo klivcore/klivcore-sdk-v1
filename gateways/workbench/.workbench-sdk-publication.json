@@ -19,20 +19,20 @@
     },
     {
       "path": "bin/server.js",
-      "bytes": 169767,
-      "sha256": "dba070592095f7db0706879c948e2dcc4ed2f26e912e552519ead58f8da2ea3b",
+      "bytes": 169817,
+      "sha256": "411b9a063f5be10c50cd2e685a0a7c2b9bbee4786ab525b91c0bfa1ac70126f5",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.css",
-      "bytes": 39357,
-      "sha256": "79137f798f570dd9b524047755f5ba0246f253cba928a7ca1d504d4969370655",
+      "bytes": 39810,
+      "sha256": "f0d27217ae410284d6f02a2dfc18a5f51294e71636100cbf9e05670025f0133a",
       "mode": 420
     },
     {
       "path": "debug/assets/bench-viewport.js",
-      "bytes": 1659033,
-      "sha256": "3a8c6489dd891d5fd2f7c53018c6162fb103aa65432c97fced570665d3d639c8",
+      "bytes": 1678030,
+      "sha256": "dcd48b192c5e784854bfd9978eb41cc085c65cb8b3745045ae9bb2389f85496f",
       "mode": 420
     },
     {
@@ -49,14 +49,14 @@
     },
     {
       "path": "ui/debug-index.css",
-      "bytes": 39357,
-      "sha256": "79137f798f570dd9b524047755f5ba0246f253cba928a7ca1d504d4969370655",
+      "bytes": 39810,
+      "sha256": "f0d27217ae410284d6f02a2dfc18a5f51294e71636100cbf9e05670025f0133a",
       "mode": 420
     },
     {
       "path": "ui/debug-index.js",
-      "bytes": 532536,
-      "sha256": "cc03679644f13691994629d67c339de02fb8c058a9d317e8f5fe9f7f9d548753",
+      "bytes": 532586,
+      "sha256": "0ebd733ea6d6eeec58f3804d1e0b88cd072964d61f6aa37acec9440284b31acd",
       "mode": 420
     },
     {
@@ -79,14 +79,14 @@
     },
     {
       "path": "ui/main.css",
-      "bytes": 34797,
-      "sha256": "47d9c959e2a06fbe47432b5c48f6578879b08676c37f579187f9c400ce4bed0a",
+      "bytes": 35197,
+      "sha256": "9a02cecb54f7a6206f669131ad892299607bca747ac5da03aceb9165bdf946dd",
       "mode": 420
     },
     {
       "path": "ui/main.js",
-      "bytes": 2089340,
-      "sha256": "9a95eb0c507c27d90a07fc1937c1daa62ee4d7707728faf824ea54e28728267a",
+      "bytes": 2107744,
+      "sha256": "a0c2be35c58e64d14fb558950fac50882d0459c9d509a94bf1d17f6b9679850e",
       "mode": 420
     }
   ]

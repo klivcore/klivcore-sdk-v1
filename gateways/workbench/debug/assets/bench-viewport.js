@@ -13822,9 +13822,58 @@ function isRecord(value) {
 var import_react4 = __toESM(require_react(), 1);
 var jsx_runtime7 = __toESM(require_jsx_runtime(), 1);
 var CommentCollaborationContext = import_react4.createContext(null);
+var CommentBenchContext = import_react4.createContext(null);
+var COMMENT_RESPONSE_SIZE_KEY = "klivcore.comments.response-size.v1";
+var COMMENT_RESPONSE_SIZE_EVENT = "klivcore:comment-response-size";
+var DEFAULT_COMMENT_RESPONSE_SIZE = { height: 320, width: 360 };
+function readCommentResponseSize() {
+  if (typeof window === "undefined")
+    return DEFAULT_COMMENT_RESPONSE_SIZE;
+  try {
+    const value = JSON.parse(window.localStorage.getItem(COMMENT_RESPONSE_SIZE_KEY) ?? "null");
+    if (!value || !Number.isFinite(value.width) || !Number.isFinite(value.height))
+      return DEFAULT_COMMENT_RESPONSE_SIZE;
+    return {
+      height: Math.min(900, Math.max(192, Math.round(value.height))),
+      width: Math.min(1200, Math.max(280, Math.round(value.width)))
+    };
+  } catch {
+    return DEFAULT_COMMENT_RESPONSE_SIZE;
+  }
+}
+var normalizeCommentForComparison = (value) => value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/\s+/gu, "");
+function asciiDistanceAtMost(left, right, limit) {
+  if (Math.abs(left.length - right.length) > limit)
+    return false;
+  let previous = Array.from({ length: right.length + 1 }, (_, index2) => index2);
+  for (let leftIndex = 1;leftIndex <= left.length; leftIndex += 1) {
+    const current = Array(right.length + 1).fill(limit + 1);
+    current[0] = leftIndex;
+    for (let rightIndex = Math.max(1, leftIndex - limit);rightIndex <= Math.min(right.length, leftIndex + limit); rightIndex += 1) {
+      current[rightIndex] = Math.min(previous[rightIndex] + 1, current[rightIndex - 1] + 1, previous[rightIndex - 1] + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1));
+    }
+    previous = current;
+  }
+  return previous[right.length] <= limit;
+}
+function shouldRecordCommentSourceEdit(previousValue, currentValue) {
+  const previous = normalizeCommentForComparison(previousValue);
+  const current = normalizeCommentForComparison(currentValue);
+  if (previous === current)
+    return false;
+  if (/^[\x00-\x7f]*$/.test(previous) && /^[\x00-\x7f]*$/.test(current))
+    return !asciiDistanceAtMost(previous, current, 2);
+  return true;
+}
 function CommentCollaborationProvider({ children, value }) {
   return /* @__PURE__ */ jsx_runtime7.jsx(CommentCollaborationContext.Provider, {
     value,
+    children
+  });
+}
+function CommentBenchProvider({ benchPath, children, openCommentId }) {
+  return /* @__PURE__ */ jsx_runtime7.jsx(CommentBenchContext.Provider, {
+    value: { benchPath, ...openCommentId ? { openCommentId } : {} },
     children
   });
 }
@@ -13860,35 +13909,183 @@ var commentCollaborationPhasePresentation = {
   "needs-you": { icon: "!", label: "Needs you", tone: "border-amber-200 bg-amber-300 text-amber-950" },
   done: { icon: "✓", label: "Done", tone: "border-emerald-200 bg-emerald-400 text-emerald-950" }
 };
+function CommentApprovalComposer({ onSubmit }) {
+  const [context, setContext] = import_react4.useState("");
+  const [menuOpen, setMenuOpen] = import_react4.useState(false);
+  const [selected, setSelected] = import_react4.useState("approved");
+  const presentation = selected === "approved" ? { label: "Approve", submitLabel: "Approve proposal" } : selected === "changes-requested" ? { label: "Request changes", submitLabel: "Submit request changes" } : { label: "Reject", submitLabel: "Submit rejection" };
+  return /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+    className: "mt-2",
+    children: [
+      /* @__PURE__ */ jsx_runtime7.jsx("textarea", {
+        "aria-label": "Optional decision context",
+        className: "min-h-14 w-full resize-y rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-100 outline-none focus:border-sky-500",
+        onInput: (event) => setContext(event.currentTarget.value),
+        placeholder: "Optional context",
+        value: context
+      }),
+      /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+        className: "relative mt-2 inline-flex",
+        children: [
+          /* @__PURE__ */ jsx_runtime7.jsx("button", {
+            "aria-label": presentation.submitLabel,
+            className: "rounded-l bg-sky-600 px-3 py-1.5 font-semibold text-white hover:bg-sky-500",
+            onClick: () => onSubmit(selected, context.trim() || undefined),
+            type: "button",
+            children: presentation.label
+          }),
+          /* @__PURE__ */ jsx_runtime7.jsx("button", {
+            "aria-label": "Choose decision",
+            "aria-expanded": menuOpen,
+            className: "rounded-r border-l border-sky-400/40 bg-sky-600 px-2 text-white hover:bg-sky-500",
+            onClick: () => setMenuOpen((value) => !value),
+            type: "button",
+            children: "⌄"
+          }),
+          menuOpen ? /* @__PURE__ */ jsx_runtime7.jsx("div", {
+            className: "absolute left-0 top-full z-50 mt-1 min-w-36 rounded border border-slate-700 bg-slate-950 p-1 shadow-xl",
+            children: [["approved", "Approve"], ["changes-requested", "Request changes"], ["rejected", "Reject"]].map(([value, label]) => /* @__PURE__ */ jsx_runtime7.jsx("button", {
+              className: "block w-full rounded px-2 py-1.5 text-left hover:bg-slate-800",
+              onClick: () => {
+                setSelected(value);
+                setMenuOpen(false);
+              },
+              type: "button",
+              children: label
+            }, value))
+          }) : null
+        ]
+      })
+    ]
+  });
+}
 function CommentCollaborationPopup({ commentId }) {
   const controller = useCommentCollaboration();
+  const bench = import_react4.useContext(CommentBenchContext);
   const projection = controller?.getProjection(commentId);
+  const [open, setOpen] = import_react4.useState(bench?.openCommentId === commentId);
+  const [actionError, setActionError] = import_react4.useState(false);
+  const [copyError, setCopyError] = import_react4.useState(false);
+  const [detailError, setDetailError] = import_react4.useState(false);
+  const [reply, setReply] = import_react4.useState("");
+  const [replyError, setReplyError] = import_react4.useState(false);
+  const [responseSize, setResponseSize] = import_react4.useState(readCommentResponseSize);
+  const requestedDetailsThreadRef = import_react4.useRef(null);
+  const loadDetailsRef = import_react4.useRef(controller?.loadDetails);
+  loadDetailsRef.current = controller?.loadDetails;
+  import_react4.useEffect(() => {
+    const syncSize = (event) => {
+      const detail = event.detail;
+      if (!detail || !Number.isFinite(detail.width) || !Number.isFinite(detail.height))
+        return;
+      setResponseSize({
+        height: Math.min(900, Math.max(192, Math.round(detail.height))),
+        width: Math.min(1200, Math.max(280, Math.round(detail.width)))
+      });
+    };
+    window.addEventListener(COMMENT_RESPONSE_SIZE_EVENT, syncSize);
+    return () => window.removeEventListener(COMMENT_RESPONSE_SIZE_EVENT, syncSize);
+  }, []);
+  const canLoadDetails = Boolean(controller?.loadDetails);
+  const detailsThreadId = projection?.threadId;
+  import_react4.useEffect(() => {
+    if (!open) {
+      requestedDetailsThreadRef.current = null;
+      setDetailError(false);
+      return;
+    }
+    if (!detailsThreadId || !canLoadDetails || requestedDetailsThreadRef.current === detailsThreadId)
+      return;
+    requestedDetailsThreadRef.current = detailsThreadId;
+    let current = true;
+    setDetailError(false);
+    Promise.resolve(loadDetailsRef.current?.(commentId)).catch(() => {
+      if (current)
+        setDetailError(true);
+    });
+    return () => {
+      current = false;
+    };
+  }, [canLoadDetails, commentId, detailsThreadId, open]);
   if (!controller || !projection)
     return null;
   const presentation = commentCollaborationPhasePresentation[projection.phase];
   const request = projection.activeRequest;
+  const latestDecision = [...projection.entries].reverse().find((entry) => entry.kind === "response" && ["approve", "reject", "request-changes"].includes(entry.response?.value ?? ""));
+  const latestDecisionRequest = latestDecision?.response ? projection.entries.find((entry) => entry.kind === "approval" && entry.request?.id === latestDecision.response.requestId)?.request : undefined;
+  const sourceEdits = (projection.sourceHistory ?? []).slice(1).flatMap((source, index2) => {
+    const previous = projection.sourceHistory[index2];
+    return shouldRecordCommentSourceEdit(previous.text, source.text) ? [{ current: source.text, previous: previous.text, revision: source.sourceRevision }] : [];
+  }).reverse();
+  const runAction = async (action) => {
+    setActionError(false);
+    try {
+      await controller.act(action);
+    } catch {
+      setActionError(true);
+    }
+  };
   const respond = (action) => {
-    controller.act({ ...action, commentId, kind: "respond" });
+    runAction({ ...action, commentId, kind: "respond" });
   };
   const stopPointer = (event) => event.stopPropagation();
+  const copyLink = async () => {
+    const benchPath = projection.source?.benchPath ?? bench?.benchPath;
+    setCopyError(false);
+    try {
+      if (!benchPath || typeof window === "undefined" || !window.navigator.clipboard)
+        throw new Error("Comment permalink is unavailable");
+      const url = new URL(window.location.href);
+      url.searchParams.set("benchPath", benchPath);
+      url.searchParams.set("commentId", projection.source?.commentId ?? commentId);
+      await window.navigator.clipboard.writeText(url.href);
+    } catch {
+      setCopyError(true);
+    }
+  };
+  const submitReply = async () => {
+    const body = reply.trim();
+    if (!body)
+      return;
+    setReplyError(false);
+    try {
+      await controller.act({ body, commentId, kind: "reply", threadId: projection.threadId });
+      setReply("");
+    } catch {
+      setReplyError(true);
+    }
+  };
   return /* @__PURE__ */ jsx_runtime7.jsxs("div", {
-    className: "absolute right-1 top-1 z-30",
+    className: "pointer-events-none absolute inset-0 z-30",
     onPointerDown: stopPointer,
     onPointerMove: stopPointer,
     onPointerUp: stopPointer,
     children: [
       /* @__PURE__ */ jsx_runtime7.jsx("button", {
         "aria-label": `Comment status: ${presentation.label}`,
-        className: `flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-black leading-none shadow-md ${presentation.tone}`,
+        className: `pointer-events-auto absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full border text-[11px] font-black leading-none shadow-md ${presentation.tone}`,
         "data-comment-collaboration-status": projection.phase,
+        "aria-expanded": open,
+        onClick: () => setOpen((value) => !value),
         title: presentation.label,
         type: "button",
         children: presentation.icon
       }),
-      /* @__PURE__ */ jsx_runtime7.jsxs("section", {
+      open ? /* @__PURE__ */ jsx_runtime7.jsxs("section", {
         "aria-label": "Comment collaboration",
-        className: "invisible absolute right-0 top-6 z-40 w-80 rounded-md border border-slate-600 bg-slate-950/95 p-3 text-left text-xs text-slate-200 opacity-0 shadow-2xl transition-opacity duration-150 group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100",
+        className: "pointer-events-auto absolute right-0 top-full z-40 min-h-48 min-w-[280px] max-h-[900px] max-w-[1200px] resize overflow-auto rounded-lg border border-slate-700 bg-[#080d15] p-3 text-left text-xs text-slate-200 shadow-2xl",
         "data-comment-collaboration-popup": true,
+        onPointerUp: (event) => {
+          event.stopPropagation();
+          const rect = event.currentTarget.getBoundingClientRect();
+          const next = { height: Math.min(900, Math.max(192, Math.round(rect.height))), width: Math.min(1200, Math.max(280, Math.round(rect.width))) };
+          setResponseSize(next);
+          try {
+            window.localStorage.setItem(COMMENT_RESPONSE_SIZE_KEY, JSON.stringify(next));
+          } catch {}
+          window.dispatchEvent(new CustomEvent(COMMENT_RESPONSE_SIZE_EVENT, { detail: next }));
+        },
+        style: responseSize,
         children: [
           /* @__PURE__ */ jsx_runtime7.jsxs("header", {
             className: "flex items-center justify-between gap-3",
@@ -13897,11 +14094,30 @@ function CommentCollaborationPopup({ commentId }) {
                 className: "text-sm text-slate-50",
                 children: presentation.label
               }),
-              projection.agentSession ? /* @__PURE__ */ jsx_runtime7.jsx("span", {
-                className: "truncate text-[10px] text-slate-400",
-                title: `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`,
-                children: projection.agentSession.label ?? `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`
-              }) : null
+              /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+                className: "flex items-center gap-2",
+                children: [
+                  projection.agentSession ? /* @__PURE__ */ jsx_runtime7.jsx("span", {
+                    className: "truncate text-[10px] text-slate-400",
+                    title: `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`,
+                    children: projection.agentSession.label ?? `${projection.agentSession.sourceId}/${projection.agentSession.sessionId}`
+                  }) : null,
+                  /* @__PURE__ */ jsx_runtime7.jsx("button", {
+                    "aria-label": "Copy comment link",
+                    className: "text-sky-300 hover:text-sky-100",
+                    onClick: () => void copyLink(),
+                    type: "button",
+                    children: "⧉"
+                  }),
+                  /* @__PURE__ */ jsx_runtime7.jsx("button", {
+                    "aria-label": "Close comment response",
+                    className: "text-slate-400 hover:text-white",
+                    onClick: () => setOpen(false),
+                    type: "button",
+                    children: "×"
+                  })
+                ]
+              })
             ]
           }),
           projection.latestUpdate ? /* @__PURE__ */ jsx_runtime7.jsx("p", {
@@ -13935,30 +14151,25 @@ function CommentCollaborationPopup({ commentId }) {
                   onClick: () => respond({ requestId: request.id, value: choice.id }),
                   children: choice.label
                 }, choice.id))
-              }) : /* @__PURE__ */ jsx_runtime7.jsxs("div", {
-                className: "mt-2 flex flex-wrap gap-1",
-                children: [
-                  /* @__PURE__ */ jsx_runtime7.jsx("button", {
-                    className: "rounded border border-emerald-400/50 bg-emerald-500/15 px-2 py-1 text-emerald-100 hover:bg-emerald-500/25",
-                    type: "button",
-                    onClick: () => respond({ decision: "approved", requestId: request.id }),
-                    children: "Approve"
-                  }),
-                  /* @__PURE__ */ jsx_runtime7.jsx("button", {
-                    className: "rounded border border-red-400/50 bg-red-500/10 px-2 py-1 text-red-100 hover:bg-red-500/20",
-                    type: "button",
-                    onClick: () => respond({ decision: "rejected", requestId: request.id }),
-                    children: "Reject"
-                  }),
-                  /* @__PURE__ */ jsx_runtime7.jsx("button", {
-                    className: "rounded border border-slate-600 px-2 py-1 hover:bg-slate-800",
-                    type: "button",
-                    onClick: () => respond({ decision: "changes-requested", requestId: request.id }),
-                    children: "Request changes"
-                  })
-                ]
+              }) : /* @__PURE__ */ jsx_runtime7.jsx(CommentApprovalComposer, {
+                onSubmit: (decision, context) => respond({ context, decision, requestId: request.id })
               })
             ]
+          }) : null,
+          detailError ? /* @__PURE__ */ jsx_runtime7.jsx("p", {
+            className: "mt-1 text-rose-300",
+            role: "alert",
+            children: "Comment details could not be loaded. Close and reopen to retry."
+          }) : null,
+          copyError ? /* @__PURE__ */ jsx_runtime7.jsx("p", {
+            className: "mt-1 text-rose-300",
+            role: "alert",
+            children: "Comment link was not copied. Try again."
+          }) : null,
+          actionError ? /* @__PURE__ */ jsx_runtime7.jsx("p", {
+            className: "mt-1 text-rose-300",
+            role: "alert",
+            children: "Action was not sent. Try again."
           }) : null,
           projection.outcome ? /* @__PURE__ */ jsx_runtime7.jsxs("div", {
             className: "mt-3 rounded border border-slate-700 bg-slate-900/60 p-2",
@@ -13999,12 +14210,18 @@ function CommentCollaborationPopup({ commentId }) {
               }),
               /* @__PURE__ */ jsx_runtime7.jsx("ol", {
                 className: "mt-2 max-h-48 space-y-2 overflow-auto",
-                children: projection.entries.map((entry) => /* @__PURE__ */ jsx_runtime7.jsxs("li", {
+                children: [...projection.entries].reverse().map((entry) => /* @__PURE__ */ jsx_runtime7.jsxs("li", {
                   className: "border-l border-slate-700 pl-2",
                   children: [
-                    /* @__PURE__ */ jsx_runtime7.jsx("div", {
-                      className: "text-[10px] uppercase tracking-wide text-slate-500",
-                      children: entry.kind
+                    /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+                      className: "flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-slate-500",
+                      children: [
+                        entry.kind === "response" ? /* @__PURE__ */ jsx_runtime7.jsx("span", {
+                          className: "flex h-5 w-5 items-center justify-center rounded-full bg-[#153442] text-cyan-300",
+                          children: entry.response?.value === "reject" ? "×" : entry.response?.value === "request-changes" ? "↶" : "✓"
+                        }) : null,
+                        entry.kind
+                      ]
                     }),
                     /* @__PURE__ */ jsx_runtime7.jsx("div", {
                       className: "whitespace-pre-wrap",
@@ -14012,6 +14229,35 @@ function CommentCollaborationPopup({ commentId }) {
                     })
                   ]
                 }, entry.id))
+              })
+            ]
+          }) : null,
+          sourceEdits.length ? /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+            className: "mt-3 border-t border-slate-800 pt-2",
+            children: [
+              /* @__PURE__ */ jsx_runtime7.jsx("div", {
+                className: "text-[10px] uppercase tracking-wide text-slate-500",
+                children: "Comment edits"
+              }),
+              /* @__PURE__ */ jsx_runtime7.jsx("ol", {
+                className: "mt-2 space-y-2",
+                children: sourceEdits.map((edit) => /* @__PURE__ */ jsx_runtime7.jsxs("li", {
+                  className: "border-l border-slate-700 pl-2",
+                  children: [
+                    /* @__PURE__ */ jsx_runtime7.jsx("div", {
+                      className: "text-[10px] text-slate-400",
+                      children: "Comment edited by You"
+                    }),
+                    /* @__PURE__ */ jsx_runtime7.jsx("div", {
+                      className: "whitespace-pre-wrap text-slate-500 line-through",
+                      children: edit.previous
+                    }),
+                    /* @__PURE__ */ jsx_runtime7.jsx("div", {
+                      className: "whitespace-pre-wrap text-slate-100",
+                      children: edit.current
+                    })
+                  ]
+                }, edit.revision))
               })
             ]
           }) : null,
@@ -14034,9 +14280,48 @@ function CommentCollaborationPopup({ commentId }) {
                 }, item.id))
               })
             ]
+          }) : null,
+          !request ? /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+            className: "mt-3 border-t border-slate-800 pt-2",
+            children: [
+              /* @__PURE__ */ jsx_runtime7.jsx("textarea", {
+                "aria-label": "Reply",
+                className: "min-h-14 w-full resize-y rounded border border-slate-700 bg-slate-950 px-2 py-1.5 text-slate-100 outline-none focus:border-sky-500",
+                onInput: (event) => setReply(event.currentTarget.value),
+                placeholder: "Reply",
+                value: reply
+              }),
+              /* @__PURE__ */ jsx_runtime7.jsx("button", {
+                className: "mt-1 rounded bg-sky-600 px-3 py-1.5 font-semibold text-white hover:bg-sky-500 disabled:opacity-40",
+                disabled: !reply.trim(),
+                onClick: () => void submitReply(),
+                type: "button",
+                children: "Reply"
+              }),
+              replyError ? /* @__PURE__ */ jsx_runtime7.jsx("p", {
+                className: "mt-1 text-rose-300",
+                role: "alert",
+                children: "Reply was not sent. Try again."
+              }) : null
+            ]
+          }) : null,
+          !request && latestDecision?.response && latestDecisionRequest?.proposal && latestDecisionRequest.scope ? /* @__PURE__ */ jsx_runtime7.jsxs("div", {
+            className: "mt-2 flex items-center gap-2 text-slate-300",
+            "data-comment-current-decision": latestDecision.response.value,
+            children: [
+              /* @__PURE__ */ jsx_runtime7.jsx("span", {
+                children: latestDecision.response.value === "approve" ? "Approved" : latestDecision.response.value === "reject" ? "Rejected" : "Changes requested"
+              }),
+              /* @__PURE__ */ jsx_runtime7.jsx("button", {
+                className: "text-sky-300 hover:text-sky-100",
+                onClick: () => void runAction({ commentId, kind: "reopen", proposal: latestDecisionRequest.proposal, responseEntryId: latestDecision.id, scope: latestDecisionRequest.scope, threadId: projection.threadId }),
+                type: "button",
+                children: "Undo"
+              })
+            ]
           }) : null
         ]
-      })
+      }) : null
     ]
   });
 }
@@ -14165,8 +14450,34 @@ function InlineCommentCollaboration({ element, onElementChange }) {
     return null;
   const projection = deriveCommentCollaborationProjection(element.thread);
   const act = (action) => {
+    if (action.kind === "reopen") {
+      const approval = {
+        actorId: "human:operator",
+        body: "Undo approval.",
+        createdAt: new Date().toISOString(),
+        id: `entry:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`}`,
+        kind: "approval",
+        request: { id: `reopen:${action.responseEntryId}`, proposal: action.proposal, responseEntryId: action.responseEntryId, scope: action.scope }
+      };
+      onElementChange(element.id, (current) => current.kind === "comment" ? { ...current, thread: appendCommentThreadEntry(current.thread, approval, `Comment ${current.id} thread`) } : current);
+      return;
+    }
+    if (action.kind === "reply") {
+      const message = {
+        actorId: "human:operator",
+        body: action.body,
+        createdAt: new Date().toISOString(),
+        id: `entry:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`}`,
+        kind: "message"
+      };
+      onElementChange(element.id, (current) => current.kind === "comment" ? { ...current, thread: appendCommentThreadEntry(current.thread, message, `Comment ${current.id} thread`) } : current);
+      return;
+    }
     const value = action.decision === "approved" ? "approve" : action.decision === "rejected" ? "reject" : action.decision === "changes-requested" ? "request-changes" : action.value ?? "answer";
-    const body = value === "approve" ? "Approved" : value === "reject" ? "Rejected" : value === "request-changes" ? "Changes requested" : action.value ?? "Answered";
+    const label = value === "approve" ? "Approved" : value === "reject" ? "Rejected" : value === "request-changes" ? "Changes requested" : action.value ?? "Answered";
+    const body = action.context?.trim() ? `${label}
+
+${action.context.trim()}` : label;
     const responseEntry = {
       actorId: "human:operator",
       body,
@@ -14236,7 +14547,30 @@ var commentElementType = {
           className: "h-full w-full resize-none border-0 bg-yellow-950 px-1 py-0.5 font-mono text-sm font-normal leading-tight text-yellow-50 outline-none select-text selection:bg-yellow-200/30 focus:bg-yellow-950 focus:ring-1 focus:ring-yellow-300/70",
           value: element.value,
           onCommit: (value) => {
-            onElementChange(element.id, (current) => current.kind === "comment" ? { ...current, value } : current);
+            onElementChange(element.id, (current) => {
+              if (current.kind !== "comment")
+                return current;
+              if (!current.thread || !shouldRecordCommentSourceEdit(current.value, value))
+                return { ...current, value };
+              const edit = {
+                actorId: "human:operator",
+                body: `Comment edited by You
+
+Before:
+${current.value}
+
+After:
+${value}`,
+                createdAt: new Date().toISOString(),
+                id: `entry:${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`}`,
+                kind: "message"
+              };
+              return {
+                ...current,
+                thread: appendCommentThreadEntry(current.thread, edit, `Comment ${current.id} thread`),
+                value
+              };
+            });
           },
           onDoubleClick: (event) => event.stopPropagation(),
           onFocus: onEditorAutoFocusApplied,
@@ -30965,6 +31299,12 @@ var scenarioRegistrations = [
     create: createCommentParentingScenario
   },
   {
+    id: "comment-collaboration",
+    name: "Comment collaboration",
+    description: "Multiple independent native comments covering pending approval, active discussion, and completed history.",
+    create: () => commentCollaborationScenario
+  },
+  {
     id: "lod-validation",
     name: "LOD validation",
     description: "Predictable diagonal/corner layout for checking that zoom changes fidelity, not content.",
@@ -31001,14 +31341,71 @@ var benchViewportDebugComponent = {
         children: actor.label
       })
     } : undefined;
-    return /* @__PURE__ */ jsx_runtime21.jsx(BenchViewport, {
+    const viewport = /* @__PURE__ */ jsx_runtime21.jsx(BenchViewport, {
       actorPanel,
       backHref: context.componentHref,
       backLabel: `${context.componentName} scenarios`,
       elementTypeRegistry: debugElementTypeRegistry,
       scenario
     });
+    if (scenarioId !== "comment-collaboration")
+      return viewport;
+    const openCommentId = typeof window === "undefined" ? undefined : new URLSearchParams(window.location.search).get("commentId") ?? undefined;
+    return /* @__PURE__ */ jsx_runtime21.jsx(CommentBenchProvider, {
+      benchPath: "debug/comment-collaboration.bench.hjson",
+      openCommentId,
+      children: viewport
+    });
   }
+};
+var commentCollaborationScenario = {
+  id: "comment-collaboration",
+  name: "Comment collaboration",
+  description: "Multiple independent native comments covering pending approval, active discussion, and completed history.",
+  elements: [
+    {
+      height: 92,
+      id: "comment:approval",
+      kind: "comment",
+      thread: [
+        { actorId: "agent:reviewer", body: "I adjusted the navigation hierarchy.", createdAt: "2026-08-14T19:00:00.000Z", id: "entry:approval-progress", kind: "progress" },
+        { actorId: "agent:reviewer", body: "Approve the updated navigation hierarchy?", createdAt: "2026-08-14T19:02:00.000Z", id: "entry:approval-request", kind: "approval", request: { id: "request:navigation", proposal: "Publish the updated navigation hierarchy", scope: "Current bench" } }
+      ],
+      value: "Should the updated navigation hierarchy be approved?",
+      width: 340,
+      x: -520,
+      y: -220
+    },
+    {
+      height: 112,
+      id: "comment:discussion",
+      kind: "comment",
+      thread: [
+        { actorId: "human:operator", body: "Keep the source comment compact.", createdAt: "2026-08-14T18:52:00.000Z", id: "entry:discussion-source", kind: "message" },
+        { actorId: "agent:reviewer", body: "The response remains attached below it.", createdAt: "2026-08-14T18:57:00.000Z", id: "entry:discussion-reply", kind: "message" }
+      ],
+      value: "Keep multiple comments independently positioned on the canvas.",
+      width: 300,
+      x: 80,
+      y: -60
+    },
+    {
+      height: 84,
+      id: "comment:resolved",
+      kind: "comment",
+      thread: [
+        { actorId: "agent:reviewer", body: "Approve the compact status treatment?", createdAt: "2026-08-14T18:30:00.000Z", id: "entry:resolved-request", kind: "approval", request: { id: "request:resolved", proposal: "Use the compact status treatment", scope: "Comment status" } },
+        { actorId: "human:operator", body: `Approved
+
+Keep the cyan decision icon.`, createdAt: "2026-08-14T18:35:00.000Z", id: "entry:resolved-response", kind: "response", response: { requestId: "request:resolved", value: "approve" } },
+        { actorId: "agent:reviewer", body: "The compact status treatment is complete.", createdAt: "2026-08-14T18:40:00.000Z", id: "entry:resolved-result", kind: "result", result: { status: "succeeded", summary: "Compact status treatment accepted" } }
+      ],
+      value: "Compact status treatment is complete.",
+      width: 280,
+      x: -180,
+      y: 340
+    }
+  ]
 };
 function createCommentParentingScenario() {
   return {
@@ -31162,7 +31559,7 @@ var workbenchReactDebugContributions = Object.freeze([
     debugId: "bench-viewport",
     description: "Pan and zoom mock scenarios for tuning workbench viewport controls.",
     name: "Bench viewport",
-    scenarioIds: Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+    scenarioIds: Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "comment-collaboration", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
   }),
   Object.freeze({
     debugId: "directory-scene",
@@ -31222,7 +31619,7 @@ var workbenchReactDebugContributions = Object.freeze([
 
 // packages/publish-sdk/src/gateway-debug-publication.ts
 var publishedScenarioIdsByCategory = Object.freeze({
-  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
+  "bench-viewport": Object.freeze(["rgb-squares", "textareas", "agent-quick-access", "comment-parenting", "comment-collaboration", "lod-validation", "stress-1k", "stress-10k", "stress-100k", "stress-1m", "stress-textareas-1k", "stress-textareas-10k", "stress-textareas-100k", "stress-textareas-1m"])
 });
 var publishedWorkbenchDebugContributions = Object.freeze(Object.entries(publishedScenarioIdsByCategory).map(([debugId, scenarioIds]) => {
   const contribution = workbenchReactDebugContributions.find((candidate) => candidate.debugId === debugId);
