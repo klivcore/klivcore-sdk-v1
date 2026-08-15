@@ -125,6 +125,23 @@
       }
     },
     {
+      "id": "debug-bench-viewport-comment-collaboration",
+      "path": "/debug/bench-viewport/comment-collaboration",
+      "title": "Workbench debug: Comment collaboration",
+      "requiredCapabilities": [
+        "workbench:read",
+        "workbench:write"
+      ],
+      "services": [
+        "api"
+      ],
+      "component": {
+        "id": "workbench-debug-bench-viewport-comment-collaboration",
+        "js": "ui/debug-loader.js",
+        "css": "ui/debug-loader.css"
+      }
+    },
+    {
       "id": "debug-bench-viewport-lod-validation",
       "path": "/debug/bench-viewport/lod-validation",
       "title": "Workbench debug: LOD validation",
